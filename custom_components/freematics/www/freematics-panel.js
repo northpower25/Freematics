@@ -175,6 +175,48 @@ const STYLES = `
     font-weight: 500;
   }
   .flash-fallback a:hover { background: #1976d2; }
+  /* --- flash progress --- */
+  .progress-section { margin-top: 16px; }
+  .flash-status-text {
+    font-size: 0.88rem;
+    color: var(--secondary-text-color);
+    min-height: 20px;
+    margin-bottom: 6px;
+  }
+  .flash-status-text.ok  { color: #4caf50; font-weight: 600; }
+  .flash-status-text.err { color: #f44336; font-weight: 600; }
+  .progress-bar-wrap {
+    height: 10px;
+    background: var(--divider-color);
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: #2196f3;
+    border-radius: 5px;
+    width: 0%;
+    transition: width 0.35s ease;
+  }
+  .flash-log {
+    background: #1a1a2e;
+    color: #c8d6e5;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 0.80rem;
+    padding: 10px 12px;
+    border-radius: 6px;
+    min-height: 72px;
+    max-height: 210px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-entry        { margin: 2px 0; }
+  .log-entry.info   { color: #c8d6e5; }
+  .log-entry.ok     { color: #55efc4; }
+  .log-entry.err    { color: #ff7675; }
+  .log-entry.warn   { color: #fdcb6e; }
 `;
 
 /* -------------------------------------------------------------------------
@@ -187,6 +229,7 @@ class FreematicsPanel extends HTMLElement {
     this._panel = null;
     this._activeTab = "dashboard";
     this._initialized = false;
+    this._flashRendered = false;
     this.attachShadow({ mode: "open" });
   }
 
@@ -249,7 +292,8 @@ class FreematicsPanel extends HTMLElement {
         <button class="tab active" data-tab="dashboard">&#128250; Dashboard</button>
         <button class="tab" data-tab="flash">&#9889; Flash Firmware</button>
       </div>
-      <div class="content" id="content"></div>
+      <div class="content" id="content-dashboard"></div>
+      <div class="content" id="content-flash" style="display:none"></div>
     `;
 
     shadow.querySelectorAll(".tab").forEach(btn => {
@@ -257,7 +301,17 @@ class FreematicsPanel extends HTMLElement {
         shadow.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
         btn.classList.add("active");
         this._activeTab = btn.dataset.tab;
-        this._renderContent();
+        const dashEl  = shadow.getElementById("content-dashboard");
+        const flashEl = shadow.getElementById("content-flash");
+        if (this._activeTab === "dashboard") {
+          dashEl.style.display  = "";
+          flashEl.style.display = "none";
+          this._renderDashboard();
+        } else {
+          dashEl.style.display  = "none";
+          flashEl.style.display = "";
+          this._renderFlash();
+        }
       });
     });
 
@@ -274,7 +328,7 @@ class FreematicsPanel extends HTMLElement {
 
   /* ── Dashboard tab ─────────────────────────────────────────────── */
   _renderDashboard() {
-    const el = this.shadowRoot.getElementById("content");
+    const el = this.shadowRoot.getElementById("content-dashboard");
     if (!el) return;
 
     const devices = this._discoverDevices();
@@ -296,7 +350,7 @@ class FreematicsPanel extends HTMLElement {
 
   _updateDashboard() {
     if (this._activeTab !== "dashboard") return;
-    const el = this.shadowRoot.getElementById("content");
+    const el = this.shadowRoot.getElementById("content-dashboard");
     if (!el) return;
     this._renderDashboard();
   }
@@ -462,8 +516,14 @@ class FreematicsPanel extends HTMLElement {
 
   /* ── Flash Firmware tab ─────────────────────────────────────────── */
   _renderFlash() {
-    const el = this.shadowRoot.getElementById("content");
+    const el = this.shadowRoot.getElementById("content-flash");
     if (!el) return;
+
+    // Render only once: preserves the esp-web-install-button DOM node so
+    // the underlying Web Serial port is never orphaned between tab switches,
+    // which prevents the "The port is already open" error on re-click.
+    if (this._flashRendered) return;
+    this._flashRendered = true;
 
     const hasSerial = "serial" in navigator;
 
@@ -509,6 +569,13 @@ class FreematicsPanel extends HTMLElement {
           </p>
           <div id="esp-container">
             <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
+          </div>
+          <div class="progress-section" id="flash-progress" style="display:none">
+            <div class="flash-status-text" id="flash-status-text"></div>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar-fill" id="progress-bar-fill"></div>
+            </div>
+            <div class="flash-log" id="flash-log"></div>
           </div>
           <ol style="font-size:.9rem;color:var(--secondary-text-color)">
             <li>Click <em>Connect &amp; Flash Firmware</em></li>
@@ -583,6 +650,57 @@ class FreematicsPanel extends HTMLElement {
         </span>
       </esp-web-install-button>
     `;
+    const btn = container.querySelector("esp-web-install-button");
+    if (btn) {
+      btn.addEventListener("state-changed", e => this._onFlashState(e));
+    }
+  }
+
+  /* ── Flash state handler (progress bar + log) ───────────────────── */
+  _onFlashState(e) {
+    const shadow = this.shadowRoot;
+    const progressSection = shadow.getElementById("flash-progress");
+    const statusText      = shadow.getElementById("flash-status-text");
+    const progressFill    = shadow.getElementById("progress-bar-fill");
+    const logEl           = shadow.getElementById("flash-log");
+    if (!progressSection || !statusText || !progressFill || !logEl) return;
+
+    const STATE_INFO = {
+      initializing: { pct: 5,   label: "Initializing connection…",          cls: "info",  barColor: "#2196f3" },
+      preparing:    { pct: 20,  label: "Preparing firmware…",               cls: "info",  barColor: "#2196f3" },
+      erasing:      { pct: 40,  label: "Erasing flash memory…",             cls: "warn",  barColor: "#ff9800" },
+      writing:      { pct: 70,  label: "Writing firmware to device…",       cls: "info",  barColor: "#2196f3" },
+      finished:     { pct: 100, label: "✓ Firmware flashed successfully!",  cls: "ok",    barColor: "#4caf50" },
+      error:        { pct: 0,   label: "✗ Error during flashing.",          cls: "err",   barColor: "#f44336" },
+    };
+
+    const detail  = e.detail || {};
+    const state   = detail.state || "";
+    const message = detail.message || detail.details?.message || "";
+    const info    = STATE_INFO[state] || { pct: 0, label: state, cls: "info", barColor: "#2196f3" };
+
+    // Refine progress for byte-level write events when details include done/total
+    const done  = detail.details?.done;
+    const total = detail.details?.total;
+    let pct = info.pct;
+    if (state === "writing" && done !== undefined && total > 0) {
+      // Map writing progress across 40–95 % of the bar
+      pct = Math.round(40 + (done / total) * 55);
+    }
+
+    progressSection.style.display = "block";
+    statusText.textContent  = info.label;
+    statusText.className    = `flash-status-text ${info.cls !== "info" ? info.cls : ""}`;
+    progressFill.style.width      = `${pct}%`;
+    progressFill.style.background = info.barColor;
+
+    const ts    = new Date().toLocaleTimeString();
+    const text  = message || info.label;
+    const entry = document.createElement("div");
+    entry.className   = `log-entry ${info.cls}`;
+    entry.textContent = `[${ts}] ${text}`;
+    logEl.appendChild(entry);
+    logEl.scrollTop = logEl.scrollHeight;
   }
 }
 
