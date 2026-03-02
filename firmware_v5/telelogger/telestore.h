@@ -54,36 +54,6 @@ protected:
     char* m_cache = 0;
 };
 
-/*
- * CStorageJSON serializes vehicle telemetry data as a JSON object.
- * Used by TeleClientHA to POST data to the Home Assistant webhook endpoint.
- * PID values are mapped to human-readable JSON field names.
- */
-class CStorageJSON: public CStorage {
-public:
-    void init(char* cache, unsigned int cacheSize)
-    {
-        m_cacheSize = cacheSize;
-        m_cache = cache;
-    }
-    void purge() { m_cacheBytes = 0; m_samples = 0; }
-    unsigned int length() { return m_cacheBytes; }
-    char* buffer() { return m_cache; }
-    void log(uint16_t pid, uint8_t values[], uint8_t count);
-    void log(uint16_t pid, uint16_t values[], uint8_t count);
-    void log(uint16_t pid, uint32_t values[], uint8_t count);
-    void log(uint16_t pid, int32_t values[], uint8_t count);
-    void log(uint16_t pid, float values[], uint8_t count, const char* fmt = "%f");
-    void header(const char* devid);
-    void tailer();
-private:
-    static const char* pidToKey(uint16_t pid, int idx = 0);
-    void appendField(const char* key, const char* value);
-    unsigned int m_cacheSize = 0;
-    unsigned int m_cacheBytes = 0;
-    char* m_cache = 0;
-};
-
 class FileLogger : public CStorage {
 public:
     FileLogger() { m_delimiter = ','; }

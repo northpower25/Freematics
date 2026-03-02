@@ -3,9 +3,9 @@
   "name": "Freematics ONE+",
   "codeowners": [],
   "config_flow": true,
-  "documentation": "https://freematics.com/products/freematics-one-plus/",
+  "documentation": "https://github.com/northpower25/Freematics/blob/master/docs/README.md",
   "iot_class": "cloud_push",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "dependencies": ["webhook"],
   "requirements": []
 }

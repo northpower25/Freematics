@@ -151,8 +151,6 @@ SDLogger logger;
 
 #if SERVER_PROTOCOL == PROTOCOL_UDP
 TeleClientUDP teleClient;
-#elif SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK
-TeleClientHA teleClient;
 #else
 TeleClientHTTP teleClient;
 #endif
@@ -858,11 +856,7 @@ void telemetry(void* inst)
 {
   uint32_t lastRssiTime = 0;
   uint8_t connErrors = 0;
-#if SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK
-  CStorageJSON store;
-#else
   CStorageRAM store;
-#endif
   store.init(
 #if BOARD_HAS_PSRAM
     (char*)heap_caps_malloc(SERIALIZE_BUFFER_SIZE, MALLOC_CAP_SPIRAM),
@@ -997,8 +991,6 @@ void telemetry(void* inst)
         continue;
       }
 #if SERVER_PROTOCOL == PROTOCOL_UDP
-      store.header(devid);
-#elif SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK
       store.header(devid);
 #endif
       store.timestamp(buffer->timestamp);

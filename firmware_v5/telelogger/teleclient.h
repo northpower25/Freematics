@@ -112,26 +112,3 @@ public:
 #endif
     CellHTTP cell;
 };
-
-#if SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK
-/*
- * TeleClientHA sends vehicle telemetry as JSON to a Home Assistant webhook.
- * Works with the local HA instance URL or a Nabu Casa remote URL so no VPN
- * or port forwarding is needed on the user side.
- * Configure SERVER_HOST to your HA host (e.g. <id>.ui.nabu.casa) and
- * HA_WEBHOOK_ID to the webhook ID created by the Freematics HA integration.
- */
-class TeleClientHA : public TeleClient
-{
-public:
-    bool notify(byte event, const char* payload = 0);
-    bool connect(bool quick = false);
-    bool transmit(const char* packetBuffer, unsigned int packetSize);
-    bool ping();
-    void shutdown();
-#if ENABLE_WIFI
-    WifiHTTP wifi;
-#endif
-    CellHTTP cell;
-};
-#endif
