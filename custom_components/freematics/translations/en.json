@@ -33,7 +33,7 @@
       },
       "flash": {
         "title": "Freematics ONE+ – Flash Method",
-        "description": "Choose how to flash the firmware onto the device.\n\n**WiFi OTA**: The device must be powered on and reachable on your network, or in AP mode (connect to WiFi network **{ap_ssid}** with password **{ap_password}**, then enter `192.168.4.1` as Device IP).\n\n**Serial USB**: The device must be connected via USB to the Home Assistant host. Requires `esptool` to be installed.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.",
+        "description": "Choose how to flash the firmware onto the device.\n\n**WiFi OTA** *(recommended)*: The device must be powered on and reachable on your network, or in AP mode (connect to WiFi network **{ap_ssid}** with password **{ap_password}**, then enter `192.168.4.1` as Device IP).\n\n**Serial USB**: The device must be connected via USB to the Home Assistant host. `esptool` is **automatically installed** with this integration — no manual installation required.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.\n\nFor detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
         "data": {
           "flash_method": "Flash method",
           "device_ip": "Device IP address (for WiFi OTA)",

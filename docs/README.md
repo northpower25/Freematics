@@ -144,12 +144,10 @@ Option 2 – *Device on local network*:
 
 This method uses `esptool` to flash via a USB serial connection.
 
+> **`esptool` is automatically installed** when you install or update this integration via HACS. No separate installation is required.
+
 **Requirements:**
 - USB cable between the Freematics ONE+ and the HA host machine
-- `esptool` installed on the HA host:
-  ```bash
-  pip install esptool
-  ```
 - Correct serial port permissions (Linux: `sudo usermod -aG dialout homeassistant`)
 
 **Steps:**
@@ -166,6 +164,11 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
   write_flash --flash_mode dio --flash_size detect \
   0x10000 custom_components/freematics/firmware/telelogger.bin
 ```
+
+> If `esptool` is not on your PATH (e.g. HA Container), run it as a Python module:
+> ```bash
+> python3 -m esptool --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 telelogger.bin
+> ```
 
 ---
 
@@ -294,7 +297,7 @@ When a new version of this integration is released:
 - Check the serial port path (`dmesg | tail` after plugging in USB)
 - Ensure correct permissions: `sudo chmod 666 /dev/ttyUSB0`
 - Try reducing baud rate (edit `flash_manager.py` to use `115200`)
-- Install esptool: `pip install esptool`
+- `esptool` is automatically installed by this integration. If it's still missing, run: `pip install esptool`
 
 ### Device not connecting to WiFi
 
@@ -452,11 +455,12 @@ Wählen Sie die Flash-Methode:
 
 ### Methode B: Seriell USB
 
-1. USB-Kabel zwischen Freematics ONE+ und HA-Host
-2. `esptool` installieren: `pip install esptool`
-3. Seriellen Port ermitteln: `dmesg | tail`
-4. Port in Integrationseinstellungen eintragen
-5. **Firmware via Seriell USB flashen**-Button drücken
+> **`esptool` wird automatisch mit dieser Integration installiert** — keine manuelle Installation erforderlich.
+
+1. USB-Kabel zwischen Freematics ONE+ und HA-Host anschließen
+2. Seriellen Port ermitteln: `dmesg | tail`
+3. Port in Integrationseinstellungen eintragen
+4. **Firmware via Seriell USB flashen**-Button drücken
 
 ---
 
@@ -522,4 +526,4 @@ Entitätsnamen folgen dem Muster:
 **Serieller Flash fehlgeschlagen**
 - Port prüfen: `dmesg | tail`
 - Berechtigungen: `sudo chmod 666 /dev/ttyUSB0`
-- esptool installieren: `pip install esptool`
+- `esptool` wird automatisch durch die Integration installiert. Falls noch nicht vorhanden: `pip install esptool`

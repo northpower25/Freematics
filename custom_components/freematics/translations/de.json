@@ -33,7 +33,7 @@
       },
       "flash": {
         "title": "Freematics ONE+ – Flash-Methode",
-        "description": "Wählen Sie aus, wie die Firmware auf das Gerät geflasht werden soll.\n\n**WLAN OTA**: Das Gerät muss eingeschaltet und im Netzwerk erreichbar sein oder sich im AP-Modus befinden (verbinden Sie sich mit dem WLAN **{ap_ssid}**, Passwort **{ap_password}**, und geben Sie `192.168.4.1` als Geräte-IP ein).\n\n**Seriell USB**: Das Gerät muss per USB mit dem Home-Assistant-Host verbunden sein. Erfordert eine installierte `esptool`-Anwendung.\n\nNach dem Einrichten können Sie die **Firmware flashen**-Buttons in der Integration verwenden, um den Flash-Vorgang zu starten.",
+        "description": "Wählen Sie aus, wie die Firmware auf das Gerät geflasht werden soll.\n\n**WLAN OTA** *(empfohlen)*: Das Gerät muss eingeschaltet und im Netzwerk erreichbar sein oder sich im AP-Modus befinden (verbinden Sie sich mit dem WLAN **{ap_ssid}**, Passwort **{ap_password}**, und geben Sie `192.168.4.1` als Geräte-IP ein).\n\n**Seriell USB**: Das Gerät muss per USB mit dem Home-Assistant-Host verbunden sein. `esptool` wird **automatisch mit dieser Integration installiert** — keine manuelle Installation erforderlich.\n\nNach dem Einrichten können Sie die **Firmware flashen**-Buttons in der Integration verwenden, um den Flash-Vorgang zu starten.\n\nDetaillierte Anweisungen finden Sie in der [Dokumentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
         "data": {
           "flash_method": "Flash-Methode",
           "device_ip": "Geräte-IP-Adresse (für WLAN OTA)",

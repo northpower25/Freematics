@@ -7,5 +7,5 @@
   "iot_class": "cloud_push",
   "version": "0.0.1",
   "dependencies": ["webhook"],
-  "requirements": []
+  "requirements": ["esptool>=4.7.0"]
 }
