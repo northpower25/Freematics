@@ -21,6 +21,10 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   if (method != METHOD_GET) {
     header += "\r\nContent-length: ";
     header += String(payloadSize);
+    if (m_contentType) {
+      header += "\r\nContent-Type: ";
+      header += m_contentType;
+    }
   }
   header += "\r\n\r\n";
   return header;

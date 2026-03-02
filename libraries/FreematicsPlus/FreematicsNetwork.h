@@ -51,11 +51,13 @@ class HTTPClient
 public:
     HTTP_STATES state() { return m_state; }
     uint16_t code() { return m_code; }
+    void setContentType(const char* ct) { m_contentType = ct; }
 protected:
     String genHeader(HTTP_METHOD method, const char* path, const char* payload, int payloadSize);
     HTTP_STATES m_state = HTTP_DISCONNECTED;
     uint16_t m_code = 0;
     String m_host;
+    const char* m_contentType = nullptr;
 };
 
 class ClientWIFI

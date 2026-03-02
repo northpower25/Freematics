@@ -692,3 +692,140 @@ void TeleClientHTTP::shutdown()
   cell.end();
   Serial.println("[CELL] Deactivated");
 }
+
+#if SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK
+/*******************************************************************************
+  TeleClientHA - Home Assistant webhook client
+  Posts JSON telemetry data to /api/webhook/<HA_WEBHOOK_ID> via HTTPS.
+  Compatible with local HA instances and Nabu Casa cloud remote URLs so no
+  VPN or port forwarding is required by the end user.
+*******************************************************************************/
+
+bool TeleClientHA::notify(byte event, const char* payload)
+{
+  // Webhooks are stateless; no login/logout handshake needed
+  login = (event == EVENT_LOGIN || event == EVENT_RECONNECT);
+  return true;
+}
+
+bool TeleClientHA::connect(bool quick)
+{
+  if (!quick) {
+#if ENABLE_WIFI
+    if (!wifi.connected()) cell.init();
+#else
+    cell.init();
+#endif
+  } else {
+#if ENABLE_WIFI
+    if (!wifi.connected()) cell.close();
+#else
+    cell.close();
+#endif
+  }
+
+  bool success = false;
+#if ENABLE_WIFI
+  if (wifi.connected()) success = wifi.open(SERVER_HOST, SERVER_PORT);
+#endif
+  if (!success) {
+    for (byte attempts = 0; !success && attempts < 3; attempts++) {
+      success = cell.open(SERVER_HOST, SERVER_PORT);
+      if (!success) {
+        if (!cell.check()) break;
+        cell.close();
+        cell.init();
+      }
+    }
+  }
+  if (!success) {
+    Serial.println("[HA] Unable to connect");
+    return false;
+  }
+  if (!login) {
+    Serial.print("HA CONNECT(");
+    Serial.print(SERVER_HOST);
+    Serial.print(':');
+    Serial.print(SERVER_PORT);
+    Serial.println(")");
+    login = true;
+    lastSyncTime = millis();
+  }
+  // Set JSON content type so Home Assistant parses the body correctly
+#if ENABLE_WIFI
+  if (wifi.connected()) wifi.setContentType("application/json");
+#endif
+  cell.setContentType("application/json");
+  return true;
+}
+
+bool TeleClientHA::transmit(const char* packetBuffer, unsigned int packetSize)
+{
+#if ENABLE_WIFI
+  if ((wifi.connected() && wifi.state() != HTTP_CONNECTED) || cell.state() != HTTP_CONNECTED) {
+#else
+  if (cell.state() != HTTP_CONNECTED) {
+#endif
+    if (!connect(true)) {
+      return false;
+    }
+  }
+
+  char path[128];
+  snprintf(path, sizeof(path), "/api/webhook/%s", HA_WEBHOOK_ID);
+  bool success = false;
+#if ENABLE_WIFI
+  if (wifi.connected()) {
+    Serial.print("[HA/WIFI] POST ");
+    Serial.println(path);
+    success = wifi.send(METHOD_POST, path, packetBuffer, packetSize);
+  } else
+#endif
+  {
+    Serial.print("[HA/CELL] POST ");
+    Serial.println(path);
+    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, packetBuffer, packetSize);
+  }
+
+  if (!success) {
+    Serial.println("[HA] Connection closed");
+    return false;
+  }
+  txBytes += packetSize;
+  txCount++;
+
+  // Read and discard the server response
+  int recvBytes = 0;
+#if ENABLE_WIFI
+  if (wifi.connected()) {
+    wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1, &recvBytes);
+  } else
+#endif
+  {
+    cell.receive(&recvBytes, HTTP_CONN_TIMEOUT);
+  }
+  lastSyncTime = millis();
+  rxBytes += recvBytes;
+  return true;
+}
+
+bool TeleClientHA::ping()
+{
+  return connect();
+}
+
+void TeleClientHA::shutdown()
+{
+  login = false;
+#if ENABLE_WIFI
+  if (wifi.connected()) {
+    wifi.end();
+    Serial.println("[WIFI] Deactivated");
+    return;
+  }
+#endif
+  cell.close();
+  cell.end();
+  Serial.println("[CELL] Deactivated");
+}
+#endif /* SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK */
