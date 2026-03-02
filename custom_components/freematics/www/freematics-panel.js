@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.2.0";
+const PANEL_VERSION = "1.3.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -232,6 +232,7 @@ class FreematicsPanel extends HTMLElement {
     this._flashRendered = false;
     this._dialogBodyObserver = null;
     this._currentAttrObserver = null;
+    this._shadowDialogObserver = null;
     this._progressPollTimer = null;
     this.attachShadow({ mode: "open" });
   }
@@ -253,6 +254,10 @@ class FreematicsPanel extends HTMLElement {
     if (this._currentAttrObserver) {
       this._currentAttrObserver.disconnect();
       this._currentAttrObserver = null;
+    }
+    if (this._shadowDialogObserver) {
+      this._shadowDialogObserver.disconnect();
+      this._shadowDialogObserver = null;
     }
     if (this._progressPollTimer) {
       clearInterval(this._progressPollTimer);
@@ -749,6 +754,10 @@ class FreematicsPanel extends HTMLElement {
               this._currentAttrObserver.disconnect();
               this._currentAttrObserver = null;
             }
+            if (this._shadowDialogObserver) {
+              this._shadowDialogObserver.disconnect();
+              this._shadowDialogObserver = null;
+            }
           }
         }
       }
@@ -777,24 +786,47 @@ class FreematicsPanel extends HTMLElement {
       debug: (msg) => { /* suppress verbose debug output */ },
     };
 
-    // Poll the dialog's Lit reactive state (_state) and write-progress
-    // (_installState.details.percentage) at 300 ms intervals.  This is more
-    // reliable than depending solely on the attribute MutationObserver because
-    // Lit may set the attribute either before or after our observer fires.
+    // Shared state tracker – all three mechanisms (attribute observer, shadow-
+    // root observer, and poll) update the same variable so we never emit a
+    // duplicate log entry and always advance monotonically.
     if (this._progressPollTimer) clearInterval(this._progressPollTimer);
     let lastState = null;
     let lastPct   = null;
-    this._progressPollTimer = setInterval(() => {
-      const state        = dialog._state;
-      const installState = dialog._installState;
 
-      // Propagate high-level state transitions
-      if (state && state !== lastState) {
-        lastState = state;
-        this._onDialogStateChanged(state);
-      }
+    const handleState = (state) => {
+      if (!state || state === lastState) return;
+      lastState = state;
+      this._onDialogStateChanged(state);
+    };
+
+    // Primary: watch the "state" HTML attribute that esp-web-tools sets via
+    // updated() whenever _state changes.
+    const attrObserver = new MutationObserver(() => {
+      handleState(dialog.getAttribute("state") || dialog._state);
+    });
+    attrObserver.observe(dialog, { attributes: true, attributeFilter: ["state"] });
+    this._currentAttrObserver = attrObserver;
+
+    // Secondary: watch the dialog's shadow root for any Lit re-render.  Lit
+    // re-renders whenever *any* @state property changes – including _client
+    // being set when the device connects (which keeps _state at "DASHBOARD"
+    // and so never triggers the attribute observer alone).
+    if (dialog.shadowRoot) {
+      const shadowObs = new MutationObserver(() => {
+        handleState(dialog.getAttribute("state") || dialog._state);
+      });
+      shadowObs.observe(dialog.shadowRoot, { childList: true });
+      this._shadowDialogObserver = shadowObs;
+    }
+
+    // Tertiary: poll every 300 ms as a belt-and-suspenders fallback, and
+    // separately track write-progress percentage which isn't reflected in
+    // the high-level state attribute.
+    this._progressPollTimer = setInterval(() => {
+      handleState(dialog.getAttribute("state") || dialog._state);
 
       // During the WRITING phase show real byte-level percentage
+      const installState = dialog._installState;
       if (
         installState &&
         installState.state === "writing" &&
@@ -813,27 +845,22 @@ class FreematicsPanel extends HTMLElement {
       }
     }, 300);
 
-    // Watch for dialog state attribute changes (kept as a secondary mechanism)
-    const attrObserver = new MutationObserver(() => {
-      const state = dialog.getAttribute("state");
-      if (state) this._onDialogStateChanged(state);
-    });
-    attrObserver.observe(dialog, { attributes: true, attributeFilter: ["state"] });
-    this._currentAttrObserver = attrObserver;
-
-    // Read the initial state if Lit has already set it
-    const initState = dialog.getAttribute("state");
-    if (initState) this._onDialogStateChanged(initState);
+    // Read the initial state in case Lit has already rendered and set it
+    // before our observers were registered.
+    handleState(dialog.getAttribute("state") || dialog._state);
 
     // Finalize when the dialog closes
     dialog.addEventListener("closed", () => {
       attrObserver.disconnect();
       this._currentAttrObserver = null;
+      if (this._shadowDialogObserver) {
+        this._shadowDialogObserver.disconnect();
+        this._shadowDialogObserver = null;
+      }
       if (this._progressPollTimer) {
         clearInterval(this._progressPollTimer);
         this._progressPollTimer = null;
       }
-      const lastState = dialog.getAttribute("state");
       if (lastState === "ERROR") {
         this._updateFlashUI("✗ Error — see the dialog for details.", "err", "#f44336", 0);
         this._appendFlashLog("err", "Operation ended with an error.");
