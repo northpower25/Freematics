@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.1.0";
+const PANEL_VERSION = "1.2.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -656,6 +656,16 @@ class FreematicsPanel extends HTMLElement {
       script.type = "module";
       script.src = "https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module";
       script.onload = () => this._insertInstallButton(container);
+      script.onerror = () => {
+        container.innerHTML = `
+          <p style="color:#f44336;font-size:.9rem">
+            &#9888; Failed to load the flash tool from the CDN.<br>
+            Check your internet connection, or use the
+            <a href="/api/freematics/flasher" target="_blank" rel="noopener" style="color:#2196f3">
+              standalone flasher page
+            </a> instead.
+          </p>`;
+      };
       document.head.appendChild(script);
     } else {
       this._insertInstallButton(container);
@@ -678,22 +688,38 @@ class FreematicsPanel extends HTMLElement {
       </esp-web-install-button>
     `;
 
-    // Show the progress section as soon as the user clicks the button so
-    // the log console is visible before the port-picker dialog opens.  This
-    // runs before connect.ts even starts, guaranteeing the section is visible
-    // regardless of any MutationObserver timing.
+    // Reveal the progress section immediately so it is always visible once
+    // the flash button is ready.  This is the most reliable way to ensure
+    // the section appears: it does not depend on click-event bubbling through
+    // shadow-DOM slot boundaries or on MutationObserver timing.
+    const shadow = this.shadowRoot;
+    const progressSection = shadow.querySelector("#flash-progress");
+    if (progressSection) {
+      progressSection.style.display = "block";
+      this._updateFlashUI(
+        "Ready — connect the device and click the button above.",
+        "",
+        "#9e9e9e",
+        0,
+      );
+      this._appendFlashLog("info", "Flash tool loaded. Connect the Freematics ONE+ and click the button above.");
+    }
+
+    // On every click: reset the log and re-show "Waiting for port selection"
+    // so a second attempt always starts from a clean state.  Also re-arm the
+    // body observer in case it was torn down (e.g. HA sidebar navigation).
     const activateBtn = container.querySelector('[slot="activate"]');
     if (activateBtn) {
       activateBtn.addEventListener("click", () => {
-        const shadow = this.shadowRoot;
-        const progressSection = shadow.querySelector("#flash-progress");
-        const logEl = shadow.querySelector("#flash-log");
-        if (!progressSection) return;
-        // Reset on every click so a second attempt starts with a clean log.
-        if (logEl) logEl.innerHTML = "";
-        progressSection.style.display = "block";
+        const progress = this.shadowRoot.querySelector("#flash-progress");
+        const log      = this.shadowRoot.querySelector("#flash-log");
+        if (!progress) return;
+        if (log) log.innerHTML = "";
+        progress.style.display = "block";
         this._updateFlashUI("Waiting for port selection…", "", "#2196f3", 2);
         this._appendFlashLog("info", "Waiting for port selection…");
+        // Re-arm the body observer so it is active when the dialog appears.
+        this._watchInstallDialog();
       });
     }
 
