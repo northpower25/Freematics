@@ -25,6 +25,7 @@ Sidebar panel:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from homeassistant.components import frontend
@@ -47,7 +48,21 @@ PLATFORMS = ["sensor", "button"]
 _WWW_DIR = Path(__file__).parent / "www"
 _PANEL_URL = "freematics-dashboard"
 _STATIC_PATH = "/freematics_static"
-_PANEL_JS_URL = f"{_STATIC_PATH}/freematics-panel.js"
+# Extract the version declared in the panel JS so the cache-busting query
+# parameter is always in sync without any manual maintenance.  Changing the
+# PANEL_VERSION constant in freematics-panel.js is all that is needed to force
+# browsers to discard their cached copy and fetch the updated file.
+_m = re.search(
+    rb"""PANEL_VERSION\s*=\s*["']([^"']+)["']""",
+    (_WWW_DIR / "freematics-panel.js").read_bytes(),
+)
+if not _m:
+    _LOGGER.warning(
+        "Could not extract PANEL_VERSION from freematics-panel.js; "
+        "browser cache busting may not work correctly"
+    )
+_PANEL_JS_VERSION = _m.group(1).decode() if _m else "0"
+_PANEL_JS_URL = f"{_STATIC_PATH}/freematics-panel.js?v={_PANEL_JS_VERSION}"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
