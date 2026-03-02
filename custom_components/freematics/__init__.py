@@ -62,6 +62,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     )
 
     # Register the sidebar panel once per HA process startup.
+    # HA's ha-panel-custom frontend component reads panel config from
+    # panel.config._panel_custom, so the settings must be nested there.
     frontend.async_register_built_in_panel(
         hass,
         component_name="custom",
@@ -69,8 +71,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         sidebar_icon="mdi:car-connected",
         frontend_url_path=_PANEL_URL,
         config={
-            "name": "freematics-panel",
-            "module_url": _PANEL_JS_URL,
+            "_panel_custom": {
+                "name": "freematics-panel",
+                "module_url": _PANEL_JS_URL,
+                "embed_iframe": False,
+                "trust_external": False,
+            }
         },
         require_admin=False,
     )
