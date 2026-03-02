@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.3.0";
+const PANEL_VERSION = "1.4.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -218,6 +218,15 @@ const STYLES = `
   .log-entry.err    { color: #ff7675; }
   .log-entry.warn   { color: #fdcb6e; }
 `;
+
+// Module-level guard: tracks whether the esp-web-tools <script> tag has
+// already been appended to the document.  Using customElements.get() alone
+// is not sufficient because HA's scoped-custom-element-registry polyfill can
+// make that call return undefined even when the element is already globally
+// registered, which would cause the script to be loaded a second time and
+// trigger a duplicate-definition error for Material Design sub-elements such
+// as `md-focus-ring`.
+let _espToolsLoaded = false;
 
 /* -------------------------------------------------------------------------
  * Panel element
@@ -655,13 +664,19 @@ class FreematicsPanel extends HTMLElement {
     const container = shadow.getElementById("esp-container");
     if (!container) return;
 
-    // Load esp-web-tools and insert the install button
-    if (!customElements.get("esp-web-install-button")) {
+    // Load esp-web-tools and insert the install button.  Guard with both
+    // customElements.get() and the module-level _espToolsLoaded flag to
+    // handle cases where HA's scoped-custom-element-registry polyfill makes
+    // customElements.get() return undefined even when the element has already
+    // been registered globally (e.g. after visiting config/dashboard first).
+    if (!_espToolsLoaded && !customElements.get("esp-web-install-button")) {
+      _espToolsLoaded = true;
       const script = document.createElement("script");
       script.type = "module";
       script.src = "https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module";
       script.onload = () => this._insertInstallButton(container);
       script.onerror = () => {
+        _espToolsLoaded = false; // allow retry on next panel load
         container.innerHTML = `
           <p style="color:#f44336;font-size:.9rem">
             &#9888; Failed to load the flash tool from the CDN.<br>
@@ -912,7 +927,13 @@ class FreematicsPanel extends HTMLElement {
   }
 }
 
-customElements.define("freematics-panel", FreematicsPanel);
+// Guard against duplicate registration.  HA's scoped-custom-element-registry
+// polyfill can cause this line to be reached more than once (e.g. on
+// sidebar navigation away-and-back), which would throw an uncaught
+// DOMException and leave the panel in a broken state.
+if (!customElements.get("freematics-panel")) {
+  customElements.define("freematics-panel", FreematicsPanel);
+}
 
 console.info(
   `%c FREEMATICS-PANEL %c v${PANEL_VERSION} `,
