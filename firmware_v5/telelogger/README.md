@@ -28,6 +28,66 @@ UDP mode implements a telemetry client for [Freematics Hub](https://hub.freemati
 
 Seamless WiFi and cellular network co-working is implemented. When defined WiFi hotspot is available, data is transmitted via WiFi and cellular module is switched off. When no WiFi hotspot can be reached, cellular module is switched on for data transmission until WiFi hotspot available again.
 
+Home Assistant Integration (no VPN / no port forwarding)
+---------------------------------------------------------
+
+A dedicated **Home Assistant webhook protocol** (`PROTOCOL_HA_WEBHOOK`) pushes
+vehicle telemetry as JSON directly to your Home Assistant instance.  It is
+compatible with both a locally reachable HA instance and the
+[Nabu Casa](https://www.nabucasa.com/) cloud remote UI
+(`<id>.ui.nabu.casa`) so **no VPN, port forwarding or public IP** is needed.
+
+### Step 1 – Install the custom integration
+
+Copy the `custom_components/freematics` directory from this repository into
+your Home Assistant `config/custom_components/` folder and restart HA.
+
+### Step 2 – Add the integration in Home Assistant
+
+1. Go to **Settings → Devices & Services → Add Integration**.
+2. Search for **Freematics ONE+** and follow the setup wizard.
+3. The wizard will display a **Webhook ID** and the full webhook URL.
+
+   For Nabu Casa users the host is `<id>.ui.nabu.casa`.
+
+### Step 3 – Flash the firmware
+
+Set the following values in [config.h](config.h) (or via `idf.py menuconfig`
+under *Telelogger Configuration*):
+
+```c
+#define SERVER_PROTOCOL PROTOCOL_HA_WEBHOOK   // select HA webhook protocol
+#define SERVER_HOST     "<your-ha-host>"       // e.g. abc123.ui.nabu.casa
+#define SERVER_PORT     443
+#define HA_WEBHOOK_ID   "<webhook-id-from-ha>"
+```
+
+After the firmware boots, the device will start posting JSON telemetry to
+`https://<SERVER_HOST>/api/webhook/<HA_WEBHOOK_ID>` every data interval.
+Home Assistant will automatically create sensor entities for every telemetry
+value (speed, RPM, GPS coordinates, battery voltage, etc.).
+
+### Sensor entities created
+
+| Entity | Unit |
+|--------|------|
+| Speed | km/h |
+| RPM | rpm |
+| Throttle | % |
+| Engine Load | % |
+| Coolant Temperature | °C |
+| Intake Temperature | °C |
+| Fuel Pressure | kPa |
+| GPS Latitude / Longitude | ° |
+| GPS Altitude | m |
+| GPS Speed | km/h |
+| GPS Heading | ° |
+| GPS Satellites | — |
+| Accelerometer X/Y/Z | m/s² |
+| Battery Voltage | V |
+| Signal Strength | dBm |
+| Device Temperature | °C |
+
 Data Storage
 ------------
 

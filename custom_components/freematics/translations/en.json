@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Freematics ONE+ Setup",
+        "description": "A webhook will be created so your Freematics ONE+ device can push telemetry data directly to Home Assistant — no VPN or port forwarding needed.\n\nCopy the **Webhook ID** below into your firmware `HA_WEBHOOK_ID` setting.\n\nSet `SERVER_HOST` in the firmware to your HA hostname only (e.g. `homeassistant.local` or `abc123.ui.nabu.casa` for Nabu Casa), without protocol or path.\n\nFull webhook URL: `{webhook_url}`",
+        "data": {
+          "webhook_id": "Webhook ID"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This webhook ID is already configured."
+    }
+  }
+}

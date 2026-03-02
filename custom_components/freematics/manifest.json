@@ -1,0 +1,11 @@
+{
+  "domain": "freematics",
+  "name": "Freematics ONE+",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://freematics.com/products/freematics-one-plus/",
+  "iot_class": "cloud_push",
+  "version": "1.0.0",
+  "dependencies": ["webhook"],
+  "requirements": []
+}
