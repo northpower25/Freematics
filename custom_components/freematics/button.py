@@ -92,20 +92,39 @@ class FlashSerialButton(_FreematicsButton):
         self._attr_unique_id = f"freematics_{webhook_id}_flash_serial"
 
     async def async_press(self) -> None:
-        """Execute serial flash."""
+        """Execute serial flash on the HA server.
+
+        NOTE: This runs esptool on the Home Assistant server and requires the
+        Freematics ONE+ to be connected via USB to the HA server itself.
+        If your device is connected to the computer running your browser,
+        open /api/freematics/flasher for browser-based flashing instead.
+        """
         serial_port = self._cfg(CONF_SERIAL_PORT, "")
         if not serial_port:
             _LOGGER.error(
                 "Freematics: no serial port configured. "
-                "Go to Settings → Integrations → Freematics ONE+ → Configure to set it."
+                "IMPORTANT: This button uses esptool on the Home Assistant server. "
+                "If the Freematics ONE+ is connected to your own computer (not the HA server), "
+                "use the Browser Flasher instead: /api/freematics/flasher "
+                "(requires Chrome or Edge 89+). "
+                "To configure the serial port for HA-server flashing: "
+                "Settings → Integrations → Freematics ONE+ → Configure"
             )
             return
-        _LOGGER.info("Freematics: starting serial flash on %s", serial_port)
+        _LOGGER.info(
+            "Freematics: starting serial flash on %s (running on HA server)",
+            serial_port,
+        )
         ok, msg = await async_flash_serial(serial_port)
         if ok:
             _LOGGER.info("Freematics serial flash: %s", msg)
         else:
-            _LOGGER.error("Freematics serial flash failed: %s", msg)
+            _LOGGER.error(
+                "Freematics serial flash failed: %s  |  "
+                "If the device is on your computer's USB port, use the Browser Flasher: "
+                "/api/freematics/flasher",
+                msg,
+            )
 
 
 class FlashWifiButton(_FreematicsButton):

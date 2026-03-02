@@ -10,8 +10,10 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
 2. [Installation via HACS](#installation-via-hacs)
 3. [Integration Setup (Config Flow)](#integration-setup-config-flow)
 4. [Firmware Flashing](#firmware-flashing)
+   - [Which method should I choose?](#which-method-should-i-choose)
    - [Method A: WiFi OTA (Recommended)](#method-a-wifi-ota-recommended)
-   - [Method B: Serial USB](#method-b-serial-usb)
+   - [Method B: Browser Serial (Web Serial API)](#method-b-browser-serial-web-serial-api)
+   - [Method C: Serial USB via HA Server](#method-c-serial-usb-via-ha-server)
 5. [Sending Configuration to a Running Device](#sending-configuration-to-a-running-device)
 6. [Lovelace Dashboard & Card](#lovelace-dashboard--card)
 7. [Updating the Firmware](#updating-the-firmware)
@@ -107,9 +109,21 @@ Click **Submit** to finish setup. The integration is now configured. Use the **F
 
 ## Firmware Flashing
 
+> **Architecture note:** In a typical setup, Home Assistant runs on a dedicated server (e.g. Raspberry Pi, NAS, or a VM), while you access the HA frontend from your regular computer's browser. The Freematics ONE+ is connected via USB to **your computer**, not to the HA server. This is important when choosing a flash method.
+
+### Which method should I choose?
+
+| Situation | Recommended method |
+|---|---|
+| Device in your car / at your desk, HA on a server | [Method A: WiFi OTA](#method-a-wifi-ota-recommended) ✅ |
+| Device connected via USB to your computer (browser machine) | [Method B: Browser Serial](#method-b-browser-serial-web-serial-api) ✅ |
+| HA runs on the same machine as your browser | [Method C: Serial USB via HA Server](#method-c-serial-usb-via-ha-server) |
+
+---
+
 ### Method A: WiFi OTA (Recommended)
 
-This method connects to the device over WiFi and uploads the firmware binary.
+This method connects to the device over WiFi and uploads the firmware binary. **Works regardless of where HA is hosted.**
 
 **Step 1: Prepare the device**
 
@@ -140,22 +154,51 @@ Option 2 – *Device on local network*:
 
 ---
 
-### Method B: Serial USB
+### Method B: Browser Serial (Web Serial API)
 
-This method uses `esptool` to flash via a USB serial connection.
+This method flashes directly from your **browser** to the device connected to **your computer's USB port**. No software installation required.
+
+**Requirements:**
+- Google Chrome or Microsoft Edge (version 89 or newer)
+- USB cable between the Freematics ONE+ and your computer
+- USB-Serial driver installed on your computer:
+  - [CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) (Silicon Labs)
+  - [CH340 driver](https://www.wch-ic.com/downloads/CH341SER_EXE.html) (WCH)
+
+**Steps:**
+
+1. Connect the Freematics ONE+ to your computer via USB
+2. Open the **Browser Flasher** in your browser:  
+   `http://<your-ha-address>/api/freematics/flasher`  
+   *(replace `<your-ha-address>` with your HA URL, e.g. `http://homeassistant.local:8123`)*
+3. Click **Connect & Flash Firmware**
+4. Select the correct serial port from the browser dialog  
+   *(look for: `CP2102`, `CH340`, or a similar USB-Serial chip name)*
+5. The firmware flashes automatically (~30 s) and the device restarts
+
+> **Port identification:**
+> - **Windows**: Open Device Manager → Ports (COM & LPT) — the device appears as `Silicon Labs CP210x USB to UART Bridge (COM3)` or similar
+> - **macOS**: Look for `/dev/tty.usbserial-*` or `/dev/tty.SLAB_USBtoUART` in a terminal
+> - **Linux**: Look for `/dev/ttyUSB0` or `/dev/ttyACM0` (`dmesg | tail` after plugging in)
+
+---
+
+### Method C: Serial USB via HA Server
+
+This method uses `esptool` running on the **Home Assistant server** via the **Flash Firmware via Serial** button.
+
+> ⚠️ **This only works if the Freematics ONE+ is physically connected via USB to the machine running Home Assistant.** If your HA runs on a separate server, use [Method A (WiFi OTA)](#method-a-wifi-ota-recommended) or [Method B (Browser Serial)](#method-b-browser-serial-web-serial-api) instead.
+
+> **`esptool` is automatically installed** when you install this integration via HACS. No separate installation is required.
 
 **Requirements:**
 - USB cable between the Freematics ONE+ and the HA host machine
-- `esptool` installed on the HA host:
-  ```bash
-  pip install esptool
-  ```
 - Correct serial port permissions (Linux: `sudo usermod -aG dialout homeassistant`)
 
 **Steps:**
 
 1. Connect the Freematics ONE+ to the HA host via USB
-2. Find the serial port: check `dmesg | tail` or `ls /dev/tty*`
+2. Find the serial port: `dmesg | tail` or `ls /dev/ttyUSB*` on the HA host
 3. Set the serial port in integration settings: **Settings → Integrations → Freematics ONE+ → Configure**
 4. Press **Flash Firmware via Serial USB** button
 5. Check logs for progress
@@ -166,6 +209,11 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
   write_flash --flash_mode dio --flash_size detect \
   0x10000 custom_components/freematics/firmware/telelogger.bin
 ```
+
+> If `esptool` is not on your PATH (e.g. HA Container), run it as a Python module:
+> ```bash
+> python3 -m esptool --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 telelogger.bin
+> ```
 
 ---
 
@@ -291,10 +339,17 @@ When a new version of this integration is released:
 
 ### Serial flash fails
 
-- Check the serial port path (`dmesg | tail` after plugging in USB)
+**Browser Flasher (Method B):**
+- Use Chrome or Edge 89+ — Firefox does not support Web Serial API
+- Install the USB-Serial driver for your device (CP210x or CH340)
+- Try a different USB port or cable
+
+**Serial via HA Server (Method C):**
+- Verify the device is connected to the HA server, not your own computer
+- Check the serial port path (`dmesg | tail` after plugging in USB on the HA host)
 - Ensure correct permissions: `sudo chmod 666 /dev/ttyUSB0`
 - Try reducing baud rate (edit `flash_manager.py` to use `115200`)
-- Install esptool: `pip install esptool`
+- `esptool` is automatically installed by this integration. If it's still missing, run: `pip install esptool`
 
 ### Device not connecting to WiFi
 
@@ -439,24 +494,65 @@ Wählen Sie die Flash-Methode:
 
 ## Firmware flashen
 
+> **Wichtig – Systemarchitektur:** In einer typischen Konfiguration läuft Home Assistant auf einem separaten Server (z.B. Raspberry Pi), während Sie HA über den Browser auf Ihrem Computer bedienen. Der Freematics ONE+ wird per USB an **Ihren Computer** angeschlossen – **nicht** an den HA-Server.
+
+### Welche Methode soll ich verwenden?
+
+| Situation | Empfohlene Methode |
+|---|---|
+| Gerät über USB am eigenen Computer angeschlossen | [Methode B: Browser-Flasher](#methode-b-browser-seriell-web-serial-api) ✅ |
+| Gerät ohne USB-Kabel verfügbar | [Methode A: WLAN OTA](#methode-a-wlan-ota-empfohlen) ✅ |
+| HA läuft auf demselben Rechner wie der Browser | [Methode C: Seriell via HA-Server](#methode-c-seriell-usb-via-ha-server) |
+
 ### Methode A: WLAN OTA (Empfohlen)
 
-1. Schalten Sie den Freematics ONE+ ein
+Funktioniert unabhängig davon, wo Home Assistant läuft.
+
+1. Freematics ONE+ einschalten
 2. Das Gerät startet im AP-Modus: WLAN **`TELELOGGER`**, Passwort: `PASSWORD`
-3. Verbinden Sie sich mit diesem WLAN
-4. Gerät-IP einstellen: `192.168.4.1`
-5. In HA: **Einstellungen → Integrationen → Freematics ONE+ → Konfigurieren**
-6. IP eintragen und speichern
-7. **Firmware via WLAN OTA flashen**-Button drücken
-8. Logs prüfen: **Einstellungen → System → Protokolle**
+3. Mit diesem WLAN verbinden
+4. In HA: **Einstellungen → Integrationen → Freematics ONE+ → Konfigurieren**
+5. Geräte-IP `192.168.4.1` eintragen und speichern
+6. **Firmware via WLAN OTA flashen**-Button drücken
+7. Logs prüfen: **Einstellungen → System → Protokolle**
 
-### Methode B: Seriell USB
+### Methode B: Browser-Seriell (Web Serial API)
 
-1. USB-Kabel zwischen Freematics ONE+ und HA-Host
-2. `esptool` installieren: `pip install esptool`
-3. Seriellen Port ermitteln: `dmesg | tail`
-4. Port in Integrationseinstellungen eintragen
-5. **Firmware via Seriell USB flashen**-Button drücken
+Flasht direkt vom Browser auf das Gerät, das am **eigenen Computer** per USB angeschlossen ist. Keine Software-Installation erforderlich.
+
+**Voraussetzungen:**
+- Google Chrome oder Microsoft Edge (Version 89 oder neuer)
+- USB-Kabel zwischen Freematics ONE+ und Ihrem Computer
+- USB-Seriell-Treiber installiert:
+  - [CP210x-Treiber](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) (Silicon Labs)
+  - [CH340-Treiber](https://www.wch-ic.com/downloads/CH341SER_EXE.html) (WCH)
+
+**Schritte:**
+
+1. Freematics ONE+ per USB an Ihren Computer anschließen
+2. **Browser-Flasher** öffnen:  
+   `http://<ihre-ha-adresse>/api/freematics/flasher`
+3. **Connect & Flash Firmware** anklicken
+4. Im Browser-Dialog den seriellen Port des Freematics ONE+ auswählen  
+   *(suchen Sie nach: `CP2102`, `CH340` oder ähnlichem USB-Seriell-Gerät)*
+5. Die Firmware wird automatisch geflasht (~30 s) und das Gerät startet neu
+
+> **Port ermitteln:**
+> - **Windows**: Geräte-Manager → Anschlüsse (COM & LPT) — erscheint als z.B. `Silicon Labs CP210x USB to UART Bridge (COM3)`
+> - **macOS**: `/dev/tty.usbserial-*` oder `/dev/tty.SLAB_USBtoUART` im Terminal
+> - **Linux**: `/dev/ttyUSB0` (`dmesg | tail` nach dem Einstecken)
+
+### Methode C: Seriell USB via HA-Server
+
+> ⚠️ **Nur verwenden, wenn der Freematics ONE+ per USB direkt am Home-Assistant-Server angeschlossen ist.** Wenn HA auf einem separaten Server läuft, verwenden Sie stattdessen [Methode A](#methode-a-wlan-ota-empfohlen) oder [Methode B](#methode-b-browser-seriell-web-serial-api).
+
+> **`esptool` wird automatisch mit dieser Integration installiert** — keine manuelle Installation erforderlich.
+
+1. USB-Kabel zwischen Freematics ONE+ und HA-Host anschließen
+2. Seriellen Port ermitteln: `dmesg | tail` auf dem HA-Host
+3. Port in Integrationseinstellungen eintragen: **Einstellungen → Integrationen → Freematics ONE+ → Konfigurieren**
+4. **Firmware via Seriell USB flashen**-Button drücken
+5. Logs prüfen: **Einstellungen → System → Protokolle**
 
 ---
 
@@ -519,7 +615,13 @@ Entitätsnamen folgen dem Muster:
 - Im AP-Modus: Mit `TELELOGGER`-WLAN verbunden?
 - ENABLE_HTTPD=1 in der Firmware?
 
-**Serieller Flash fehlgeschlagen**
-- Port prüfen: `dmesg | tail`
+**Browser-Flasher funktioniert nicht**
+- Chrome oder Edge (Version 89+) verwenden — Firefox unterstützt Web Serial nicht
+- USB-Seriell-Treiber für das Gerät installieren (CP210x oder CH340)
+- Anderen USB-Port oder ein anderes USB-Kabel ausprobieren
+
+**Serieller Flash via HA-Server fehlgeschlagen**
+- Prüfen, ob das Gerät wirklich am HA-Server (nicht am eigenen Computer) angeschlossen ist
+- Port prüfen: `dmesg | tail` auf dem HA-Host
 - Berechtigungen: `sudo chmod 666 /dev/ttyUSB0`
-- esptool installieren: `pip install esptool`
+- `esptool` wird automatisch durch die Integration installiert. Falls noch nicht vorhanden: `pip install esptool`

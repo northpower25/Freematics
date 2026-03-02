@@ -10,6 +10,11 @@ Firmware configuration (config.h / Kconfig):
   SERVER_HOST      = <your-ha-host>  (e.g. abc123.ui.nabu.casa)
   SERVER_PORT      = 443
   HA_WEBHOOK_ID    = <webhook-id shown during integration setup>
+
+Browser-based serial flasher (Web Serial API):
+  /api/freematics/flasher       – HTML flasher page (Chrome/Edge 89+)
+  /api/freematics/manifest.json – esp-web-tools firmware manifest
+  /api/freematics/firmware.bin  – Bundled firmware binary
 """
 
 from __future__ import annotations
@@ -25,10 +30,19 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN
+from .views import FreematicsFirmwareView, FreematicsFlasherView, FreematicsManifestView
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "button"]
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register integration-wide HTTP views (called once per HA startup)."""
+    hass.http.register_view(FreematicsFlasherView())
+    hass.http.register_view(FreematicsManifestView())
+    hass.http.register_view(FreematicsFirmwareView())
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

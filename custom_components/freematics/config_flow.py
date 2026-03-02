@@ -191,6 +191,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "ap_ssid": "TELELOGGER",
                 "ap_password": "PASSWORD",
+                "flasher_url": f"{self._base_url}/api/freematics/flasher",
             },
         )
 
