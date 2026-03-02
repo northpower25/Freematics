@@ -1,0 +1,23 @@
+flash_firmware:
+  name: Flash Firmware
+  description: Flash the Freematics ONE+ firmware using the configured method.
+  target:
+    entity:
+      integration: freematics
+      domain: button
+
+send_config:
+  name: Send Config to Device
+  description: Push stored WiFi/APN settings to a running Freematics ONE+ device via WiFi.
+  target:
+    entity:
+      integration: freematics
+      domain: button
+
+restart_device:
+  name: Restart Device
+  description: Send a restart command to the Freematics ONE+ device via its HTTP API.
+  target:
+    entity:
+      integration: freematics
+      domain: button
