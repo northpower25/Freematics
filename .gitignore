@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.exe
+server/teleserver/teleserver
+
+# CodeQL
+_codeql_detected_source_root
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Arduino
+*.elf
+*.bin
+*.hex
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
