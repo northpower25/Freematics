@@ -6,6 +6,6 @@
   "documentation": "https://github.com/northpower25/Freematics/blob/master/docs/README.md",
   "iot_class": "cloud_push",
   "version": "0.0.2",
-  "dependencies": ["webhook"],
+  "dependencies": ["webhook", "frontend"],
   "requirements": ["esptool>=4.7.0"]
 }
