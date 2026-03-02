@@ -15,12 +15,19 @@ Browser-based serial flasher (Web Serial API):
   /api/freematics/flasher       – HTML flasher page (Chrome/Edge 89+)
   /api/freematics/manifest.json – esp-web-tools firmware manifest
   /api/freematics/firmware.bin  – Bundled firmware binary
+
+Sidebar panel:
+  Registered automatically at /freematics-dashboard when the integration
+  is set up.  Provides a live vehicle telemetry dashboard and a
+  browser-based firmware flasher with COM-port detection.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from homeassistant.components import frontend
 from homeassistant.components.webhook import (
     async_register,
     async_unregister,
@@ -36,12 +43,35 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "button"]
 
+_WWW_DIR = Path(__file__).parent / "www"
+_PANEL_URL = "freematics-dashboard"
+_STATIC_PATH = "/freematics_static"
+_PANEL_JS_URL = f"{_STATIC_PATH}/freematics-panel.js"
+
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register integration-wide HTTP views (called once per HA startup)."""
+    """Register integration-wide HTTP views and sidebar panel (called once per HA startup)."""
     hass.http.register_view(FreematicsFlasherView())
     hass.http.register_view(FreematicsManifestView())
     hass.http.register_view(FreematicsFirmwareView())
+
+    # Serve the www/ directory so the panel JS and custom card are reachable.
+    hass.http.register_static_path(_STATIC_PATH, str(_WWW_DIR), cache_headers=True)
+
+    # Register the sidebar panel once per HA process startup.
+    frontend.async_register_built_in_panel(
+        hass,
+        component_name="custom",
+        sidebar_title="Freematics ONE+",
+        sidebar_icon="mdi:car-connected",
+        frontend_url_path=_PANEL_URL,
+        config={
+            "name": "freematics-panel",
+            "module_url": _PANEL_JS_URL,
+        },
+        require_admin=False,
+    )
+
     return True
 
 
