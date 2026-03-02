@@ -93,8 +93,6 @@ menu "Telelogger Configuration"
             bool "HTTP Protocol"
         config PROTOCOL_HTTPS
             bool "HTTPS Protocol"
-        config PROTOCOL_HA_WEBHOOK
-            bool "Home Assistant Webhook (HTTPS)"
     endchoice
     
     config SERVER_PROTOCOL
@@ -102,7 +100,6 @@ menu "Telelogger Configuration"
         default 1 if PROTOCOL_UDP
         default 2 if PROTOCOL_HTTP
         default 3 if PROTOCOL_HTTPS
-        default 4 if PROTOCOL_HA_WEBHOOK
 
     config SERVER_HOST
         string "Server Host/IP"
@@ -112,14 +109,6 @@ menu "Telelogger Configuration"
         int "Server Port (0 for auto)"
         range 0 65535
         default 0
-
-    config HA_WEBHOOK_ID
-        string "Home Assistant Webhook ID"
-        default ""
-        depends on PROTOCOL_HA_WEBHOOK
-        help
-            Webhook ID created by the Freematics integration in Home Assistant.
-            Works with local HA and Nabu Casa cloud (no VPN or port forwarding needed).
 
 endmenu
 

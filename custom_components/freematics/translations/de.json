@@ -1,0 +1,66 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Freematics ONE+ – Verbindungsart",
+        "description": "Wählen Sie aus, wie Ihr Freematics ONE+ Gerät mit dem Internet verbunden wird, um Daten an Home Assistant zu senden.",
+        "data": {
+          "connection_type": "Verbindungsart"
+        }
+      },
+      "wifi": {
+        "title": "Freematics ONE+ – WLAN-Zugangsdaten",
+        "description": "Geben Sie die WLAN-Zugangsdaten ein, mit denen sich der Freematics ONE+ verbinden soll.",
+        "data": {
+          "wifi_ssid": "WLAN-SSID",
+          "wifi_password": "WLAN-Passwort"
+        }
+      },
+      "cellular": {
+        "title": "Freematics ONE+ – Mobilfunk / SIM",
+        "description": "Geben Sie den APN Ihres Mobilfunkanbieters ein. Lassen Sie das Feld leer, um den Standard-APN zu verwenden. Die SIM-PIN ist nur erforderlich, wenn Ihre SIM-Karte einen PIN-Schutz hat.",
+        "data": {
+          "cell_apn": "Mobilfunk-APN",
+          "sim_pin": "SIM-PIN (optional)"
+        }
+      },
+      "webhook": {
+        "title": "Freematics ONE+ – Webhook / Firmware-Einstellungen",
+        "description": "Es wurde ein eindeutiger Webhook für Ihr Gerät erstellt.\n\nKopieren Sie die folgenden Einstellungen in Ihre Firmware-Konfiguration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nVollständige Webhook-URL (zur Information):\n`{webhook_url}`\n\nSie können die Webhook-ID unten bearbeiten, wenn Sie einen eigenen Wert verwenden möchten.",
+        "data": {
+          "webhook_id": "Webhook-ID"
+        }
+      },
+      "flash": {
+        "title": "Freematics ONE+ – Flash-Methode",
+        "description": "Wählen Sie aus, wie die Firmware auf das Gerät geflasht werden soll.\n\n**WLAN OTA**: Das Gerät muss eingeschaltet und im Netzwerk erreichbar sein oder sich im AP-Modus befinden (verbinden Sie sich mit dem WLAN **{ap_ssid}**, Passwort **{ap_password}**, und geben Sie `192.168.4.1` als Geräte-IP ein).\n\n**Seriell USB**: Das Gerät muss per USB mit dem Home-Assistant-Host verbunden sein. Erfordert eine installierte `esptool`-Anwendung.\n\nNach dem Einrichten können Sie die **Firmware flashen**-Buttons in der Integration verwenden, um den Flash-Vorgang zu starten.",
+        "data": {
+          "flash_method": "Flash-Methode",
+          "device_ip": "Geräte-IP-Adresse (für WLAN OTA)",
+          "device_port": "HTTP-Port des Geräts (Standard: 80)",
+          "serial_port": "Serieller Port (z.B. /dev/ttyUSB0)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Diese Webhook-ID ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Freematics ONE+ – Einstellungen aktualisieren",
+        "description": "Aktualisieren Sie die Geräteverbindungseinstellungen. Änderungen werden beim nächsten Flash-Vorgang oder beim Drücken von **Konfiguration an Gerät senden** übernommen.",
+        "data": {
+          "wifi_ssid": "WLAN-SSID",
+          "wifi_password": "WLAN-Passwort",
+          "cell_apn": "Mobilfunk-APN",
+          "device_ip": "Geräte-IP-Adresse",
+          "device_port": "HTTP-Port des Geräts",
+          "flash_method": "Flash-Methode",
+          "serial_port": "Serieller Port"
+        }
+      }
+    }
+  }
+}

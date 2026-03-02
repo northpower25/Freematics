@@ -32,9 +32,6 @@
 #define SERVER_PORT CONFIG_SERVER_PORT
 #define SERVER_PROTOCOL CONFIG_SERVER_PROTOCOL
 #endif
-#ifdef CONFIG_HA_WEBHOOK_ID
-#define HA_WEBHOOK_ID CONFIG_HA_WEBHOOK_ID
-#endif
 #ifdef CONFIG_CELL_APN
 #define CELL_APN CONFIG_CELL_APN
 #endif
@@ -66,7 +63,6 @@
 #define PROTOCOL_UDP 1
 #define PROTOCOL_HTTPS_GET 2
 #define PROTOCOL_HTTPS_POST 3
-#define PROTOCOL_HA_WEBHOOK 4
 
 /**************************************
 * OBD-II configurations
@@ -94,11 +90,6 @@
 // Freematics Hub server settings
 #define SERVER_HOST "hub.freematics.com"
 #define SERVER_PROTOCOL PROTOCOL_UDP
-#endif
-
-// Home Assistant webhook settings (used when SERVER_PROTOCOL == PROTOCOL_HA_WEBHOOK)
-#ifndef HA_WEBHOOK_ID
-#define HA_WEBHOOK_ID ""
 #endif
 
 // SIM card setting

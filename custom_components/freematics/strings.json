@@ -2,15 +2,65 @@
   "config": {
     "step": {
       "user": {
-        "title": "Freematics ONE+ Setup",
-        "description": "A webhook will be created so your Freematics ONE+ device can push telemetry data directly to Home Assistant — no VPN or port forwarding needed.\n\nCopy the **Webhook ID** below into your firmware `HA_WEBHOOK_ID` setting and set `SERVER_HOST` to your HA host (e.g. `{ha_host}`).\n\nFull webhook URL:\n`{webhook_url}`",
+        "title": "Freematics ONE+ – Connection Type",
+        "description": "Choose how your Freematics ONE+ device will connect to the internet to send data to Home Assistant.",
+        "data": {
+          "connection_type": "Connection type"
+        }
+      },
+      "wifi": {
+        "title": "Freematics ONE+ – WiFi Credentials",
+        "description": "Enter the WiFi network credentials that the Freematics ONE+ should connect to.",
+        "data": {
+          "wifi_ssid": "WiFi SSID",
+          "wifi_password": "WiFi Password"
+        }
+      },
+      "cellular": {
+        "title": "Freematics ONE+ – Cellular / SIM",
+        "description": "Enter the APN for your cellular provider. Leave blank to use the default APN. The SIM PIN is only required if your SIM card has a PIN lock.",
+        "data": {
+          "cell_apn": "Cellular APN",
+          "sim_pin": "SIM PIN (optional)"
+        }
+      },
+      "webhook": {
+        "title": "Freematics ONE+ – Webhook / Firmware Settings",
+        "description": "A unique webhook has been generated for your device.\n\nCopy the settings below into your firmware configuration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nFull webhook URL (for reference):\n`{webhook_url}`\n\nYou can edit the Webhook ID below if you want to use a custom value.",
         "data": {
           "webhook_id": "Webhook ID"
+        }
+      },
+      "flash": {
+        "title": "Freematics ONE+ – Flash Method",
+        "description": "Choose how to flash the firmware onto the device.\n\n**WiFi OTA**: The device must be powered on and reachable on your network, or in AP mode (connect to WiFi network **{ap_ssid}** with password **{ap_password}**, then enter `192.168.4.1` as Device IP).\n\n**Serial USB**: The device must be connected via USB to the Home Assistant host. Requires `esptool` to be installed.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.",
+        "data": {
+          "flash_method": "Flash method",
+          "device_ip": "Device IP address (for WiFi OTA)",
+          "device_port": "Device HTTP port (default: 80)",
+          "serial_port": "Serial port (e.g. /dev/ttyUSB0)"
         }
       }
     },
     "abort": {
       "already_configured": "This webhook ID is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Freematics ONE+ – Update Settings",
+        "description": "Update the device connection settings. Changes will be applied on the next flash or when you press **Send Config to Device**.",
+        "data": {
+          "wifi_ssid": "WiFi SSID",
+          "wifi_password": "WiFi Password",
+          "cell_apn": "Cellular APN",
+          "device_ip": "Device IP address",
+          "device_port": "Device HTTP port",
+          "flash_method": "Flash method",
+          "serial_port": "Serial port"
+        }
+      }
     }
   }
 }

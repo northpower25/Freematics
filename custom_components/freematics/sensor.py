@@ -37,10 +37,9 @@ async def async_setup_entry(
 
         for key, value in data.items():
             if key in ("device_id", "ts", "gps_time"):
-                # Skip non-sensor fields
                 continue
             if key not in SENSOR_DEFINITIONS:
-                _LOGGER.debug("Unknown telemetry key '%s' – skipping", key)
+                _LOGGER.debug("Unknown telemetry key '%s' - skipping", key)
                 continue
 
             sensor_uid = f"{webhook_id}_{key}"
@@ -83,7 +82,6 @@ class FreematicsSensor(SensorEntity):
         self._attr_native_unit_of_measurement = unit
         self._attr_unique_id = f"freematics_{webhook_id}_{key}"
 
-        # Map device class string to enum (or None)
         if device_class:
             try:
                 self._attr_device_class = SensorDeviceClass(device_class)
@@ -92,7 +90,6 @@ class FreematicsSensor(SensorEntity):
         else:
             self._attr_device_class = None
 
-        # Map state class string to enum (or None)
         if state_class:
             try:
                 self._attr_state_class = SensorStateClass(state_class)
