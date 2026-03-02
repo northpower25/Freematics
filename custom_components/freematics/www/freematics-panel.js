@@ -230,7 +230,20 @@ class FreematicsPanel extends HTMLElement {
     this._activeTab = "dashboard";
     this._initialized = false;
     this._flashRendered = false;
+    this._dialogBodyObserver = null;
+    this._currentAttrObserver = null;
     this.attachShadow({ mode: "open" });
+  }
+
+  disconnectedCallback() {
+    if (this._dialogBodyObserver) {
+      this._dialogBodyObserver.disconnect();
+      this._dialogBodyObserver = null;
+    }
+    if (this._currentAttrObserver) {
+      this._currentAttrObserver.disconnect();
+      this._currentAttrObserver = null;
+    }
   }
 
   set hass(hass) {
@@ -650,54 +663,113 @@ class FreematicsPanel extends HTMLElement {
         </span>
       </esp-web-install-button>
     `;
-    const btn = container.querySelector("esp-web-install-button");
-    if (btn) {
-      btn.addEventListener("state-changed", e => this._onFlashState(e));
+    this._watchInstallDialog();
+  }
+
+  /* ── Install-dialog observer (progress bar + log) ────────────────── */
+
+  /**
+   * esp-web-tools v10 does NOT fire state-changed on <esp-web-install-button>.
+   * The actual flash work happens inside <ewt-install-dialog> which is
+   * appended to document.body.  We watch for it with a MutationObserver and
+   * track its 'state' attribute to update our progress UI.
+   */
+  _watchInstallDialog() {
+    if (this._dialogBodyObserver) return;
+    this._dialogBodyObserver = new MutationObserver(mutations => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === 1 && node.localName === "ewt-install-dialog") {
+            this._onInstallDialogAdded(node);
+          }
+        }
+        for (const node of mutation.removedNodes) {
+          if (node.nodeType === 1 && node.localName === "ewt-install-dialog") {
+            if (this._currentAttrObserver) {
+              this._currentAttrObserver.disconnect();
+              this._currentAttrObserver = null;
+            }
+          }
+        }
+      }
+    });
+    this._dialogBodyObserver.observe(document.body, { childList: true });
+  }
+
+  _onInstallDialogAdded(dialog) {
+    const shadow = this.shadowRoot;
+    const progressSection = shadow.getElementById("flash-progress");
+    const logEl = shadow.getElementById("flash-log");
+    if (!progressSection) return;
+
+    // Reset log and reveal the progress section
+    if (logEl) logEl.innerHTML = "";
+    progressSection.style.display = "block";
+    this._updateFlashUI("Connecting to device…", "", "#2196f3", 5);
+    this._appendFlashLog("info", "Connecting to device…");
+
+    // Watch for dialog state attribute changes
+    const attrObserver = new MutationObserver(() => {
+      const state = dialog.getAttribute("state");
+      if (state) this._onDialogStateChanged(state);
+    });
+    attrObserver.observe(dialog, { attributes: true, attributeFilter: ["state"] });
+    this._currentAttrObserver = attrObserver;
+
+    // Read the initial state if Lit has already set it
+    const initState = dialog.getAttribute("state");
+    if (initState) this._onDialogStateChanged(initState);
+
+    // Finalize when the dialog closes
+    dialog.addEventListener("closed", () => {
+      attrObserver.disconnect();
+      this._currentAttrObserver = null;
+      const lastState = dialog.getAttribute("state");
+      if (lastState === "ERROR") {
+        this._updateFlashUI("✗ Error — see the dialog for details.", "err", "#f44336", 0);
+        this._appendFlashLog("err", "Operation ended with an error.");
+      } else {
+        this._updateFlashUI("Flash session ended.", "ok", "#4caf50", 100);
+        this._appendFlashLog("ok", "Dialog closed.");
+      }
+    }, { once: true });
+  }
+
+  _onDialogStateChanged(state) {
+    const MAP = {
+      DASHBOARD: { pct: 20,  label: "Connected — follow the dialog to install…", cls: "info", color: "#2196f3" },
+      ASK_ERASE: { pct: 30,  label: "Awaiting erase confirmation in dialog…",    cls: "info", color: "#ff9800" },
+      INSTALL:   { pct: 55,  label: "Installing firmware… (~30 s)",              cls: "info", color: "#2196f3" },
+      PROVISION: { pct: 90,  label: "Configuring Wi-Fi…",                        cls: "info", color: "#2196f3" },
+      LOGS:      { pct: 100, label: "✓ Installation complete.",                  cls: "ok",   color: "#4caf50" },
+      ERROR:     { pct: 0,   label: "✗ Error — see dialog for details.",         cls: "err",  color: "#f44336" },
+    };
+    const info = MAP[state] || { pct: 0, label: state, cls: "info", color: "#2196f3" };
+    this._updateFlashUI(info.label, info.cls !== "info" ? info.cls : "", info.color, info.pct);
+    this._appendFlashLog(info.cls, info.label);
+  }
+
+  _updateFlashUI(label, cls, barColor, pct) {
+    const shadow = this.shadowRoot;
+    const statusText   = shadow.getElementById("flash-status-text");
+    const progressFill = shadow.getElementById("progress-bar-fill");
+    if (statusText) {
+      statusText.textContent = label;
+      statusText.className   = `flash-status-text${cls ? " " + cls : ""}`;
+    }
+    if (progressFill) {
+      progressFill.style.width      = `${pct}%`;
+      progressFill.style.background = barColor;
     }
   }
 
-  /* ── Flash state handler (progress bar + log) ───────────────────── */
-  _onFlashState(e) {
+  _appendFlashLog(cls, text) {
     const shadow = this.shadowRoot;
-    const progressSection = shadow.getElementById("flash-progress");
-    const statusText      = shadow.getElementById("flash-status-text");
-    const progressFill    = shadow.getElementById("progress-bar-fill");
-    const logEl           = shadow.getElementById("flash-log");
-    if (!progressSection || !statusText || !progressFill || !logEl) return;
-
-    const STATE_INFO = {
-      initializing: { pct: 5,   label: "Initializing connection…",          cls: "info",  barColor: "#2196f3" },
-      preparing:    { pct: 20,  label: "Preparing firmware…",               cls: "info",  barColor: "#2196f3" },
-      erasing:      { pct: 40,  label: "Erasing flash memory…",             cls: "warn",  barColor: "#ff9800" },
-      writing:      { pct: 70,  label: "Writing firmware to device…",       cls: "info",  barColor: "#2196f3" },
-      finished:     { pct: 100, label: "✓ Firmware flashed successfully!",  cls: "ok",    barColor: "#4caf50" },
-      error:        { pct: 0,   label: "✗ Error during flashing.",          cls: "err",   barColor: "#f44336" },
-    };
-
-    const detail  = e.detail || {};
-    const state   = detail.state || "";
-    const message = detail.message || detail.details?.message || "";
-    const info    = STATE_INFO[state] || { pct: 0, label: state, cls: "info", barColor: "#2196f3" };
-
-    // Refine progress for byte-level write events when details include done/total
-    const done  = detail.details?.done;
-    const total = detail.details?.total;
-    let pct = info.pct;
-    if (state === "writing" && done !== undefined && total > 0) {
-      // Map writing progress across 40–95 % of the bar
-      pct = Math.round(40 + (done / total) * 55);
-    }
-
-    progressSection.style.display = "block";
-    statusText.textContent  = info.label;
-    statusText.className    = `flash-status-text ${info.cls !== "info" ? info.cls : ""}`;
-    progressFill.style.width      = `${pct}%`;
-    progressFill.style.background = info.barColor;
-
-    const ts    = new Date().toLocaleTimeString();
-    const text  = message || info.label;
+    const logEl = shadow.getElementById("flash-log");
+    if (!logEl) return;
+    const ts = new Date().toLocaleTimeString();
     const entry = document.createElement("div");
-    entry.className   = `log-entry ${info.cls}`;
+    entry.className   = `log-entry ${cls}`;
     entry.textContent = `[${ts}] ${text}`;
     logEl.appendChild(entry);
     logEl.scrollTop = logEl.scrollHeight;
