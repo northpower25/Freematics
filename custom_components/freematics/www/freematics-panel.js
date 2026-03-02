@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.0.0";
+const PANEL_VERSION = "1.1.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -232,7 +232,17 @@ class FreematicsPanel extends HTMLElement {
     this._flashRendered = false;
     this._dialogBodyObserver = null;
     this._currentAttrObserver = null;
+    this._progressPollTimer = null;
     this.attachShadow({ mode: "open" });
+  }
+
+  connectedCallback() {
+    // Re-attach the body observer if the Flash tab was already rendered and
+    // the observer was torn down by a previous disconnectedCallback (e.g.
+    // HA sidebar navigation away and back).
+    if (this._flashRendered) {
+      this._watchInstallDialog();
+    }
   }
 
   disconnectedCallback() {
@@ -243,6 +253,10 @@ class FreematicsPanel extends HTMLElement {
     if (this._currentAttrObserver) {
       this._currentAttrObserver.disconnect();
       this._currentAttrObserver = null;
+    }
+    if (this._progressPollTimer) {
+      clearInterval(this._progressPollTimer);
+      this._progressPollTimer = null;
     }
   }
 
@@ -663,6 +677,26 @@ class FreematicsPanel extends HTMLElement {
         </span>
       </esp-web-install-button>
     `;
+
+    // Show the progress section as soon as the user clicks the button so
+    // the log console is visible before the port-picker dialog opens.  This
+    // runs before connect.ts even starts, guaranteeing the section is visible
+    // regardless of any MutationObserver timing.
+    const activateBtn = container.querySelector('[slot="activate"]');
+    if (activateBtn) {
+      activateBtn.addEventListener("click", () => {
+        const shadow = this.shadowRoot;
+        const progressSection = shadow.querySelector("#flash-progress");
+        const logEl = shadow.querySelector("#flash-log");
+        if (!progressSection) return;
+        // Reset on every click so a second attempt starts with a clean log.
+        if (logEl) logEl.innerHTML = "";
+        progressSection.style.display = "block";
+        this._updateFlashUI("Waiting for port selection…", "", "#2196f3", 2);
+        this._appendFlashLog("info", "Waiting for port selection…");
+      });
+    }
+
     this._watchInstallDialog();
   }
 
@@ -698,17 +732,62 @@ class FreematicsPanel extends HTMLElement {
 
   _onInstallDialogAdded(dialog) {
     const shadow = this.shadowRoot;
-    const progressSection = shadow.getElementById("flash-progress");
-    const logEl = shadow.getElementById("flash-log");
+    const progressSection = shadow.querySelector("#flash-progress");
+    const logEl = shadow.querySelector("#flash-log");
     if (!progressSection) return;
 
-    // Reset log and reveal the progress section
+    // Reset log and reveal the progress section (no-op if the click listener
+    // already revealed it; setting display again is harmless).
     if (logEl) logEl.innerHTML = "";
     progressSection.style.display = "block";
     this._updateFlashUI("Connecting to device…", "", "#2196f3", 5);
     this._appendFlashLog("info", "Connecting to device…");
 
-    // Watch for dialog state attribute changes
+    // Redirect the dialog's internal logger so real flash messages appear in
+    // our log console (e.g. "Connecting", "Erasing", chunk-write confirmations).
+    dialog.logger = {
+      log:   (msg) => this._appendFlashLog("info", String(msg)),
+      error: (msg) => this._appendFlashLog("err",  String(msg)),
+      debug: (msg) => { /* suppress verbose debug output */ },
+    };
+
+    // Poll the dialog's Lit reactive state (_state) and write-progress
+    // (_installState.details.percentage) at 300 ms intervals.  This is more
+    // reliable than depending solely on the attribute MutationObserver because
+    // Lit may set the attribute either before or after our observer fires.
+    if (this._progressPollTimer) clearInterval(this._progressPollTimer);
+    let lastState = null;
+    let lastPct   = null;
+    this._progressPollTimer = setInterval(() => {
+      const state        = dialog._state;
+      const installState = dialog._installState;
+
+      // Propagate high-level state transitions
+      if (state && state !== lastState) {
+        lastState = state;
+        this._onDialogStateChanged(state);
+      }
+
+      // During the WRITING phase show real byte-level percentage
+      if (
+        installState &&
+        installState.state === "writing" &&
+        installState.details
+      ) {
+        const pct = Math.round(installState.details.percentage);
+        if (pct !== lastPct) {
+          lastPct = pct;
+          this._updateFlashUI(
+            `Installing… ${pct}%`,
+            "",
+            "#2196f3",
+            pct,
+          );
+        }
+      }
+    }, 300);
+
+    // Watch for dialog state attribute changes (kept as a secondary mechanism)
     const attrObserver = new MutationObserver(() => {
       const state = dialog.getAttribute("state");
       if (state) this._onDialogStateChanged(state);
@@ -724,6 +803,10 @@ class FreematicsPanel extends HTMLElement {
     dialog.addEventListener("closed", () => {
       attrObserver.disconnect();
       this._currentAttrObserver = null;
+      if (this._progressPollTimer) {
+        clearInterval(this._progressPollTimer);
+        this._progressPollTimer = null;
+      }
       const lastState = dialog.getAttribute("state");
       if (lastState === "ERROR") {
         this._updateFlashUI("✗ Error — see the dialog for details.", "err", "#f44336", 0);
@@ -751,8 +834,8 @@ class FreematicsPanel extends HTMLElement {
 
   _updateFlashUI(label, cls, barColor, pct) {
     const shadow = this.shadowRoot;
-    const statusText   = shadow.getElementById("flash-status-text");
-    const progressFill = shadow.getElementById("progress-bar-fill");
+    const statusText   = shadow.querySelector("#flash-status-text");
+    const progressFill = shadow.querySelector("#progress-bar-fill");
     if (statusText) {
       statusText.textContent = label;
       statusText.className   = `flash-status-text${cls ? " " + cls : ""}`;
@@ -765,7 +848,7 @@ class FreematicsPanel extends HTMLElement {
 
   _appendFlashLog(cls, text) {
     const shadow = this.shadowRoot;
-    const logEl = shadow.getElementById("flash-log");
+    const logEl = shadow.querySelector("#flash-log");
     if (!logEl) return;
     const ts = new Date().toLocaleTimeString();
     const entry = document.createElement("div");
