@@ -28,6 +28,7 @@ import logging
 from pathlib import Path
 
 from homeassistant.components import frontend
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.webhook import (
     async_register,
     async_unregister,
@@ -56,7 +57,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsFirmwareView())
 
     # Serve the www/ directory so the panel JS and custom card are reachable.
-    hass.http.register_static_path(_STATIC_PATH, str(_WWW_DIR), cache_headers=True)
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(_STATIC_PATH, str(_WWW_DIR), cache_headers=True)]
+    )
 
     # Register the sidebar panel once per HA process startup.
     frontend.async_register_built_in_panel(
