@@ -5,11 +5,12 @@ ONE+ device via HTTPS webhook.  It is compatible with both locally accessible
 Home Assistant instances and the Nabu Casa cloud remote UI
 (<id>.ui.nabu.casa) so end-users do not need VPN or port-forwarding.
 
-Firmware configuration (config.h / Kconfig):
-  SERVER_PROTOCOL  = PROTOCOL_HA_WEBHOOK (4)
-  SERVER_HOST      = <your-ha-host>  (e.g. abc123.ui.nabu.casa)
-  SERVER_PORT      = 443
-  HA_WEBHOOK_ID    = <webhook-id shown during integration setup>
+Firmware configuration (build flags in firmware_v5/telelogger/platformio.ini):
+  ENABLE_WIFI      = 1
+  SERVER_PROTOCOL  = 3  (PROTOCOL_HTTPS_POST)
+  SERVER_HOST      – set at runtime via NVS provisioning (config_nvs.bin)
+  SERVER_PORT      – set at runtime via NVS provisioning (default: 443)
+  WEBHOOK_PATH     – set at runtime via NVS provisioning
 
 Browser-based serial flasher (Web Serial API):
   /api/freematics/flasher       – HTML flasher page (Chrome/Edge 89+)
@@ -44,6 +45,7 @@ from .views import (
     FreematicsFirmwareView,
     FreematicsFlashImageView,
     FreematicsFlasherView,
+    FreematicsPartitionTableView,
     FreematicsPersonalisedManifestView,
     FreematicsProvisioningTokenView,
     FreematicsProxyOTAView,
@@ -78,6 +80,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsFlasherView())
     hass.http.register_view(FreematicsPersonalisedManifestView())
     hass.http.register_view(FreematicsFirmwareView())
+    hass.http.register_view(FreematicsPartitionTableView())
     hass.http.register_view(FreematicsProxyOTAView())
     hass.http.register_view(FreematicsProvisioningTokenView())
     hass.http.register_view(FreematicsConfigNvsView())
