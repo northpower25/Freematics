@@ -86,6 +86,10 @@ char serverHost[128] = SERVER_HOST;
 uint16_t serverPort = SERVER_PORT;
 // WEBHOOK_PATH overrides the legacy /hub/api/post/<devid> path when set.
 char webhookPath[128] = "";
+// Runtime HTTP server enable – set to 1 via NVS key ENABLE_HTTPD when
+// provisioned by the HA integration config_nvs.bin.  Only takes effect
+// when the firmware is compiled with ENABLE_HTTPD=1.
+uint8_t enableHttpd = 0;
 nvs_handle_t nvs;
 
 // live data
@@ -1222,6 +1226,13 @@ void loadConfig()
   len = sizeof(webhookPath);
   webhookPath[0] = 0;
   nvs_get_str(nvs, "WEBHOOK_PATH", webhookPath, &len);
+
+  // Enable HTTP server at runtime when provisioned via config_nvs.bin.
+  // Only has an effect when the firmware is compiled with ENABLE_HTTPD=1.
+  uint8_t nvsHttpd = 0;
+  if (nvs_get_u8(nvs, "ENABLE_HTTPD", &nvsHttpd) == ESP_OK) {
+    enableHttpd = nvsHttpd;
+  }
 }
 
 void processBLE(int timeout)
@@ -1379,17 +1390,16 @@ void setup()
 {
   delay(500);
 
-  // Initialize NVS
+  // Initialize NVS – erase and retry on any error to prevent a boot loop
+  // when a freshly-provisioned config_nvs.bin is present (e.g. version
+  // mismatch, corrupt pages, or any unexpected format incompatibility).
   esp_err_t err = nvs_flash_init();
-  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    // NVS partition was truncated and needs to be erased
-    // Retry nvs_flash_init
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    err = nvs_flash_init();
+  if (err != ESP_OK) {
+    if (nvs_flash_erase() == ESP_OK) {
+      err = nvs_flash_init();
+    }
   }
-  ESP_ERROR_CHECK( err );
-  err = nvs_open("storage", NVS_READWRITE, &nvs);
-  if (err == ESP_OK) {
+  if (err == ESP_OK && nvs_open("storage", NVS_READWRITE, &nvs) == ESP_OK) {
     loadConfig();
   }
 
@@ -1474,15 +1484,17 @@ if (!state.check(STATE_MEMS_READY)) do {
 #endif
 
 #if ENABLE_HTTPD
-  IPAddress ip;
-  if (serverSetup(ip)) {
-    Serial.println("HTTPD:");
-    Serial.println(ip);
+  if (enableHttpd) {
+    IPAddress ip;
+    if (serverSetup(ip)) {
+      Serial.println("HTTPD:");
+      Serial.println(ip);
 #if ENABLE_OLED
-    oled.println(ip);
+      oled.println(ip);
 #endif
-  } else {
-    Serial.println("HTTPD:NO");
+    } else {
+      Serial.println("HTTPD:NO");
+    }
   }
 #endif
 

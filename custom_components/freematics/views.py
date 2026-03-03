@@ -493,6 +493,7 @@ class FreematicsConfigNvsView(HomeAssistantView):
             server_host,
             server_port,
             webhook_path,
+            True,  # enable_httpd: activate built-in HTTP server on first boot
         )
 
         if nvs_data is None:

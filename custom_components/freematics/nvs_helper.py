@@ -14,6 +14,7 @@ Stored NVS keys (namespace "storage"):
   SERVER_HOST  – HA hostname / Nabu Casa *.ui.nabu.casa (firmware v5.1+)
   SERVER_PORT  – HTTPS port, usually 443 (firmware v5.1+)
   WEBHOOK_PATH – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
+  ENABLE_HTTPD – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ def generate_nvs_partition(
     server_host: str = "",
     server_port: int = 443,
     webhook_path: str = "",
+    enable_httpd: bool = True,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -79,6 +81,9 @@ def generate_nvs_partition(
     def _add_u16(key: str, value: int) -> None:
         rows.append(f"{key},data,u16,{value}")
 
+    def _add_u8(key: str, value: int) -> None:
+        rows.append(f"{key},data,u8,{value}")
+
     if wifi_ssid:
         _add_str("WIFI_SSID", wifi_ssid)
     if wifi_password:
@@ -91,6 +96,9 @@ def generate_nvs_partition(
         _add_u16("SERVER_PORT", server_port)
     if webhook_path:
         _add_str("WEBHOOK_PATH", webhook_path)
+    # Enable the built-in HTTP server on first boot (requires ENABLE_HTTPD=1
+    # compiled into the firmware).
+    _add_u8("ENABLE_HTTPD", 1 if enable_httpd else 0)
 
     csv_content = "\n".join(rows) + "\n"
 
@@ -123,11 +131,12 @@ def generate_nvs_partition(
                 data = f.read()
 
             _LOGGER.debug(
-                "NVS partition generated: %d bytes (wifi=%s, host=%s, path=%s)",
+                "NVS partition generated: %d bytes (wifi=%s, host=%s, path=%s, httpd=%s)",
                 len(data),
                 bool(wifi_ssid),
                 bool(server_host),
                 bool(webhook_path),
+                bool(enable_httpd),
             )
             return data
 
