@@ -155,12 +155,12 @@ bool WifiHTTP::send(HTTP_METHOD method, const char* path, const char* payload, i
 {
   String header = genHeader(method, path, payload, payloadSize);
   int len = header.length();
-  if (client.write(header.c_str(), len) != len) {
+  if (client.write((const uint8_t*)header.c_str(), len) != (size_t)len) {
     m_state = HTTP_DISCONNECTED;
     return false;
   }
   if (payloadSize) {
-    if (client.write(payload, payloadSize) != payloadSize) {
+    if (client.write((const uint8_t*)payload, payloadSize) != (size_t)payloadSize) {
       m_state = HTTP_ERROR;
       return false;
     }
