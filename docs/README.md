@@ -14,6 +14,7 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
    - [Method A: WiFi OTA (Recommended)](#method-a-wifi-ota-recommended)
    - [Method B: Browser Serial (Web Serial API)](#method-b-browser-serial-web-serial-api)
    - [Method C: Serial USB via HA Server](#method-c-serial-usb-via-ha-server)
+   - [Method D: Manual Flash Fallback (esptool / PlatformIO)](#method-d-manual-flash-fallback)
 5. [Sending Configuration to a Running Device](#sending-configuration-to-a-running-device)
 6. [Lovelace Dashboard & Card](#lovelace-dashboard--card)
 7. [Updating the Firmware](#updating-the-firmware)
@@ -118,6 +119,7 @@ Click **Submit** to finish setup. The integration is now configured. Use the **F
 | Device in your car / at your desk, HA on a server | [Method A: WiFi OTA](#method-a-wifi-ota-recommended) ✅ |
 | Device connected via USB to your computer (browser machine) | [Method B: Browser Serial](#method-b-browser-serial-web-serial-api) ✅ |
 | HA runs on the same machine as your browser | [Method C: Serial USB via HA Server](#method-c-serial-usb-via-ha-server) |
+| All automated methods fail, or you prefer a command-line approach | [Method D: Manual Flash Fallback](#method-d-manual-flash-fallback) |
 
 ---
 
@@ -217,7 +219,70 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
 
 ---
 
-## Sending Configuration to a Running Device
+### Method D: Manual Flash Fallback
+
+Use this method when **all automated methods fail** — for example when the browser serial flash hangs after COM port selection with no further progress, WiFi OTA returns a connection error, or you simply prefer a scriptable command-line approach. Works on **Windows, macOS, and Linux**.
+
+> ⚠️ Try [Method A (WiFi OTA)](#method-a-wifi-ota-recommended) or [Method B (Browser Serial)](#method-b-browser-serial-web-serial-api) first.
+
+#### Option D1 – esptool.py (command line)
+
+**Requirements:**
+- Python 3 installed ([python.org](https://www.python.org/downloads/))
+- USB cable between the Freematics ONE+ and your computer
+- USB-Serial driver installed (see [Method B requirements](#method-b-browser-serial-web-serial-api))
+
+**Steps:**
+
+1. **Download the firmware binary** — choose one of:
+   - From your Home Assistant instance (already bundled with this integration):
+     ```
+     http://<your-ha-address>/api/freematics/firmware.bin
+     ```
+     Open this URL in your browser and save the file as `telelogger.bin`.
+   - From the [GitHub releases page](https://github.com/northpower25/Freematics/releases) — download `telelogger.bin` from the latest release assets.
+
+2. **Install esptool:**
+   ```bash
+   pip install esptool
+   ```
+
+3. **Find your COM port:**
+   - **Windows**: Open Device Manager → Ports (COM & LPT) — look for `Silicon Labs CP210x` or `CH340` (e.g. `COM3`)
+   - **macOS**: `ls /dev/tty.usbserial-*` or `ls /dev/tty.SLAB_USBtoUART`
+   - **Linux**: `dmesg | tail` after plugging in — look for `/dev/ttyUSB0` or `/dev/ttyACM0`
+
+4. **Flash** (replace `PORT` with your port, e.g. `COM3` or `/dev/ttyUSB0`):
+   ```bash
+   esptool.py --chip esp32 --port PORT --baud 921600 \
+     write_flash --flash_mode dio --flash_size detect \
+     0x10000 telelogger.bin
+   ```
+
+5. The device restarts automatically after flashing (~30 s). No other steps required.
+
+> If `esptool.py` is not found, try `python3 -m esptool` instead.  
+> On Linux, if you get a permission error: `sudo chmod 666 /dev/ttyUSB0`
+
+#### Option D2 – VS Code + PlatformIO IDE (build from source)
+
+Use this option if you want to customise the firmware (e.g. change WiFi credentials or webhook ID at compile time) and flash it yourself.
+
+**Requirements:**
+- [Visual Studio Code](https://code.visualstudio.com/) installed
+- [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode) installed in VS Code
+
+**Steps:**
+
+1. Clone or download this repository.
+2. Open the folder `firmware_v5/telelogger/` in VS Code.
+3. Edit `config.h` to set your WiFi credentials, `SERVER_HOST`, `HA_WEBHOOK_ID`, etc.
+4. Connect the Freematics ONE+ via USB.
+5. Click **Upload** (the → arrow icon in the PlatformIO toolbar) — PlatformIO will compile and flash automatically.
+
+> PlatformIO will automatically install all required libraries and the correct ESP32 toolchain on first use.
+
+---
 
 If the device is already running firmware with `ENABLE_HTTPD=1`, you can push WiFi/APN settings without re-flashing:
 
@@ -336,13 +401,16 @@ When a new version of this integration is released:
 - Check that `ENABLE_HTTPD=1` is set in the firmware
 - Try pinging the device IP
 - Check HA logs for error details
+- If you see **"Connection reset by peer"**: the device may not yet support OTA upload at `/api/ota`, or it restarted mid-transfer. Use [Method D (esptool)](#method-d-manual-flash-fallback) as a fallback.
 
 ### Serial flash fails
 
-**Browser Flasher (Method B):**
+**Browser Flasher (Method B — Web Serial):**
 - Use Chrome or Edge 89+ — Firefox does not support Web Serial API
 - Install the USB-Serial driver for your device (CP210x or CH340)
 - Try a different USB port or cable
+- The Web Serial API requires a **trusted HTTPS connection** — it does not work over plain `http://` on a local IP. Use Nabu Casa, or use [Method D (esptool)](#method-d-manual-flash-fallback) instead.
+- If the progress bar **stays stuck with no messages** after selecting the COM port, the browser connected to the port but the flash tool failed to communicate with the device. Try [Method D (esptool)](#method-d-manual-flash-fallback).
 
 **Serial via HA Server (Method C):**
 - Verify the device is connected to the HA server, not your own computer
@@ -418,6 +486,7 @@ Eine HACS-kompatible Home Assistant Integration für das **Freematics ONE+** OBD
 2. [Installation über HACS](#installation-über-hacs)
 3. [Integration einrichten (Config Flow)](#integration-einrichten-config-flow)
 4. [Firmware flashen](#firmware-flashen)
+   - [Methode D: Manueller Flash-Fallback (esptool / PlatformIO)](#methode-d-manueller-flash-fallback)
 5. [Konfiguration an laufendes Gerät senden](#konfiguration-an-laufendes-gerät-senden)
 6. [Lovelace Dashboard & Karte](#lovelace-dashboard--karte)
 7. [Firmware aktualisieren](#firmware-aktualisieren)
@@ -503,6 +572,7 @@ Wählen Sie die Flash-Methode:
 | Gerät über USB am eigenen Computer angeschlossen | [Methode B: Browser-Flasher](#methode-b-browser-seriell-web-serial-api) ✅ |
 | Gerät ohne USB-Kabel verfügbar | [Methode A: WLAN OTA](#methode-a-wlan-ota-empfohlen) ✅ |
 | HA läuft auf demselben Rechner wie der Browser | [Methode C: Seriell via HA-Server](#methode-c-seriell-usb-via-ha-server) |
+| Alle automatisierten Methoden schlagen fehl | [Methode D: Manueller Flash-Fallback](#methode-d-manueller-flash-fallback) |
 
 ### Methode A: WLAN OTA (Empfohlen)
 
@@ -556,7 +626,70 @@ Flasht direkt vom Browser auf das Gerät, das am **eigenen Computer** per USB an
 
 ---
 
-## Konfiguration an laufendes Gerät senden
+### Methode D: Manueller Flash-Fallback
+
+Verwenden Sie diese Methode, wenn **alle automatisierten Methoden fehlschlagen** — zum Beispiel wenn der Browser-Flasher nach der Port-Auswahl hängt, WLAN OTA einen Verbindungsfehler meldet, oder Sie einen Kommandozeilen-Ansatz bevorzugen. Funktioniert unter **Windows, macOS und Linux**.
+
+> ⚠️ Versuchen Sie zuerst [Methode A (WLAN OTA)](#methode-a-wlan-ota-empfohlen) oder [Methode B (Browser-Flasher)](#methode-b-browser-seriell-web-serial-api).
+
+#### Option D1 – esptool.py (Kommandozeile)
+
+**Voraussetzungen:**
+- Python 3 installiert ([python.org](https://www.python.org/downloads/))
+- USB-Kabel zwischen Freematics ONE+ und Computer
+- USB-Seriell-Treiber installiert (siehe [Methode B](#methode-b-browser-seriell-web-serial-api))
+
+**Schritte:**
+
+1. **Firmware-Binary herunterladen** — eine der folgenden Optionen:
+   - Von Ihrer Home Assistant-Instanz (bereits mit dieser Integration gebündelt):
+     ```
+     http://<ihre-ha-adresse>/api/freematics/firmware.bin
+     ```
+     URL im Browser öffnen und Datei als `telelogger.bin` speichern.
+   - Von der [GitHub-Releases-Seite](https://github.com/northpower25/Freematics/releases) — `telelogger.bin` aus den Assets des neuesten Releases herunterladen.
+
+2. **esptool installieren:**
+   ```bash
+   pip install esptool
+   ```
+
+3. **COM-Port ermitteln:**
+   - **Windows**: Geräte-Manager → Anschlüsse (COM & LPT) — suchen nach `Silicon Labs CP210x` oder `CH340` (z.B. `COM3`)
+   - **macOS**: `ls /dev/tty.usbserial-*` oder `ls /dev/tty.SLAB_USBtoUART`
+   - **Linux**: `dmesg | tail` nach dem Einstecken — suchen nach `/dev/ttyUSB0` oder `/dev/ttyACM0`
+
+4. **Flashen** (ersetzen Sie `PORT` durch Ihren Port, z.B. `COM3` oder `/dev/ttyUSB0`):
+   ```bash
+   esptool.py --chip esp32 --port PORT --baud 921600 \
+     write_flash --flash_mode dio --flash_size detect \
+     0x10000 telelogger.bin
+   ```
+
+5. Das Gerät startet automatisch nach dem Flashen neu (~30 s). Keine weiteren Schritte erforderlich.
+
+> Falls `esptool.py` nicht gefunden wird: `python3 -m esptool` verwenden.  
+> Linux-Berechtigungsfehler: `sudo chmod 666 /dev/ttyUSB0`
+
+#### Option D2 – VS Code + PlatformIO IDE (aus Quellcode)
+
+Verwenden Sie diese Option, wenn Sie die Firmware anpassen möchten (z.B. WLAN-Zugangsdaten oder Webhook-ID zur Kompilierzeit setzen).
+
+**Voraussetzungen:**
+- [Visual Studio Code](https://code.visualstudio.com/) installiert
+- [PlatformIO IDE-Erweiterung](https://platformio.org/install/ide?install=vscode) in VS Code installiert
+
+**Schritte:**
+
+1. Dieses Repository klonen oder herunterladen.
+2. Den Ordner `firmware_v5/telelogger/` in VS Code öffnen.
+3. `config.h` bearbeiten — WLAN-Zugangsdaten, `SERVER_HOST`, `HA_WEBHOOK_ID` usw. setzen.
+4. Freematics ONE+ per USB anschließen.
+5. Auf **Upload** klicken (→ Pfeil-Symbol in der PlatformIO-Symbolleiste) — PlatformIO kompiliert und flasht automatisch.
+
+> PlatformIO installiert beim ersten Start alle erforderlichen Bibliotheken und das ESP32-Toolchain automatisch.
+
+---
 
 1. Gerät einschalten und mit dem Netzwerk verbinden
 2. IP des Geräts in den Integrationseinstellungen eintragen
@@ -614,11 +747,14 @@ Entitätsnamen folgen dem Muster:
 - Sicherstellen, dass das Gerät erreichbar ist (Ping testen)
 - Im AP-Modus: Mit `TELELOGGER`-WLAN verbunden?
 - ENABLE_HTTPD=1 in der Firmware?
+- Bei „Connection reset by peer": Das Gerät unterstützt möglicherweise keinen OTA-Upload über `/api/ota`. [Methode D (esptool)](#methode-d-manueller-flash-fallback) als Fallback verwenden.
 
-**Browser-Flasher funktioniert nicht**
+**Browser-Flasher hängt / kein Fortschritt nach Port-Auswahl**
 - Chrome oder Edge (Version 89+) verwenden — Firefox unterstützt Web Serial nicht
 - USB-Seriell-Treiber für das Gerät installieren (CP210x oder CH340)
 - Anderen USB-Port oder ein anderes USB-Kabel ausprobieren
+- Die Web Serial API benötigt eine **sichere HTTPS-Verbindung** — über eine lokale IP per `http://` funktioniert sie nicht. Nabu Casa verwenden, oder [Methode D (esptool)](#methode-d-manueller-flash-fallback) nutzen.
+- Wenn der Fortschrittsbalken nach der Port-Auswahl hängt: [Methode D (esptool)](#methode-d-manueller-flash-fallback) verwenden.
 
 **Serieller Flash via HA-Server fehlgeschlagen**
 - Prüfen, ob das Gerät wirklich am HA-Server (nicht am eigenen Computer) angeschlossen ist

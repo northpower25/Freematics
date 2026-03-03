@@ -134,6 +134,22 @@ _FLASHER_HTML = """\
     </ol>
   </div>
 
+  <div class="card warn">
+    <strong>&#128296; If the flash hangs or nothing happens after port selection:</strong>
+    <p>Use <strong>esptool.py</strong> from the command line as a fallback:</p>
+    <ol>
+      <li>Download the firmware:
+        <a href="/api/freematics/firmware.bin" download="telelogger.bin">telelogger.bin</a>
+      </li>
+      <li>Install: <code>pip install esptool</code></li>
+      <li>Flash (replace <em>PORT</em> with e.g. <code>COM3</code> or <code>/dev/ttyUSB0</code>):<br>
+        <code>esptool.py --chip esp32 --port PORT --baud 921600 write_flash --flash_mode dio --flash_size detect 0x10000 telelogger.bin</code>
+      </li>
+    </ol>
+    <p>See <a href="https://github.com/northpower25/Freematics/blob/master/docs/README.md#method-d-manual-flash-fallback"
+       target="_blank" rel="noopener">Method D in the documentation</a> for full details including VS Code + PlatformIO.</p>
+  </div>
+
   <p style="margin-top:2rem">
     <a href="javascript:history.back()">&#8592; Back to Home Assistant</a>
     &nbsp;&nbsp;
