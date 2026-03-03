@@ -79,10 +79,14 @@
 **************************************/
 #ifndef ENABLE_WIFI
 #define ENABLE_WIFI 1
-// WiFi settings
+#endif
+// WiFi compile-time defaults (SSID/password are overridden at runtime via NVS)
+#ifndef WIFI_SSID
 #define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD ""
-#endif 
+#endif
 
 // cellular network settings
 #ifndef CELL_APN
