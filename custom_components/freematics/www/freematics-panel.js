@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.9.3";
+const PANEL_VERSION = "1.9.4";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -626,15 +626,6 @@ class FreematicsPanel extends HTMLElement {
             Look for: <code style="${cs}">CP2102</code>,
             <code style="${cs}">CH340</code>, or a similar USB-Serial device.
           </p>
-          <p style="font-size:.85rem;color:var(--secondary-text-color);margin:0 0 10px;background:var(--secondary-background-color,#f5f5f5);border-left:3px solid #ff9800;padding:6px 10px;border-radius:0 4px 4px 0">
-            &#9888; <strong>If the flash stalls at "Connecting…":</strong>
-            the device may need to be put into download mode manually.
-            Press and hold the <strong>BOOT</strong> / <strong>IO0</strong> button (if present),
-            press and release <strong>RST</strong>, then release <strong>BOOT</strong>,
-            then click the button again.
-            If your Freematics ONE+ does not have accessible BOOT/RST buttons,
-            use the <em>Manual Flash (esptool)</em> method below instead.
-          </p>
           <div id="esp-container">
             <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
           </div>
@@ -1175,7 +1166,6 @@ class FreematicsPanel extends HTMLElement {
     this._updateFlashUI("Connecting to device…", "", "#2196f3", 5);
     this._appendFlashLog("info", "Connecting to device…");
     this._appendFlashLog("info", "☝ A browser dialog appeared — select the COM port and follow its steps to install the firmware.");
-    this._appendFlashLog("info", "💡 Tip: If the device does not respond, hold the BOOT button on the Freematics ONE+, then press and release the RST button, then release BOOT. This forces the device into download mode.");
 
     // Redirect the dialog's internal logger so real flash messages appear in
     // our log console (e.g. "Connecting", "Erasing", chunk-write confirmations).
@@ -1281,12 +1271,10 @@ class FreematicsPanel extends HTMLElement {
         this._appendFlashLog("err",
           "⏱ No response from device after 60 s. " +
           "The device did not respond to the programming handshake. " +
-          "Try putting it into download mode manually: hold the BOOT button, " +
-          "press and release RST, then release BOOT — then click the button again. " +
-          "Also check the USB cable, ensure the correct COM port was selected, " +
+          "Check the USB cable, ensure the correct COM port was selected, " +
           "and that the USB-Serial driver is installed. " +
           "See the Manual Flash Fallback section below for alternative methods.");
-        this._updateFlashUI("⏱ Timed out — hold BOOT+RST to enter download mode, then retry.", "err", "#f44336", 0);
+        this._updateFlashUI("⏱ Timed out — check USB connection and COM port, then retry.", "err", "#f44336", 0);
       }
     }, STALL_MS);
     // Keep a reference on the instance so the body-observer removedNodes handler

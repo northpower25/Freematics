@@ -922,10 +922,12 @@ void telemetry(void* inst)
 
 #if ENABLE_WIFI
     if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
-      Serial.print("[WIFI] Joining SSID:");
-      Serial.println(wifiSSID);
-      teleClient.wifi.begin(wifiSSID, wifiPassword);
-      teleClient.wifi.setup();
+      if (!teleClient.wifi.connected()) {
+        Serial.print("[WIFI] Joining SSID:");
+        Serial.println(wifiSSID);
+        teleClient.wifi.begin(wifiSSID, wifiPassword);
+      }
+      teleClient.wifi.setup(WIFI_JOIN_TIMEOUT);
     }
 #endif
 
@@ -961,6 +963,19 @@ void telemetry(void* inst)
           teleClient.cell.end();
           state.clear(STATE_NET_READY | STATE_CELL_CONNECTED);
           Serial.println("[CELL] Deactivated");
+#if ENABLE_WIFI
+          if (wifiSSID[0]) {
+            // Try WiFi immediately before the cellular backoff delay
+            if (!teleClient.wifi.connected()) {
+              Serial.print("[WIFI] Joining SSID:");
+              Serial.println(wifiSSID);
+              teleClient.wifi.begin(wifiSSID, wifiPassword);
+            }
+            if (teleClient.wifi.setup(WIFI_JOIN_TIMEOUT)) {
+              break;  // WiFi connected; re-enter outer loop to complete setup
+            }
+          }
+#endif
           // avoid turning on/off cellular module too frequently to avoid operator banning
           delay(60000 * 3);
           break;
@@ -989,7 +1004,7 @@ void telemetry(void* inst)
         lastRssiTime = millis();
 
 #if ENABLE_WIFI
-        if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
+        if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED) && !teleClient.wifi.connected()) {
           teleClient.wifi.begin(wifiSSID, wifiPassword);
         }
 #endif

@@ -129,6 +129,8 @@
 #define WIFI_AP_SSID "TELELOGGER"
 #define WIFI_AP_PASSWORD "PASSWORD"
 
+// WiFi station join timeout – allow enough time for DHCP lease acquisition
+#define WIFI_JOIN_TIMEOUT 15000 /* ms */
 // maximum consecutive communication errors before resetting network
 #define MAX_CONN_ERRORS_RECONNECT 5
 // maximum allowed connecting time
