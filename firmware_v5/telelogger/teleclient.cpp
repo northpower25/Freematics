@@ -25,6 +25,17 @@ extern char devid[];
 extern char vin[];
 extern GPS_DATA* gd;
 extern char isoTime[];
+// Runtime-configurable server settings (set from NVS by loadConfig() in telelogger.ino).
+// The macro names SERVER_HOST / SERVER_PORT defined in config.h are overridden below
+// so that all existing code in this file uses the runtime values transparently.
+extern char serverHost[];
+extern uint16_t serverPort;
+// WEBHOOK_PATH: when non-empty, replaces the legacy /hub/api/post/<devid> path.
+extern char webhookPath[];
+#undef SERVER_HOST
+#define SERVER_HOST serverHost
+#undef SERVER_PORT
+#define SERVER_PORT serverPort
 
 CBuffer::CBuffer(uint8_t* mem)
 {
@@ -561,7 +572,13 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   }
   success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, url);
 #else
-  len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
+  // Use NVS-provisioned webhook path if available (e.g. /api/webhook/<id>),
+  // otherwise fall back to the legacy Freematics Hub path format.
+  if (webhookPath[0]) {
+    len = snprintf(path, sizeof(path), "%s", webhookPath);
+  } else {
+    len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
+  }
 #if ENABLE_WIFI
   if (wifi.connected()) {
     Serial.print("[WIFI] ");

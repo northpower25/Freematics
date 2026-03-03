@@ -79,6 +79,13 @@ char apn[32];
 char wifiSSID[32] = WIFI_SSID;
 char wifiPassword[32] = WIFI_PASSWORD;
 #endif
+// Server settings – loaded from NVS at boot; fall back to compile-time defaults.
+// Set via NVS keys SERVER_HOST, SERVER_PORT, WEBHOOK_PATH using the
+// Freematics HA integration provisioning flash (config_nvs.bin).
+char serverHost[128] = SERVER_HOST;
+uint16_t serverPort = SERVER_PORT;
+// WEBHOOK_PATH overrides the legacy /hub/api/post/<devid> path when set.
+char webhookPath[128] = "";
 nvs_handle_t nvs;
 
 // live data
@@ -1198,6 +1205,23 @@ void loadConfig()
   len = sizeof(wifiPassword);
   nvs_get_str(nvs, "WIFI_PWD", wifiPassword, &len);
 #endif
+
+  // Server settings provisioned via NVS (e.g. via HA integration config_nvs.bin).
+  // Override the compile-time SERVER_HOST / SERVER_PORT defaults when present.
+  len = sizeof(serverHost);
+  serverHost[0] = 0;
+  nvs_get_str(nvs, "SERVER_HOST", serverHost, &len);
+  if (!serverHost[0]) {
+    strncpy(serverHost, SERVER_HOST, sizeof(serverHost) - 1);
+    serverHost[sizeof(serverHost) - 1] = 0;
+  }
+  uint16_t nvsPort = 0;
+  nvs_get_u16(nvs, "SERVER_PORT", &nvsPort);
+  if (nvsPort) serverPort = nvsPort;
+
+  len = sizeof(webhookPath);
+  webhookPath[0] = 0;
+  nvs_get_str(nvs, "WEBHOOK_PATH", webhookPath, &len);
 }
 
 void processBLE(int timeout)

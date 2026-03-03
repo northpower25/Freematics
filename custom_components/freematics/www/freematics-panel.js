@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.6.0";
+const PANEL_VERSION = "1.7.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -243,6 +243,7 @@ class FreematicsPanel extends HTMLElement {
     this._currentAttrObserver = null;
     this._shadowDialogObserver = null;
     this._progressPollTimer = null;
+    this._provisioningManifestUrl = null;
     this.attachShadow({ mode: "open" });
   }
 
@@ -575,13 +576,18 @@ class FreematicsPanel extends HTMLElement {
     this._flashRendered = true;
 
     const hasSerial = "serial" in navigator;
+    const cs = "background:var(--secondary-background-color);padding:1px 4px;border-radius:3px";
 
     el.innerHTML = `
       <div class="flash-wrap">
+
+        <!-- ── Provisioning info banner ───────────────────────────── -->
         <div class="info-banner">
-          &#9889; <strong>Browser Flasher</strong> – Flash firmware directly from your browser
-          to the Freematics ONE+ connected to <strong>your computer's USB port</strong>.
-          Your computer does not need to be the Home Assistant server.
+          &#128274; <strong>Auto-Provisioning</strong> – When you use the
+          <em>Connect &amp; Flash Firmware</em> button below, the integration
+          automatically embeds your WiFi credentials, cellular APN, and HA
+          server address in the device settings (<em>NVS</em>) during the
+          same flash operation — no manual configuration required after flashing.
         </div>
 
         <div id="no-serial-warn" class="warn-banner${hasSerial ? "" : " visible"}">
@@ -591,11 +597,11 @@ class FreematicsPanel extends HTMLElement {
           The Web Serial API also requires a <strong>secure HTTPS connection with a trusted
           certificate</strong>. When accessing Home Assistant via a local IP address, use
           <a href="https://www.nabucasa.com/" target="_blank" rel="noopener" style="color:#795548">Nabu Casa</a>
-          (e.g. <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">*.ui.nabu.casa</code>)
-          which provides a valid certificate, or use the
-          <em>WiFi OTA (Local Network)</em> section below.
+          (e.g. <code style="${cs}">*.ui.nabu.casa</code>)
+          or use the <em>Manual Flash</em> section below.
         </div>
 
+        <!-- ── Requirements ───────────────────────────────────────── -->
         <div class="flash-card">
           <h3>&#128268; Requirements</h3>
           <ul>
@@ -610,15 +616,15 @@ class FreematicsPanel extends HTMLElement {
           </ul>
         </div>
 
+        <!-- ── Browser flasher (Web Serial) ──────────────────────── -->
         ${hasSerial ? `
         <div class="flash-card" id="flash-action">
-          <h3>&#9889; Flash Firmware (USB / Serial)</h3>
+          <h3>&#9889; Flash Firmware (USB / Web Serial)</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
             Click the button below. A browser dialog will open so you can
             <strong>select the COM port</strong> of the Freematics ONE+.<br>
-            Look for: <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">CP2102</code>,
-            <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">CH340</code>,
-            or a similar USB-Serial device.
+            Look for: <code style="${cs}">CP2102</code>,
+            <code style="${cs}">CH340</code>, or a similar USB-Serial device.
           </p>
           <div id="esp-container">
             <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
@@ -633,18 +639,16 @@ class FreematicsPanel extends HTMLElement {
           <ol style="font-size:.9rem;color:var(--secondary-text-color)">
             <li>Click <em>Connect &amp; Flash Firmware</em></li>
             <li>Select the Freematics ONE+ COM port from the browser dialog</li>
-            <li>Firmware flashes automatically (~30 s)</li>
-            <li>Device restarts and begins sending data to Home Assistant</li>
+            <li>Firmware + settings flash automatically (~45 s)</li>
+            <li>Device restarts and connects to your WiFi / sends data to Home Assistant</li>
           </ol>
         </div>
         ` : `
         <div class="flash-card">
-          <h3>WiFi OTA / Server-side Flash</h3>
+          <h3>&#9889; Browser / Web Serial not available</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color)">
-            Use the <strong>Flash Firmware via WiFi OTA</strong> or
-            <strong>Flash Firmware via Serial</strong> buttons on the
-            Freematics ONE+ device page in Home Assistant, or open the
-            standalone flasher page in Chrome / Edge:
+            Use the standalone flasher page in Chrome / Edge or use one of the
+            manual methods below.
           </p>
           <div class="flash-fallback">
             <a href="/api/freematics/flasher" target="_blank" rel="noopener">
@@ -654,23 +658,23 @@ class FreematicsPanel extends HTMLElement {
         </div>
         `}
 
+        <!-- ── WiFi OTA (AP mode) ─────────────────────────────────── -->
         <div class="flash-card">
           <h3>&#128221; WiFi OTA (AP Mode)</h3>
-          <ol>
+          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0">
             <li>Power on the Freematics ONE+ (factory or freshly flashed device)</li>
-            <li>Connect your device to WiFi network <strong>TELELOGGER</strong> (password: <strong>PASSWORD</strong>)</li>
-            <li>Set <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">192.168.4.1</code> as the Device IP in the integration settings</li>
-            <li>Press <strong>Flash Firmware via WiFi OTA</strong> in the device page</li>
+            <li>Connect your computer to WiFi <strong>TELELOGGER</strong> (password: <strong>PASSWORD</strong>)</li>
+            <li>Set <code style="${cs}">192.168.4.1</code> as the Device IP in the integration settings</li>
+            <li>Press <strong>Flash Firmware via WiFi OTA</strong> on the device page in HA</li>
           </ol>
         </div>
 
+        <!-- ── WiFi OTA (Local network) ──────────────────────────── -->
         <div class="flash-card">
           <h3>&#128246; WiFi OTA (Local Network)</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
             Flash when the Freematics ONE+ is already connected to your <strong>local WiFi
             network</strong> and reachable from the Home Assistant server.
-            The HA server pushes the firmware to the device via HTTP OTA
-            — no USB cable or Chrome/Edge required.
           </p>
           <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
             <li>Ensure the device is online and the HA server can reach its IP</li>
@@ -699,44 +703,120 @@ class FreematicsPanel extends HTMLElement {
           <div id="wifi-ota-status" style="display:none;font-size:.88rem;margin-top:4px"></div>
         </div>
 
+        <!-- ── Manual flash (Windows / Freematics Builder / esptool) ─ -->
         <div class="flash-card">
-          <h3>&#128296; Manual Flash Fallback (esptool.py)</h3>
-          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
-            If the browser-based and WiFi OTA flash methods don't work, you can flash
-            the firmware manually from your computer using <strong>esptool.py</strong>.
+          <h3>&#128187; Manual Flash (Windows, Linux, macOS)</h3>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
+            Use this method when Chrome / Edge is not available or you prefer an
+            external tool. <strong>Download both files below</strong> and flash them
+            to the device with your preferred tool.
           </p>
-          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
-            <li>
-              <strong>Download the firmware binary</strong> from this Home Assistant instance:<br>
-              <a href="/api/freematics/firmware.bin" download="telelogger.bin" style="color:#2196f3">
-                &#11015; Download telelogger.bin
+
+          <div style="background:var(--secondary-background-color);border-radius:6px;padding:10px 14px;margin-bottom:12px">
+            <div style="font-weight:600;font-size:.9rem;margin-bottom:6px">&#11015; Step 1 — Download files</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <a id="dl-firmware" href="/api/freematics/firmware.bin" download="telelogger.bin"
+                 style="color:#2196f3;font-size:.9rem">
+                &#11015; telelogger.bin <small style="color:var(--secondary-text-color)">(app, offset 0x10000)</small>
               </a>
-            </li>
-            <li>
-              <strong>Install esptool</strong> on your computer:
-              <pre style="background:var(--secondary-background-color);padding:6px 10px;border-radius:4px;font-size:.82rem;margin:4px 0;overflow-x:auto">pip install esptool</pre>
-            </li>
-            <li>
-              <strong>Connect</strong> the Freematics ONE+ via USB to your computer.
-            </li>
-            <li>
-              <strong>Find the COM port</strong>:<br>
-              &bull; <em>Windows</em>: Device Manager → Ports (COM &amp; LPT) &rarr; e.g. <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">COM3</code><br>
-              &bull; <em>Linux / macOS</em>: <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">ls /dev/ttyUSB* /dev/tty.usbserial*</code>
-            </li>
-            <li>
-              <strong>Flash</strong> (replace <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">COM3</code> with your port):
-              <pre style="background:var(--secondary-background-color);padding:6px 10px;border-radius:4px;font-size:.82rem;margin:4px 0;overflow-x:auto">esptool.py --chip esp32 --port COM3 --baud 921600 write_flash --flash_mode dio --flash_size detect 0x10000 telelogger.bin</pre>
-            </li>
-          </ol>
-          <p style="font-size:.85rem;color:var(--secondary-text-color);margin:0">
-            &#128218; Alternatively, build and flash with
-            <a href="https://platformio.org/" target="_blank" rel="noopener" style="color:#2196f3">PlatformIO</a>
-            (install the PlatformIO IDE extension for VS Code, open
-            <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">firmware_v5/telelogger/</code>
-            and click <em>Upload</em>).
+              <a id="dl-nvs" href="#" download="config_nvs.bin"
+                 style="color:#2196f3;font-size:.9rem">
+                &#11015; config_nvs.bin <small style="color:var(--secondary-text-color)">(settings, offset 0x9000)</small>
+              </a>
+            </div>
+            <div id="nvs-dl-status" style="font-size:.82rem;color:var(--secondary-text-color);margin-top:4px">
+              &#9203; Generating settings file…
+            </div>
+          </div>
+
+          <details style="margin-bottom:10px">
+            <summary style="cursor:pointer;font-weight:600;font-size:.9rem;padding:4px 0">
+              &#128187; Option A – esptool.py (Windows / Linux / macOS)
+            </summary>
+            <ol style="font-size:.88rem;color:var(--secondary-text-color);margin:8px 0 0 0">
+              <li>Install Python and esptool:
+                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">pip install esptool</pre>
+              </li>
+              <li>Connect the device via USB, find the COM port (Windows: Device Manager → Ports, e.g. <code style="${cs}">COM3</code>; Linux: <code style="${cs}">/dev/ttyUSB0</code>)</li>
+              <li>Flash both files in one command (replace <code style="${cs}">COM3</code> with your port):
+                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">esptool.py --chip esp32 --port COM3 --baud 921600 write_flash --flash_mode dio --flash_size detect 0x9000 config_nvs.bin 0x10000 telelogger.bin</pre>
+              </li>
+            </ol>
+          </details>
+
+          <details style="margin-bottom:10px">
+            <summary style="cursor:pointer;font-weight:600;font-size:.9rem;padding:4px 0">
+              &#128268; Option B – Freematics Builder (Windows)
+            </summary>
+            <ol style="font-size:.88rem;color:var(--secondary-text-color);margin:8px 0 0 0">
+              <li>Download and open <a href="https://freematics.com/pages/products/freematics-one-plus-model-b/" target="_blank" rel="noopener" style="color:#2196f3">Freematics Builder</a></li>
+              <li>Connect the Freematics ONE+ via USB</li>
+              <li>In Freematics Builder, select <strong>Custom Binary</strong> and choose the downloaded <code style="${cs}">telelogger.bin</code></li>
+              <li>Flash <code style="${cs}">telelogger.bin</code> at offset <code style="${cs}">0x10000</code></li>
+              <li>Then flash <code style="${cs}">config_nvs.bin</code> at offset <code style="${cs}">0x9000</code> (use the custom offset field)</li>
+              <li>Reset the device — it will boot with your WiFi and server settings already configured</li>
+            </ol>
+            <p style="font-size:.82rem;color:var(--secondary-text-color);margin:6px 0 0">
+              &#8505; The Freematics Builder is available from the
+              <a href="https://freematics.com/pages/products/freematics-one-plus-model-b/" target="_blank" rel="noopener" style="color:#2196f3">Freematics product page</a>.
+            </p>
+          </details>
+
+          <details>
+            <summary style="cursor:pointer;font-weight:600;font-size:.9rem;padding:4px 0">
+              &#9889; Option C – Arduino IDE (Windows / Linux / macOS)
+            </summary>
+            <ol style="font-size:.88rem;color:var(--secondary-text-color);margin:8px 0 0 0">
+              <li>Install <a href="https://www.arduino.cc/en/software" target="_blank" rel="noopener" style="color:#2196f3">Arduino IDE 2.x</a></li>
+              <li>Add ESP32 board support: <em>File → Preferences → Board Manager URLs</em> → add <code style="${cs}">https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json</code>, then install <em>esp32 by Espressif</em></li>
+              <li>Select board: <em>Tools → Board → ESP32 Arduino → ESP32 Dev Module</em></li>
+              <li>Select port: <em>Tools → Port → COM3</em> (or your port)</li>
+              <li>Use <em>Sketch → Upload Using Programmer</em> with esptool or use the Serial Flasher tool from the <em>Tools</em> menu</li>
+              <li>Flash the NVS settings file separately with esptool (see Option A, step 3, but only flash <code style="${cs}">0x9000 config_nvs.bin</code>)</li>
+            </ol>
+          </details>
+        </div>
+
+        <!-- ── Device ID explanation ──────────────────────────────── -->
+        <div class="flash-card">
+          <h3>&#128279; About the Device ID</h3>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0">
+            The <strong>Device ID</strong> shown in the serial log (e.g. <code style="${cs}">ZKUCQXJF</code>)
+            is generated from the ESP32 chip's unique hardware MAC address.
+            It is not configurable and will always be the same for a given device.
+            This ID is only used for legacy Freematics Hub identification — it is
+            <em>not</em> the Home Assistant webhook ID.
           </p>
         </div>
+
+        <!-- ── Datalogger / HTTPD info ────────────────────────────── -->
+        <div class="flash-card">
+          <h3>&#128202; Built-in Data Viewer (Datalogger / HTTPD)</h3>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
+            The firmware includes a built-in HTTP data server
+            (<code style="${cs}">ENABLE_HTTPD=1</code>) that lets you view live data
+            directly on the device via a web browser. This is useful for
+            diagnosing connection issues in the field.
+          </p>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
+            <strong>Available endpoints when HTTPD is enabled:</strong>
+          </p>
+          <ul style="font-size:.88rem;color:var(--secondary-text-color);margin:0 0 8px">
+            <li><code style="${cs}">/api/info</code> – device info (chip, firmware, uptime)</li>
+            <li><code style="${cs}">/api/live</code> – live sensor data (OBD, GPS, MEMS)</li>
+            <li><code style="${cs}">/api/control?cmd=…</code> – send control commands</li>
+            <li><code style="${cs}">/api/list</code> – list log files on SD card</li>
+            <li><code style="${cs}">/api/log/&lt;n&gt;</code> – download raw CSV log file</li>
+          </ul>
+          <p style="font-size:.88rem;color:#ff9800;margin:0">
+            &#9888; The pre-compiled binary has HTTPD <strong>disabled</strong> by default.
+            To enable it, compile from source with
+            <code style="${cs}">ENABLE_HTTPD=1</code> in
+            <code style="${cs}">firmware_v5/telelogger/config.h</code>
+            and flash the resulting binary.
+          </p>
+        </div>
+
       </div>
     `;
 
@@ -789,10 +869,48 @@ class FreematicsPanel extends HTMLElement {
       });
     }
 
+    // Fetch provisioning token and update NVS download link + esp-web-tools manifest
+    this._fetchProvisioningToken(el);
+
     if (hasSerial) {
       this._loadEspWebTools();
     }
   }
+
+  async _fetchProvisioningToken(el) {
+    const nvsStatus = el ? el.querySelector("#nvs-dl-status") : null;
+    const nvsLink   = el ? el.querySelector("#dl-nvs") : null;
+
+    try {
+      const result = await this._hass.callApi("GET", "freematics/provisioning_token");
+      if (result && result.token) {
+        this._provisioningManifestUrl = result.manifest_url || "/api/freematics/manifest.json";
+        const nvsUrl = result.nvs_url || `/api/freematics/config_nvs.bin?token=${result.token}`;
+        if (nvsLink) {
+          nvsLink.href = nvsUrl;
+        }
+        if (nvsStatus) {
+          nvsStatus.textContent = "✓ Settings file ready — click to download.";
+          nvsStatus.style.color = "var(--success-color, #4caf50)";
+        }
+        // If esp-web-tools install button is already rendered, update its manifest attribute
+        const installBtn = this.shadowRoot.querySelector("esp-web-install-button");
+        if (installBtn) {
+          installBtn.setAttribute("manifest", this._provisioningManifestUrl);
+        }
+      }
+    } catch (e) {
+      if (nvsStatus) {
+        nvsStatus.textContent = "⚠ Could not generate settings file — no integration configured.";
+        nvsStatus.style.color = "#ff9800";
+      }
+      if (nvsLink) {
+        nvsLink.style.opacity = "0.4";
+        nvsLink.style.pointerEvents = "none";
+      }
+    }
+  }
+
 
   _loadEspWebTools() {
     const shadow = this.shadowRoot;
@@ -828,8 +946,11 @@ class FreematicsPanel extends HTMLElement {
   }
 
   _insertInstallButton(container) {
+    // Use personalized manifest URL (with NVS settings) if available,
+    // otherwise fall back to the basic manifest (firmware only).
+    const manifestUrl = this._provisioningManifestUrl || "/api/freematics/manifest.json";
     container.innerHTML = `
-      <esp-web-install-button manifest="/api/freematics/manifest.json">
+      <esp-web-install-button manifest="${manifestUrl}">
         <button slot="activate" style="
           background:#2196f3;color:#fff;border:none;padding:12px 24px;
           font-size:1rem;border-radius:6px;cursor:pointer;width:100%;
