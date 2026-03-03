@@ -12,6 +12,7 @@ The firmware binary bundled with this integration is located at:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import shutil
@@ -100,6 +101,15 @@ async def async_flash_wifi(
 
     Returns (success, message).
     """
+    # Validate device_ip is a plain IP address (not a URL or hostname) to
+    # prevent SSRF: ipaddress.ip_address rejects everything except IPv4/IPv6
+    # literals, so it cannot be manipulated into a request to an unexpected host.
+    # Use the normalised string from the ip_address object in the URL so the
+    # taint chain is broken.
+    try:
+        validated_ip = str(ipaddress.ip_address(device_ip))
+    except ValueError:
+        return False, f"Invalid device IP address: {device_ip!r}. Must be a plain IPv4 or IPv6 address."
     try:
         import aiohttp  # noqa: PLC0415
     except ImportError:
@@ -108,7 +118,7 @@ async def async_flash_wifi(
     if not _firmware_exists():
         return False, f"Firmware binary not found at {FIRMWARE_PATH}"
 
-    url = f"http://{device_ip}:{device_port}{OTA_UPLOAD_PATH}"
+    url = f"http://{validated_ip}:{device_port}{OTA_UPLOAD_PATH}"
     _LOGGER.info("WiFi OTA flash to %s", url)
 
     try:

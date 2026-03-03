@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.4.0";
+const PANEL_VERSION = "1.5.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -580,8 +580,12 @@ class FreematicsPanel extends HTMLElement {
           &#9888; <strong>Web Serial API not available.</strong><br>
           Please open this page in <strong>Google Chrome</strong> or
           <strong>Microsoft Edge</strong> (version 89 or newer).<br>
-          Alternatively, use the <em>Flash Firmware via WiFi OTA</em> button in
-          Home Assistant's device page.
+          The Web Serial API also requires a <strong>secure HTTPS connection with a trusted
+          certificate</strong>. When accessing Home Assistant via a local IP address, use
+          <a href="https://www.nabucasa.com/" target="_blank" rel="noopener" style="color:#795548">Nabu Casa</a>
+          (e.g. <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">*.ui.nabu.casa</code>)
+          which provides a valid certificate, or use the
+          <em>WiFi OTA (Local Network)</em> section below.
         </div>
 
         <div class="flash-card">
@@ -651,8 +655,87 @@ class FreematicsPanel extends HTMLElement {
             <li>Press <strong>Flash Firmware via WiFi OTA</strong> in the device page</li>
           </ol>
         </div>
+
+        <div class="flash-card">
+          <h3>&#128246; WiFi OTA (Local Network)</h3>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
+            Flash when the Freematics ONE+ is already connected to your <strong>local WiFi
+            network</strong> and reachable from the Home Assistant server.
+            The HA server pushes the firmware to the device via HTTP OTA
+            — no USB cable or Chrome/Edge required.
+          </p>
+          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
+            <li>Ensure the device is online and the HA server can reach its IP</li>
+            <li>Enter the device's local IP address (and port if not 80)</li>
+            <li>Click <em>Flash via WiFi OTA</em> — takes ~30 s</li>
+          </ol>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+            <input id="ota-ip-input" type="text" placeholder="192.168.x.x" style="
+              flex:1;min-width:120px;padding:8px 10px;
+              border:1px solid var(--divider-color);border-radius:6px;
+              background:var(--primary-background-color);
+              color:var(--primary-text-color);font-size:.9rem;font-family:inherit;
+            ">
+            <input id="ota-port-input" type="number" placeholder="80" value="80" min="1" max="65535" style="
+              width:72px;padding:8px 10px;
+              border:1px solid var(--divider-color);border-radius:6px;
+              background:var(--primary-background-color);
+              color:var(--primary-text-color);font-size:.9rem;font-family:inherit;
+            ">
+          </div>
+          <button id="wifi-ota-btn" style="
+            background:#2196f3;color:#fff;border:none;padding:10px 20px;
+            font-size:.95rem;border-radius:6px;cursor:pointer;
+            font-family:inherit;margin-bottom:8px;
+          ">&#128246; Flash via WiFi OTA</button>
+          <div id="wifi-ota-status" style="display:none;font-size:.88rem;margin-top:4px"></div>
+        </div>
       </div>
     `;
+
+    // Attach WiFi OTA button event listener
+    const wifiOtaBtn = el.querySelector("#wifi-ota-btn");
+    if (wifiOtaBtn) {
+      wifiOtaBtn.addEventListener("click", async () => {
+        const shadow = this.shadowRoot;
+        const ipInput  = shadow.getElementById("ota-ip-input");
+        const portInput = shadow.getElementById("ota-port-input");
+        const statusDiv = shadow.getElementById("wifi-ota-status");
+
+        const ip   = (ipInput  ? ipInput.value  : "").trim();
+        const port = portInput ? (parseInt(portInput.value) || 80) : 80;
+
+        const showStatus = (color, html) => {
+          if (!statusDiv) return;
+          statusDiv.style.display = "block";
+          statusDiv.innerHTML = `<span style="color:${color}">${html}</span>`;
+        };
+
+        if (!ip) {
+          showStatus("#ff9800", "&#9888; Please enter the device IP address.");
+          return;
+        }
+
+        wifiOtaBtn.disabled = true;
+        wifiOtaBtn.textContent = "⏳ Uploading…";
+        showStatus("#2196f3", "&#9203; Uploading firmware to device… (this may take ~30 s)");
+
+        try {
+          const result = await this._hass.callApi("POST", "freematics/wifi_ota", {
+            device_ip: ip,
+            device_port: port,
+          });
+          const msg = (result && result.message) ? result.message : "Flash successful!";
+          showStatus("#4caf50", `&#10003; ${msg}`);
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : String(err);
+          showStatus("#f44336", `&#10007; Flash failed: ${msg}`);
+        } finally {
+          wifiOtaBtn.disabled = false;
+          wifiOtaBtn.textContent = "📶 Flash via WiFi OTA";
+        }
+      });
+    }
 
     if (hasSerial) {
       this._loadEspWebTools();
@@ -792,13 +875,25 @@ class FreematicsPanel extends HTMLElement {
     progressSection.style.display = "block";
     this._updateFlashUI("Connecting to device…", "", "#2196f3", 5);
     this._appendFlashLog("info", "Connecting to device…");
+    this._appendFlashLog("info", "☝ A browser dialog appeared — select the COM port and follow its steps to install the firmware.");
 
     // Redirect the dialog's internal logger so real flash messages appear in
     // our log console (e.g. "Connecting", "Erasing", chunk-write confirmations).
-    dialog.logger = {
-      log:   (msg) => this._appendFlashLog("info", String(msg)),
-      error: (msg) => this._appendFlashLog("err",  String(msg)),
-      debug: (msg) => { /* suppress verbose debug output */ },
+    // Guard with a property-existence check in case the API changed.
+    if ("logger" in dialog) {
+      dialog.logger = {
+        log:   (msg) => this._appendFlashLog("info", String(msg)),
+        error: (msg) => this._appendFlashLog("err",  String(msg)),
+        debug: (_msg) => { /* suppress verbose debug output */ },
+      };
+    }
+
+    // Helper: read the current dialog state from multiple possible sources and
+    // normalise to uppercase so our MAP lookup works regardless of whether the
+    // library uses "DASHBOARD" or "dashboard" as enum values.
+    const readState = () => {
+      const raw = dialog.getAttribute("state") || dialog._state || dialog.state;
+      return raw ? String(raw).toUpperCase() : null;
     };
 
     // Shared state tracker – all three mechanisms (attribute observer, shadow-
@@ -814,31 +909,40 @@ class FreematicsPanel extends HTMLElement {
       this._onDialogStateChanged(state);
     };
 
-    // Primary: watch the "state" HTML attribute that esp-web-tools sets via
-    // updated() whenever _state changes.
+    // Primary: watch ALL attributes on the dialog element.  Removing the
+    // attributeFilter catches cases where the library uses a different
+    // attribute name or the attribute is added under an alias.
     const attrObserver = new MutationObserver(() => {
-      handleState(dialog.getAttribute("state") || dialog._state);
+      handleState(readState());
     });
-    attrObserver.observe(dialog, { attributes: true, attributeFilter: ["state"] });
+    attrObserver.observe(dialog, { attributes: true });
     this._currentAttrObserver = attrObserver;
 
     // Secondary: watch the dialog's shadow root for any Lit re-render.  Lit
     // re-renders whenever *any* @state property changes – including _client
     // being set when the device connects (which keeps _state at "DASHBOARD"
     // and so never triggers the attribute observer alone).
-    if (dialog.shadowRoot) {
-      const shadowObs = new MutationObserver(() => {
-        handleState(dialog.getAttribute("state") || dialog._state);
-      });
-      shadowObs.observe(dialog.shadowRoot, { childList: true });
-      this._shadowDialogObserver = shadowObs;
-    }
+    // Use subtree:true to catch nested DOM updates, and retry if the shadow
+    // root is not yet available (element may be upgraded asynchronously).
+    const attachShadowObserver = () => {
+      if (dialog.shadowRoot && !this._shadowDialogObserver) {
+        const shadowObs = new MutationObserver(() => {
+          handleState(readState());
+        });
+        shadowObs.observe(dialog.shadowRoot, { childList: true, subtree: true });
+        this._shadowDialogObserver = shadowObs;
+      }
+    };
+    attachShadowObserver();
+    // Retry after short delays in case the element is upgraded after append.
+    setTimeout(attachShadowObserver, 100);
+    setTimeout(attachShadowObserver, 500);
 
     // Tertiary: poll every 300 ms as a belt-and-suspenders fallback, and
     // separately track write-progress percentage which isn't reflected in
     // the high-level state attribute.
     this._progressPollTimer = setInterval(() => {
-      handleState(dialog.getAttribute("state") || dialog._state);
+      handleState(readState());
 
       // During the WRITING phase show real byte-level percentage
       const installState = dialog._installState;
@@ -862,7 +966,7 @@ class FreematicsPanel extends HTMLElement {
 
     // Read the initial state in case Lit has already rendered and set it
     // before our observers were registered.
-    handleState(dialog.getAttribute("state") || dialog._state);
+    handleState(readState());
 
     // Finalize when the dialog closes
     dialog.addEventListener("closed", () => {
@@ -887,6 +991,8 @@ class FreematicsPanel extends HTMLElement {
   }
 
   _onDialogStateChanged(state) {
+    // State values are normalised to uppercase by readState() in
+    // _onInstallDialogAdded, but keep the MAP in uppercase for clarity.
     const MAP = {
       DASHBOARD: { pct: 20,  label: "Connected — follow the dialog to install…", cls: "info", color: "#2196f3" },
       ASK_ERASE: { pct: 30,  label: "Awaiting erase confirmation in dialog…",    cls: "info", color: "#ff9800" },
@@ -895,7 +1001,7 @@ class FreematicsPanel extends HTMLElement {
       LOGS:      { pct: 100, label: "✓ Installation complete.",                  cls: "ok",   color: "#4caf50" },
       ERROR:     { pct: 0,   label: "✗ Error — see dialog for details.",         cls: "err",  color: "#f44336" },
     };
-    const info = MAP[state] || { pct: 0, label: state, cls: "info", color: "#2196f3" };
+    const info = MAP[state] || { pct: 10, label: `Status: ${state}`, cls: "info", color: "#2196f3" };
     this._updateFlashUI(info.label, info.cls !== "info" ? info.cls : "", info.color, info.pct);
     this._appendFlashLog(info.cls, info.label);
   }

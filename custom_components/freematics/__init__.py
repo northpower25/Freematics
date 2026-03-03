@@ -39,7 +39,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN
-from .views import FreematicsFirmwareView, FreematicsFlasherView, FreematicsManifestView
+from .views import FreematicsFirmwareView, FreematicsFlasherView, FreematicsManifestView, FreematicsProxyOTAView
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsFlasherView())
     hass.http.register_view(FreematicsManifestView())
     hass.http.register_view(FreematicsFirmwareView())
+    hass.http.register_view(FreematicsProxyOTAView())
 
     # Serve the www/ directory so the panel JS and custom card are reachable.
     await hass.http.async_register_static_paths(

@@ -1,9 +1,10 @@
 """HTTP views for Freematics ONE+ integration.
 
-Serves three endpoints:
-  GET /api/freematics/flasher       – Browser-based serial flasher (HTML)
-  GET /api/freematics/manifest.json – esp-web-tools firmware manifest
-  GET /api/freematics/firmware.bin  – Bundled pre-compiled firmware binary
+Serves the following endpoints:
+  GET  /api/freematics/flasher       – Browser-based serial flasher (HTML)
+  GET  /api/freematics/manifest.json – esp-web-tools firmware manifest
+  GET  /api/freematics/firmware.bin  – Bundled pre-compiled firmware binary
+  POST /api/freematics/wifi_ota      – Server-side WiFi OTA proxy (panel → HA → device)
 
 The flasher page uses the Web Serial API (Chrome/Edge 89+) so the user can
 flash the Freematics ONE+ that is connected to *their own computer's* USB port,
@@ -12,6 +13,7 @@ regardless of where Home Assistant is hosted.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from pathlib import Path
 
@@ -232,4 +234,68 @@ class FreematicsFirmwareView(HomeAssistantView):
                 "Content-Disposition": "attachment; filename=telelogger.bin",
                 "Access-Control-Allow-Origin": "*",
             },
+        )
+
+
+class FreematicsProxyOTAView(HomeAssistantView):
+    """Proxy a WiFi OTA flash request from the panel browser to the device.
+
+    Accessible at POST /api/freematics/wifi_ota.
+
+    Accepts JSON body: {"device_ip": "192.168.x.x", "device_port": 80}
+
+    The browser panel sends this request (with HA auth token).  This view
+    then uses the HA server to push the bundled firmware binary to the device
+    via HTTP multipart upload.  The device must be reachable from the HA
+    server on the specified IP and port.
+
+    requires_auth is True – only authenticated HA users may trigger a flash.
+    """
+
+    url = "/api/freematics/wifi_ota"
+    name = "api:freematics:wifi_ota"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Trigger WiFi OTA flash from the HA server to the device."""
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.Response(
+                status=400,
+                body=json.dumps({"ok": False, "message": "Invalid JSON body"}).encode(),
+                content_type="application/json",
+            )
+
+        device_ip = str(data.get("device_ip", "")).strip()
+        try:
+            device_port = int(data.get("device_port", 80))
+        except (TypeError, ValueError):
+            device_port = 80
+
+        if not device_ip:
+            return web.Response(
+                status=400,
+                body=json.dumps({"ok": False, "message": "device_ip is required"}).encode(),
+                content_type="application/json",
+            )
+
+        # Validate that device_ip is a well-formed IP address (not a hostname or
+        # URL) to mitigate SSRF: ipaddress.ip_address rejects anything that is
+        # not a pure IPv4 or IPv6 literal.
+        try:
+            ipaddress.ip_address(device_ip)
+        except ValueError:
+            return web.Response(
+                status=400,
+                body=json.dumps({"ok": False, "message": "device_ip must be a valid IPv4 or IPv6 address"}).encode(),
+                content_type="application/json",
+            )
+
+        from .flash_manager import async_flash_wifi  # noqa: PLC0415
+
+        ok, msg = await async_flash_wifi(device_ip, device_port)
+        return web.Response(
+            body=json.dumps({"ok": ok, "message": msg}).encode("utf-8"),
+            content_type="application/json",
         )
