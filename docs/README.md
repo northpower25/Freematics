@@ -9,17 +9,19 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
 1. [Requirements](#requirements)
 2. [Installation via HACS](#installation-via-hacs)
 3. [Integration Setup (Config Flow)](#integration-setup-config-flow)
-4. [Firmware Flashing](#firmware-flashing)
+4. [When Are Settings Applied to the Device?](#when-are-settings-applied-to-the-device)
+5. [Firmware Flashing](#firmware-flashing)
    - [Which method should I choose?](#which-method-should-i-choose)
    - [Method A: WiFi OTA (Recommended)](#method-a-wifi-ota-recommended)
    - [Method B: Browser Serial (Web Serial API)](#method-b-browser-serial-web-serial-api)
    - [Method C: Serial USB via HA Server](#method-c-serial-usb-via-ha-server)
-5. [Sending Configuration to a Running Device](#sending-configuration-to-a-running-device)
-6. [Lovelace Dashboard & Card](#lovelace-dashboard--card)
-7. [Updating the Firmware](#updating-the-firmware)
-8. [Entities Reference](#entities-reference)
-9. [Troubleshooting](#troubleshooting)
-10. [Technical Background](#technical-background)
+6. [Sending Configuration to a Running Device](#sending-configuration-to-a-running-device)
+7. [Lovelace Dashboard & Card](#lovelace-dashboard--card)
+8. [Updating the Firmware](#updating-the-firmware)
+9. [Changing Settings After Initial Setup](#changing-settings-after-initial-setup)
+10. [Entities Reference](#entities-reference)
+11. [Troubleshooting](#troubleshooting)
+12. [Technical Background](#technical-background)
 
 ---
 
@@ -104,6 +106,47 @@ Choose how to flash the firmware:
 - **Serial port**: e.g. `/dev/ttyUSB0` or `/dev/ttyACM0` (Linux), `COM3` (Windows)
 
 Click **Submit** to finish setup. The integration is now configured. Use the **Flash Firmware** buttons to start the flash process.
+
+---
+
+## When Are Settings Applied to the Device?
+
+> **Short answer:** Settings are stored in Home Assistant first. They are only written to the device when you flash the firmware.
+
+### Settings lifecycle
+
+```
+Config Flow / Options Flow
+        │
+        ▼
+ HA config entry       ← settings live here (HA persistent storage)
+ (SSID, password,
+  APN, webhook ID,
+  server host …)
+        │
+        │  on every flash request, HA generates:
+        ▼
+ flash_image.bin       ← combined file built on-demand from current settings
+ (NVS partition        ← your WiFi / server / webhook data, freshly embedded
+  + firmware binary)
+        │
+        ▼
+  Device flash         ← settings take effect after the device reboots
+```
+
+### Key points
+
+1. **Saving the Config Flow or Options Flow alone does NOT update the device.**  
+   Clicking *Submit* / *Save* only stores the values in Home Assistant's database. The physical device is untouched until you flash it.
+
+2. **Settings are baked into `flash_image.bin` at download time.**  
+   Every time you open the Freematics panel and the download link becomes active, the integration generates a fresh `flash_image.bin` from the *current* settings. If you change a setting and then re-download and re-flash, the device will boot with the new values.
+
+3. **The firmware binary itself never changes between flashes.**  
+   Only the settings portion (NVS partition, offset `0x9000`) is regenerated. The application firmware at offset `0x10000` is always the version bundled with the current integration release.
+
+4. **Exception – push WiFi/APN without re-flashing.**  
+   If the device is already running firmware with `ENABLE_HTTPD=1`, you can push WiFi SSID, WiFi password, and APN via the **Send Config to Device** button without flashing. Settings are written to the device's NVS over HTTP and take effect after a restart. See [Sending Configuration to a Running Device](#sending-configuration-to-a-running-device).
 
 ---
 
@@ -276,7 +319,44 @@ When a new version of this integration is released:
 3. After the update, **restart Home Assistant**
 4. Press the **Flash Firmware** button (WiFi OTA or Serial, using your already-saved settings)
 
-> Your device settings (WiFi credentials, webhook ID, etc.) are preserved in Home Assistant and will be re-applied automatically.
+> Your device settings (WiFi credentials, webhook ID, etc.) are preserved in Home Assistant and will be re-applied automatically during the next flash.
+
+---
+
+## Changing Settings After Initial Setup
+
+If you need to update your WiFi credentials, APN, or any other setting after the initial setup, follow these steps:
+
+### Step 1 – Update the settings in Home Assistant
+
+1. Go to **Settings → Devices & Services → Freematics ONE+**
+2. Click **Configure** (the ⚙ icon or the "Configure" link next to the integration)
+3. Edit the fields you want to change (WiFi SSID, password, APN, device IP, flash method, etc.)
+4. Click **Submit** — the new values are now saved in Home Assistant
+
+> **Nothing has changed on the device yet.** The physical device still uses the old settings until you flash it.
+
+### Step 2 – Apply the new settings to the device
+
+Choose the method that suits your situation:
+
+#### Option A – Re-flash (recommended, applies all settings)
+
+Open the **Freematics panel** (sidebar → *Freematics ONE+*) and flash using the Browser Flash or Manual Flash method. The panel always generates `flash_image.bin` from the *current* integration settings, so the newly saved values will be baked in automatically.
+
+- **Browser Flash (Chrome/Edge):** the panel will use the updated manifest automatically — just click the flash button again.
+- **Manual flash (esptool / Freematics Builder):** click the download link in the panel again to get a freshly generated `flash_image.bin`, then flash at offset `0x9000` as usual.
+
+#### Option B – Push WiFi/APN without re-flashing (running device only)
+
+If the device is already running and reachable on the network, and the firmware was compiled with `ENABLE_HTTPD=1`:
+
+1. Make sure the device IP is entered in the integration settings
+2. Press the **Send Config to Device** button
+3. The new WiFi SSID, WiFi password, and APN are written to the device's NVS over HTTP
+4. Restart the device (use the **Restart Device** button, or unplug and re-plug the OBD connector)
+
+> ⚠️ This method only updates WiFi and APN. **Server host, webhook path, and port are not updated this way** — for those, a full re-flash is required.
 
 ---
 
@@ -467,12 +547,14 @@ Eine HACS-kompatible Home Assistant Integration für das **Freematics ONE+** OBD
 1. [Voraussetzungen](#voraussetzungen)
 2. [Installation über HACS](#installation-über-hacs)
 3. [Integration einrichten (Config Flow)](#integration-einrichten-config-flow)
-4. [Firmware flashen](#firmware-flashen)
-5. [Konfiguration an laufendes Gerät senden](#konfiguration-an-laufendes-gerät-senden)
-6. [Lovelace Dashboard & Karte](#lovelace-dashboard--karte)
-7. [Firmware aktualisieren](#firmware-aktualisieren)
-8. [Entitäten-Übersicht](#entitäten-übersicht)
-9. [Fehlerbehebung](#fehlerbehebung)
+4. [Wann werden die Einstellungen auf das Gerät übertragen?](#wann-werden-die-einstellungen-auf-das-gerät-übertragen)
+5. [Firmware flashen](#firmware-flashen)
+6. [Konfiguration an laufendes Gerät senden](#konfiguration-an-laufendes-gerät-senden)
+7. [Lovelace Dashboard & Karte](#lovelace-dashboard--karte)
+8. [Firmware aktualisieren](#firmware-aktualisieren)
+9. [Einstellungen nach der Ersteinrichtung ändern](#einstellungen-nach-der-ersteinrichtung-ändern)
+10. [Entitäten-Übersicht](#entitäten-übersicht)
+11. [Fehlerbehebung](#fehlerbehebung)
 
 ---
 
@@ -539,6 +621,46 @@ Eine eindeutige Webhook-ID wird automatisch generiert. **Kopieren Sie diese Wert
 Wählen Sie die Flash-Methode:
 - **WLAN OTA**: Firmware über WLAN hochladen
 - **Seriell USB**: Firmware über USB-Kabel flashen
+
+---
+
+## Wann werden die Einstellungen auf das Gerät übertragen?
+
+> **Kurzantwort:** Die Einstellungen werden zuerst in Home Assistant gespeichert. Auf das Gerät geschrieben werden sie erst beim Flashen der Firmware.
+
+### Lebenszyklus der Einstellungen
+
+```
+Config Flow / Options Flow
+        │
+        ▼
+ HA-Konfigurationseintrag   ← Einstellungen werden hier gespeichert (HA-Datenbank)
+ (SSID, Passwort, APN,
+  Webhook-ID, Server-Host …)
+        │
+        │  Bei jeder Flash-Anfrage erzeugt HA:
+        ▼
+ flash_image.bin            ← kombinierte Datei, on-demand aus aktuellen Einstellungen
+ (NVS-Partition             ← Ihre WLAN-/Server-/Webhook-Daten, frisch eingebettet
+  + Firmware-Binary)
+        │
+        ▼
+  Gerät geflasht            ← Einstellungen wirken nach dem Neustart des Geräts
+```
+
+### Wichtige Punkte
+
+1. **Das Speichern im Config Flow oder Options Flow aktualisiert das Gerät NICHT.**  
+   Das Klicken auf *Weiter* / *Speichern* speichert die Werte nur in der HA-Datenbank. Das physische Gerät bleibt unverändert, bis Sie es flashen.
+
+2. **Die Einstellungen werden beim Herunterladen in `flash_image.bin` eingebettet.**  
+   Jedes Mal, wenn Sie das Freematics-Panel öffnen und der Download-Link aktiv wird, erstellt die Integration eine frische `flash_image.bin` aus den *aktuellen* Einstellungen. Wenn Sie eine Einstellung ändern, die Datei erneut herunterladen und flashen, startet das Gerät mit den neuen Werten.
+
+3. **Das Firmware-Binary selbst ändert sich zwischen Flashvorgängen nicht.**  
+   Nur der Einstellungsbereich (NVS-Partition, Offset `0x9000`) wird neu generiert. Die Anwendungs-Firmware bei Offset `0x10000` ist immer die Version, die mit der aktuellen Integration-Version gebündelt ist.
+
+4. **Ausnahme – WLAN/APN ohne Reflash übertragen.**  
+   Wenn das Gerät bereits mit `ENABLE_HTTPD=1` läuft, können WLAN-SSID, WLAN-Passwort und APN über den Button **Konfiguration an Gerät senden** übertragen werden — ohne Flashen. Die Einstellungen werden per HTTP in den NVS des Geräts geschrieben und wirken nach einem Neustart. Siehe [Konfiguration an laufendes Gerät senden](#konfiguration-an-laufendes-gerät-senden).
 
 ---
 
@@ -638,7 +760,44 @@ entity_prefix: sensor.freematics_one_WEBHOOK_ID_SHORT
 
 1. **HACS → Integrationen → Freematics ONE+** → **Aktualisieren**
 2. Home Assistant neu starten
-3. **Firmware flashen**-Button drücken (Einstellungen bleiben erhalten)
+3. **Firmware flashen**-Button drücken (Einstellungen bleiben erhalten und werden automatisch in die neue `flash_image.bin` eingebettet)
+
+---
+
+## Einstellungen nach der Ersteinrichtung ändern
+
+Wenn Sie nach der Ersteinrichtung WLAN-Zugangsdaten, APN oder andere Einstellungen ändern möchten, gehen Sie wie folgt vor:
+
+### Schritt 1 – Einstellungen in Home Assistant aktualisieren
+
+1. Gehen Sie zu **Einstellungen → Geräte & Dienste → Freematics ONE+**
+2. Klicken Sie auf **Konfigurieren** (das ⚙-Symbol oder den Link „Konfigurieren")
+3. Ändern Sie die gewünschten Felder (WLAN-SSID, Passwort, APN, Geräte-IP, Flash-Methode usw.)
+4. Klicken Sie auf **Speichern** — die neuen Werte sind jetzt in Home Assistant gespeichert
+
+> **Am Gerät hat sich noch nichts geändert.** Es verwendet weiterhin die alten Einstellungen, bis Sie es flashen.
+
+### Schritt 2 – Neue Einstellungen auf das Gerät übertragen
+
+Wählen Sie die für Ihre Situation passende Methode:
+
+#### Option A – Neu flashen (empfohlen, überträgt alle Einstellungen)
+
+Öffnen Sie das **Freematics-Panel** (Seitenleiste → *Freematics ONE+*) und flashen Sie über den Browser-Flash oder den manuellen Flash. Das Panel erstellt `flash_image.bin` immer aus den *aktuellen* Einstellungen — die neu gespeicherten Werte werden automatisch eingebettet.
+
+- **Browser-Flash (Chrome/Edge):** Das Panel verwendet automatisch das aktualisierte Manifest — klicken Sie einfach erneut auf den Flash-Button.
+- **Manuelles Flashen (esptool / Freematics Builder):** Laden Sie die Datei im Panel erneut herunter, um eine frisch generierte `flash_image.bin` zu erhalten, und flashen Sie sie wie gewohnt bei Offset `0x9000`.
+
+#### Option B – WLAN/APN ohne Reflash übertragen (nur für laufendes Gerät)
+
+Wenn das Gerät bereits läuft, im Netzwerk erreichbar ist und die Firmware mit `ENABLE_HTTPD=1` kompiliert wurde:
+
+1. Stellen Sie sicher, dass die Geräte-IP in den Integrationseinstellungen eingetragen ist
+2. Drücken Sie den Button **Konfiguration an Gerät senden**
+3. Die neue WLAN-SSID, das WLAN-Passwort und der APN werden per HTTP in den NVS des Geräts geschrieben
+4. Gerät neu starten (Button **Gerät neu starten** oder OBD-Stecker ab- und wieder anstecken)
+
+> ⚠️ Diese Methode aktualisiert nur WLAN und APN. **Server-Host, Webhook-Pfad und Port werden auf diesem Weg nicht übertragen** — dafür ist ein vollständiger Reflash erforderlich.
 
 ---
 
