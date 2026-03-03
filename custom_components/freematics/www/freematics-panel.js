@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.5.0";
+const PANEL_VERSION = "1.6.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -271,6 +271,14 @@ class FreematicsPanel extends HTMLElement {
     if (this._progressPollTimer) {
       clearInterval(this._progressPollTimer);
       this._progressPollTimer = null;
+    }
+    if (this._flashStallTimer) {
+      clearTimeout(this._flashStallTimer);
+      this._flashStallTimer = null;
+    }
+    if (this._dialogStallRef) {
+      clearTimeout(this._dialogStallRef.timer);
+      this._dialogStallRef = null;
     }
   }
 
@@ -604,7 +612,7 @@ class FreematicsPanel extends HTMLElement {
 
         ${hasSerial ? `
         <div class="flash-card" id="flash-action">
-          <h3>&#9889; Flash Firmware</h3>
+          <h3>&#9889; Flash Firmware (USB / Serial)</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
             Click the button below. A browser dialog will open so you can
             <strong>select the COM port</strong> of the Freematics ONE+.<br>
@@ -690,6 +698,45 @@ class FreematicsPanel extends HTMLElement {
           ">&#128246; Flash via WiFi OTA</button>
           <div id="wifi-ota-status" style="display:none;font-size:.88rem;margin-top:4px"></div>
         </div>
+
+        <div class="flash-card">
+          <h3>&#128296; Manual Flash Fallback (esptool.py)</h3>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
+            If the browser-based and WiFi OTA flash methods don't work, you can flash
+            the firmware manually from your computer using <strong>esptool.py</strong>.
+          </p>
+          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
+            <li>
+              <strong>Download the firmware binary</strong> from this Home Assistant instance:<br>
+              <a href="/api/freematics/firmware.bin" download="telelogger.bin" style="color:#2196f3">
+                &#11015; Download telelogger.bin
+              </a>
+            </li>
+            <li>
+              <strong>Install esptool</strong> on your computer:
+              <pre style="background:var(--secondary-background-color);padding:6px 10px;border-radius:4px;font-size:.82rem;margin:4px 0;overflow-x:auto">pip install esptool</pre>
+            </li>
+            <li>
+              <strong>Connect</strong> the Freematics ONE+ via USB to your computer.
+            </li>
+            <li>
+              <strong>Find the COM port</strong>:<br>
+              &bull; <em>Windows</em>: Device Manager → Ports (COM &amp; LPT) &rarr; e.g. <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">COM3</code><br>
+              &bull; <em>Linux / macOS</em>: <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">ls /dev/ttyUSB* /dev/tty.usbserial*</code>
+            </li>
+            <li>
+              <strong>Flash</strong> (replace <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">COM3</code> with your port):
+              <pre style="background:var(--secondary-background-color);padding:6px 10px;border-radius:4px;font-size:.82rem;margin:4px 0;overflow-x:auto">esptool.py --chip esp32 --port COM3 --baud 921600 write_flash --flash_mode dio --flash_size detect 0x10000 telelogger.bin</pre>
+            </li>
+          </ol>
+          <p style="font-size:.85rem;color:var(--secondary-text-color);margin:0">
+            &#128218; Alternatively, build and flash with
+            <a href="https://platformio.org/" target="_blank" rel="noopener" style="color:#2196f3">PlatformIO</a>
+            (install the PlatformIO IDE extension for VS Code, open
+            <code style="background:var(--secondary-background-color);padding:1px 4px;border-radius:3px">firmware_v5/telelogger/</code>
+            and click <em>Upload</em>).
+          </p>
+        </div>
       </div>
     `;
 
@@ -725,11 +772,16 @@ class FreematicsPanel extends HTMLElement {
             device_ip: ip,
             device_port: port,
           });
-          const msg = (result && result.message) ? result.message : "Flash successful!";
-          showStatus("#4caf50", `&#10003; ${msg}`);
+          if (result && result.ok) {
+            const msg = result.message || "Flash successful!";
+            showStatus("#4caf50", `&#10003; ${msg}`);
+          } else {
+            const msg = (result && result.message) ? result.message : "OTA flash failed.";
+            showStatus("#f44336", `&#10007; OTA flash failed: ${msg}`);
+          }
         } catch (err) {
           const msg = (err && err.message) ? err.message : String(err);
-          showStatus("#f44336", `&#10007; Flash failed: ${msg}`);
+          showStatus("#f44336", `&#10007; OTA flash failed: ${msg}`);
         } finally {
           wifiOtaBtn.disabled = false;
           wifiOtaBtn.textContent = "📶 Flash via WiFi OTA";
@@ -823,6 +875,18 @@ class FreematicsPanel extends HTMLElement {
         this._appendFlashLog("info", "Waiting for port selection…");
         // Re-arm the body observer so it is active when the dialog appears.
         this._watchInstallDialog();
+        // If the install dialog never appears within 30 s (e.g. user dismissed
+        // the port picker or the browser couldn't open the port), show a hint.
+        if (this._flashStallTimer) clearTimeout(this._flashStallTimer);
+        this._flashStallTimer = setTimeout(() => {
+          this._flashStallTimer = null;
+          // Only fire if we are still stuck at "waiting"
+          const fill = this.shadowRoot.querySelector("#progress-bar-fill");
+          if (fill && parseFloat(fill.style.width) <= 2) {
+            this._appendFlashLog("err", "⏱ No install dialog appeared after 30 s. The port picker may have been dismissed, or the USB driver is not installed. See the Manual Flash Fallback section below.");
+            this._updateFlashUI("⏱ No response — check USB connection and driver.", "err", "#f44336", 0);
+          }
+        }, 30000);
       });
     }
 
@@ -856,6 +920,21 @@ class FreematicsPanel extends HTMLElement {
               this._shadowDialogObserver.disconnect();
               this._shadowDialogObserver = null;
             }
+            // Clear the stall-detection timeout (if still pending)
+            if (this._flashStallTimer) {
+              clearTimeout(this._flashStallTimer);
+              this._flashStallTimer = null;
+            }
+            // Clear the dialog-level stall guard from _onInstallDialogAdded
+            if (this._dialogStallRef) {
+              clearTimeout(this._dialogStallRef.timer);
+              this._dialogStallRef = null;
+            }
+            // Clear the poll timer and show an error if flash did not complete
+            if (this._progressPollTimer) {
+              clearInterval(this._progressPollTimer);
+              this._progressPollTimer = null;
+            }
           }
         }
       }
@@ -868,6 +947,12 @@ class FreematicsPanel extends HTMLElement {
     const progressSection = shadow.querySelector("#flash-progress");
     const logEl = shadow.querySelector("#flash-log");
     if (!progressSection) return;
+
+    // Cancel the "no dialog" stall timer started by the activate-button click
+    if (this._flashStallTimer) {
+      clearTimeout(this._flashStallTimer);
+      this._flashStallTimer = null;
+    }
 
     // Reset log and reveal the progress section (no-op if the click listener
     // already revealed it; setting display again is harmless).
@@ -902,10 +987,13 @@ class FreematicsPanel extends HTMLElement {
     if (this._progressPollTimer) clearInterval(this._progressPollTimer);
     let lastState = null;
     let lastPct   = null;
+    const stallRef = { timer: null };  // wrapper object so handleState (declared first)
+                                        // can cancel the timer (declared below)
 
     const handleState = (state) => {
       if (!state || state === lastState) return;
       lastState = state;
+      clearTimeout(stallRef.timer);  // state changed — no longer stalled
       this._onDialogStateChanged(state);
     };
 
@@ -968,8 +1056,30 @@ class FreematicsPanel extends HTMLElement {
     // before our observers were registered.
     handleState(readState());
 
+    // Stall guard: if no meaningful state change occurs within 60 s, show an
+    // actionable error so the user knows something went wrong.  The timer is
+    // cancelled as soon as the state advances.
+    const STALL_MS = 60000;
+    stallRef.timer = setTimeout(() => {
+      this._dialogStallRef = null;
+      if (!lastState || lastState === "CONNECTING") {
+        this._appendFlashLog("err",
+          "⏱ No response from device after 60 s. " +
+          "Check the USB cable, ensure the correct COM port was selected, " +
+          "and that the USB-Serial driver is installed. " +
+          "See the Manual Flash Fallback section below for alternative methods.");
+        this._updateFlashUI("⏱ Timed out — no device response. Check USB / driver.", "err", "#f44336", 0);
+      }
+    }, STALL_MS);
+    // Keep a reference on the instance so the body-observer removedNodes handler
+    // can cancel this timer if the dialog is removed without firing "closed".
+    this._dialogStallRef = stallRef;
+
     // Finalize when the dialog closes
     dialog.addEventListener("closed", () => {
+      clearTimeout(stallRef.timer);
+      stallRef.timer = null;
+      this._dialogStallRef = null;
       attrObserver.disconnect();
       this._currentAttrObserver = null;
       if (this._shadowDialogObserver) {

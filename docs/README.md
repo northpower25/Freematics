@@ -336,13 +336,16 @@ When a new version of this integration is released:
 - Check that `ENABLE_HTTPD=1` is set in the firmware
 - Try pinging the device IP
 - Check HA logs for error details
+- If you see **"Connection reset by peer"**: the device restarted while receiving the firmware (normal after a successful flash). Verify the device rebooted with new firmware by checking its serial output or waiting for it to reconnect to HA.
 
 ### Serial flash fails
 
-**Browser Flasher (Method B):**
+**Browser Flasher (Method B — Web Serial in Chrome/Edge):**
 - Use Chrome or Edge 89+ — Firefox does not support Web Serial API
 - Install the USB-Serial driver for your device (CP210x or CH340)
 - Try a different USB port or cable
+- The Web Serial API requires a **trusted HTTPS connection**; it will not work over plain HTTP on a local IP. Use Nabu Casa or a self-signed cert setup, or use the Manual Flash Fallback (esptool.py) method below.
+- If the progress bar stays stuck with no messages after selecting the COM port, the browser may have failed to connect silently. Try the Manual Flash Fallback method below.
 
 **Serial via HA Server (Method C):**
 - Verify the device is connected to the HA server, not your own computer
@@ -350,6 +353,53 @@ When a new version of this integration is released:
 - Ensure correct permissions: `sudo chmod 666 /dev/ttyUSB0`
 - Try reducing baud rate (edit `flash_manager.py` to use `115200`)
 - `esptool` is automatically installed by this integration. If it's still missing, run: `pip install esptool`
+
+### Manual Flash Fallback (esptool.py)
+
+If all automated methods fail, you can flash the firmware manually from **your own computer** using `esptool.py`. No special installation beyond Python is required.
+
+**Step 1 – Download the firmware binary**
+
+Download `telelogger.bin` from your Home Assistant instance:
+```
+http://<your-ha-address>/api/freematics/firmware.bin
+```
+*(e.g. `http://homeassistant.local:8123/api/freematics/firmware.bin`)*
+
+Alternatively, find the bundled binary in the integration source at:
+`custom_components/freematics/firmware/telelogger.bin`
+
+**Step 2 – Install esptool**
+
+```bash
+pip install esptool
+```
+
+**Step 3 – Find the COM port**
+
+- **Windows**: Open *Device Manager → Ports (COM & LPT)* — the device appears as `Silicon Labs CP210x USB to UART Bridge (COM3)` or `USB-Serial CH340 (COM4)`.
+- **Linux**: `dmesg | tail` after plugging in USB — look for `/dev/ttyUSB0` or `/dev/ttyACM0`.
+- **macOS**: `ls /dev/tty.usbserial*` or `ls /dev/tty.SLAB_USBtoUART*`.
+
+**Step 4 – Flash**
+
+```bash
+esptool.py --chip esp32 --port COM3 --baud 921600 \
+  write_flash --flash_mode dio --flash_size detect \
+  0x10000 telelogger.bin
+```
+
+*(Replace `COM3` with your port, e.g. `/dev/ttyUSB0` on Linux/macOS)*
+
+> If `esptool` is not on your PATH, use: `python3 -m esptool ...`
+
+**Alternative: PlatformIO / VS Code**
+
+If you prefer an IDE workflow:
+1. Install [Visual Studio Code](https://code.visualstudio.com/) and the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode).
+2. Open the folder `firmware_v5/telelogger/` in VS Code.
+3. Configure your settings in `config.h` (WiFi credentials, webhook ID, etc.).
+4. Click **Upload** (the arrow icon in the PlatformIO toolbar) — PlatformIO will compile and flash automatically.
 
 ### Device not connecting to WiFi
 
@@ -614,14 +664,58 @@ Entitätsnamen folgen dem Muster:
 - Sicherstellen, dass das Gerät erreichbar ist (Ping testen)
 - Im AP-Modus: Mit `TELELOGGER`-WLAN verbunden?
 - ENABLE_HTTPD=1 in der Firmware?
+- Bei „Connection reset by peer": Das Gerät hat nach dem Flash neu gestartet — dies ist normal. Prüfen, ob es sich mit HA reconnectet.
 
 **Browser-Flasher funktioniert nicht**
 - Chrome oder Edge (Version 89+) verwenden — Firefox unterstützt Web Serial nicht
 - USB-Seriell-Treiber für das Gerät installieren (CP210x oder CH340)
 - Anderen USB-Port oder ein anderes USB-Kabel ausprobieren
+- Die Web Serial API erfordert eine **sichere HTTPS-Verbindung**. Über eine lokale IP-Adresse (HTTP) funktioniert dies nicht. Nabu Casa oder manuelles Flash mit esptool.py verwenden (siehe unten).
+- Wenn der Fortschrittsbalken nach der Port-Auswahl hängt: Der Browser konnte keine Verbindung herstellen. Manuelle Flash-Methode (esptool.py) nutzen.
 
 **Serieller Flash via HA-Server fehlgeschlagen**
 - Prüfen, ob das Gerät wirklich am HA-Server (nicht am eigenen Computer) angeschlossen ist
 - Port prüfen: `dmesg | tail` auf dem HA-Host
 - Berechtigungen: `sudo chmod 666 /dev/ttyUSB0`
 - `esptool` wird automatisch durch die Integration installiert. Falls noch nicht vorhanden: `pip install esptool`
+
+**Manuelles Flashen als Fallback (esptool.py)**
+
+Wenn alle automatisierten Methoden scheitern, kann die Firmware manuell vom eigenen Computer geflasht werden.
+
+**Schritt 1 – Firmware-Binary herunterladen**
+
+```
+http://<ha-adresse>/api/freematics/firmware.bin
+```
+*(z.B. `http://homeassistant.local:8123/api/freematics/firmware.bin`)*
+
+**Schritt 2 – esptool installieren**
+
+```bash
+pip install esptool
+```
+
+**Schritt 3 – COM-Port ermitteln**
+
+- **Windows**: Geräte-Manager → Anschlüsse (COM & LPT) → z.B. `COM3`
+- **Linux**: `dmesg | tail` nach dem Einstecken → z.B. `/dev/ttyUSB0`
+- **macOS**: `ls /dev/tty.usbserial*`
+
+**Schritt 4 – Flashen**
+
+```bash
+esptool.py --chip esp32 --port COM3 --baud 921600 \
+  write_flash --flash_mode dio --flash_size detect \
+  0x10000 telelogger.bin
+```
+
+*(COM3 durch den eigenen Port ersetzen, z.B. `/dev/ttyUSB0`)*
+
+**Alternative: PlatformIO / VS Code**
+
+1. [Visual Studio Code](https://code.visualstudio.com/) und die [PlatformIO IDE-Erweiterung](https://platformio.org/install/ide?install=vscode) installieren.
+2. Den Ordner `firmware_v5/telelogger/` in VS Code öffnen.
+3. Einstellungen in `config.h` anpassen (WLAN-Zugangsdaten, Webhook-ID usw.).
+4. Auf **Upload** klicken — PlatformIO kompiliert und flasht automatisch.
+
