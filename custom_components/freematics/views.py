@@ -9,6 +9,10 @@ Serves the following endpoints:
   GET  /api/freematics/config_nvs.bin   – NVS partition image with device settings
                                           Requires ?token=<tok> issued by
                                           /api/freematics/provisioning_token.
+  GET  /api/freematics/flash_image.bin  – Combined single-file flash image
+                                          (NVS + firmware merged, written at 0x9000).
+                                          Requires ?token=<tok> issued by
+                                          /api/freematics/provisioning_token.
   GET  /api/freematics/provisioning_token – (auth required) Issue a short-lived token
                                           that ties the NVS / manifest endpoints to
                                           the caller's config-entry settings.
@@ -21,13 +25,19 @@ regardless of where Home Assistant is hosted.
 NVS provisioning flow
 ─────────────────────
 1. Panel JS calls GET /api/freematics/provisioning_token (HA auth required).
-   Response: {"token": "…", "manifest_url": "…", "nvs_url": "…"}
+   Response: {"token": "…", "manifest_url": "…", "nvs_url": "…",
+              "flash_image_url": "…"}
 2. Panel passes manifest_url to <esp-web-install-button>.
    esp-web-tools fetches the manifest and discovers the NVS part URL.
 3. During flash, esp-web-tools writes firmware.bin at 0x10000 and
    config_nvs.bin at 0x9000 in one pass.
 4. Device reboots with WiFi SSID/password, APN, and server settings
    already stored in NVS — no post-flash manual configuration needed.
+
+For manual flashing (Freematics Builder / esptool) the panel provides a
+single flash_image.bin download that contains both the NVS partition and the
+firmware merged into one file.  The user flashes it at offset 0x9000 and the
+device boots with the correct settings without needing to handle two files.
 """
 
 from __future__ import annotations
@@ -334,6 +344,7 @@ class FreematicsProvisioningTokenView(HomeAssistantView):
         "token": "<hex token>",
         "manifest_url": "/api/freematics/manifest.json?token=<token>",
         "nvs_url": "/api/freematics/config_nvs.bin?token=<token>",
+        "flash_image_url": "/api/freematics/flash_image.bin?token=<token>",
         "nvs_offset": 36864,
         "expires_in": 300
       }
@@ -367,6 +378,7 @@ class FreematicsProvisioningTokenView(HomeAssistantView):
                 "token": token,
                 "manifest_url": f"/api/freematics/manifest.json?token={token}",
                 "nvs_url": f"/api/freematics/config_nvs.bin?token={token}",
+                "flash_image_url": f"/api/freematics/flash_image.bin?token={token}",
                 "nvs_offset": NVS_PARTITION_OFFSET,
                 "expires_in": _TOKEN_TTL,
             }).encode("utf-8"),
@@ -417,6 +429,52 @@ class FreematicsPersonalisedManifestView(HomeAssistantView):
         )
 
 
+async def _build_nvs_kwargs(hass, entry) -> dict:
+    """Return keyword-argument dict for generate_nvs_partition() from a config entry.
+
+    Extracts WiFi credentials, cellular APN, server host/port, and webhook path
+    from the config entry, resolving the HA external URL for the server address.
+    """
+    cfg = {**entry.data, **entry.options}
+    wifi_ssid = cfg.get(CONF_WIFI_SSID, "")
+    wifi_password = cfg.get(CONF_WIFI_PASSWORD, "")
+    cell_apn = cfg.get(CONF_CELL_APN, "")
+    webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
+
+    server_host = ""
+    server_port = 443
+    webhook_path = ""
+    try:
+        from homeassistant.helpers.network import get_url  # noqa: PLC0415
+        base_url = get_url(hass, prefer_external=True)
+        parsed = urlparse(base_url)
+        server_host = parsed.hostname or ""
+        if parsed.port:
+            server_port = parsed.port
+        elif parsed.scheme == "https":
+            server_port = 443
+        else:
+            server_port = 80
+    except Exception:  # noqa: BLE001
+        # get_url() can raise NoURLAvailableError or other network-related
+        # errors when no external URL is configured; silently skip server
+        # settings — the device will use compile-time defaults.
+        pass
+
+    if webhook_id:
+        webhook_path = f"/api/webhook/{webhook_id}"
+
+    return {
+        "wifi_ssid": wifi_ssid,
+        "wifi_password": wifi_password,
+        "cell_apn": cell_apn,
+        "server_host": server_host,
+        "server_port": server_port,
+        "webhook_path": webhook_path,
+        "enable_httpd": True,
+    }
+
+
 class FreematicsConfigNvsView(HomeAssistantView):
     """Serve a personalised NVS partition image for initial device provisioning.
 
@@ -454,46 +512,19 @@ class FreematicsConfigNvsView(HomeAssistantView):
         if entry is None:
             return web.Response(status=404, text="Config entry not found")
 
-        cfg = {**entry.data, **entry.options}
-        wifi_ssid = cfg.get(CONF_WIFI_SSID, "")
-        wifi_password = cfg.get(CONF_WIFI_PASSWORD, "")
-        cell_apn = cfg.get(CONF_CELL_APN, "")
-        webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
-
-        server_host = ""
-        server_port = 443
-        webhook_path = ""
-        try:
-            from homeassistant.helpers.network import get_url  # noqa: PLC0415
-            base_url = get_url(hass, prefer_external=True)
-            parsed = urlparse(base_url)
-            server_host = parsed.hostname or ""
-            if parsed.port:
-                server_port = parsed.port
-            elif parsed.scheme == "https":
-                server_port = 443
-            else:
-                server_port = 80
-        except Exception:  # noqa: BLE001
-            # get_url() can raise NoURLAvailableError or other network-related
-            # errors when no external URL is configured; silently skip server
-            # settings in that case — the device will use compile-time defaults.
-            pass
-
-        if webhook_id:
-            webhook_path = f"/api/webhook/{webhook_id}"
+        kwargs = await _build_nvs_kwargs(hass, entry)
 
         from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
 
         nvs_data = await hass.async_add_executor_job(
             generate_nvs_partition,
-            wifi_ssid,
-            wifi_password,
-            cell_apn,
-            server_host,
-            server_port,
-            webhook_path,
-            True,  # enable_httpd: activate built-in HTTP server on first boot
+            kwargs["wifi_ssid"],
+            kwargs["wifi_password"],
+            kwargs["cell_apn"],
+            kwargs["server_host"],
+            kwargs["server_port"],
+            kwargs["webhook_path"],
+            kwargs["enable_httpd"],
         )
 
         if nvs_data is None:
@@ -510,6 +541,91 @@ class FreematicsConfigNvsView(HomeAssistantView):
             content_type="application/octet-stream",
             headers={
                 "Content-Disposition": "attachment; filename=config_nvs.bin",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+class FreematicsFlashImageView(HomeAssistantView):
+    """Serve a combined single-file flash image (NVS + firmware) for manual flashing.
+
+    Accessible at GET /api/freematics/flash_image.bin?token=<token>.
+
+    The returned binary merges:
+      - The personalised NVS partition (0x9000, 20 KB) with device settings
+      - 0xFF padding covering the otadata region (0xE000–0xFFFF)
+      - The pre-compiled application firmware (telelogger.bin, from 0x10000)
+
+    The whole file is written at flash offset 0x9000 in a single operation:
+      esptool.py write_flash 0x9000 flash_image.bin
+    or via Freematics Builder by selecting the file with offset 0x9000.
+
+    This avoids the need to handle two separate files at different offsets —
+    one download, one flash command, device boots with the correct settings.
+
+    requires_auth is False; a valid provisioning token authorises access
+    (same pattern as config_nvs.bin).
+    """
+
+    url = "/api/freematics/flash_image.bin"
+    name = "api:freematics:flash_image"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return the combined NVS + firmware flash image."""
+        token = request.rel_url.query.get("token", "")
+        if not token:
+            return web.Response(status=400, text="token parameter required")
+
+        hass = request.app["hass"]
+        token_store = hass.data.get(DOMAIN, {}).get("_tokens", {})
+        entry_id, expiry = token_store.get(token, (None, 0))
+        if expiry <= time.monotonic() or entry_id is None:
+            return web.Response(status=403, text="Invalid or expired token")
+
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            return web.Response(status=404, text="Config entry not found")
+
+        if not FIRMWARE_PATH.exists():
+            return web.Response(status=404, text="Firmware binary not found")
+
+        kwargs = await _build_nvs_kwargs(hass, entry)
+
+        from .nvs_helper import generate_flash_image, generate_nvs_partition  # noqa: PLC0415
+
+        nvs_data = await hass.async_add_executor_job(
+            generate_nvs_partition,
+            kwargs["wifi_ssid"],
+            kwargs["wifi_password"],
+            kwargs["cell_apn"],
+            kwargs["server_host"],
+            kwargs["server_port"],
+            kwargs["webhook_path"],
+            kwargs["enable_httpd"],
+        )
+
+        if nvs_data is None:
+            return web.Response(
+                status=503,
+                text=(
+                    "NVS partition generation failed. "
+                    "Install esp-idf-nvs-partition-gen: pip install esp-idf-nvs-partition-gen"
+                ),
+            )
+
+        image_data = await hass.async_add_executor_job(
+            generate_flash_image, nvs_data, FIRMWARE_PATH
+        )
+
+        if image_data is None:
+            return web.Response(status=503, text="Failed to build flash image")
+
+        return web.Response(
+            body=image_data,
+            content_type="application/octet-stream",
+            headers={
+                "Content-Disposition": "attachment; filename=flash_image.bin",
                 "Access-Control-Allow-Origin": "*",
             },
         )

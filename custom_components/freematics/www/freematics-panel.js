@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.7.0";
+const PANEL_VERSION = "1.8.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -708,25 +708,71 @@ class FreematicsPanel extends HTMLElement {
           <h3>&#128187; Manual Flash (Windows, Linux, macOS)</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
             Use this method when Chrome / Edge is not available or you prefer an
-            external tool. <strong>Download both files below</strong> and flash them
-            to the device with your preferred tool.
+            external tool. Download the <strong>single combined file</strong> below
+            and flash it at offset <code style="${cs}">0x9000</code> — one file,
+            one command, done.
           </p>
 
+          <!-- Download box -->
           <div style="background:var(--secondary-background-color);border-radius:6px;padding:10px 14px;margin-bottom:12px">
-            <div style="font-weight:600;font-size:.9rem;margin-bottom:6px">&#11015; Step 1 — Download files</div>
-            <div style="display:flex;gap:12px;flex-wrap:wrap">
-              <a id="dl-firmware" href="/api/freematics/firmware.bin" download="telelogger.bin"
-                 style="color:#2196f3;font-size:.9rem">
-                &#11015; telelogger.bin <small style="color:var(--secondary-text-color)">(app, offset 0x10000)</small>
-              </a>
-              <a id="dl-nvs" href="#" download="config_nvs.bin"
-                 style="color:#2196f3;font-size:.9rem">
-                &#11015; config_nvs.bin <small style="color:var(--secondary-text-color)">(settings, offset 0x9000)</small>
-              </a>
-            </div>
+            <div style="font-weight:600;font-size:.9rem;margin-bottom:6px">&#11015; Download flash image</div>
+            <a id="dl-flash-image" href="#" download="flash_image.bin"
+               style="color:#2196f3;font-size:.95rem;font-weight:600">
+              &#11015; flash_image.bin
+            </a>
+            <span style="color:var(--secondary-text-color);font-size:.85rem">
+              &nbsp;— combined file, flash at offset <code style="${cs}">0x9000</code>
+            </span>
             <div id="nvs-dl-status" style="font-size:.82rem;color:var(--secondary-text-color);margin-top:4px">
               &#9203; Generating settings file…
             </div>
+
+            <!-- What's inside info box -->
+            <div style="margin-top:10px;background:var(--primary-background-color);border-radius:4px;padding:8px 10px;font-size:.82rem;color:var(--secondary-text-color)">
+              <strong style="color:var(--primary-text-color)">&#8505; What this file contains</strong><br>
+              <table style="margin-top:4px;border-collapse:collapse;width:100%">
+                <tr>
+                  <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0x9000</code></td>
+                  <td>NVS settings (20 KB) — your WiFi, server and webhook settings,
+                      <em>generated fresh from the integration&rsquo;s current configuration</em></td>
+                </tr>
+                <tr>
+                  <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0xE000</code></td>
+                  <td>OTA-data placeholder (8 KB, 0xFF — boots app at 0x10000)</td>
+                </tr>
+                <tr>
+                  <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0x10000</code></td>
+                  <td>Application firmware (telelogger.bin, pre-compiled, bundled with the integration)</td>
+                </tr>
+              </table>
+              <p style="margin:6px 0 0">
+                The bootloader at <code style="${cs}">0x1000</code> and partition table at
+                <code style="${cs}">0x8000</code> are <strong>not overwritten</strong> —
+                the factory-programmed ones remain intact.
+              </p>
+            </div>
+
+            <!-- Advanced: separate files -->
+            <details style="margin-top:8px">
+              <summary style="cursor:pointer;font-size:.82rem;color:var(--secondary-text-color)">
+                Advanced: download firmware and settings as separate files
+              </summary>
+              <div style="margin-top:6px;display:flex;gap:12px;flex-wrap:wrap">
+                <a id="dl-firmware" href="/api/freematics/firmware.bin" download="telelogger.bin"
+                   style="color:#2196f3;font-size:.85rem">
+                  &#11015; telelogger.bin <small>(app, offset 0x10000)</small>
+                </a>
+                <a id="dl-nvs" href="#" download="config_nvs.bin"
+                   style="color:#2196f3;font-size:.85rem">
+                  &#11015; config_nvs.bin <small>(settings only, offset 0x9000)</small>
+                </a>
+              </div>
+              <p style="font-size:.8rem;color:var(--secondary-text-color);margin:4px 0 0">
+                &#9888; Flash <em>both</em> files if using separate downloads — flashing only
+                config_nvs.bin without updating the firmware may cause a boot loop on
+                devices with older firmware.
+              </p>
+            </details>
           </div>
 
           <details style="margin-bottom:10px">
@@ -738,8 +784,8 @@ class FreematicsPanel extends HTMLElement {
                 <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">pip install esptool</pre>
               </li>
               <li>Connect the device via USB, find the COM port (Windows: Device Manager → Ports, e.g. <code style="${cs}">COM3</code>; Linux: <code style="${cs}">/dev/ttyUSB0</code>)</li>
-              <li>Flash both files in one command (replace <code style="${cs}">COM3</code> with your port):
-                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">esptool.py --chip esp32 --port COM3 --baud 921600 write_flash --flash_mode dio --flash_size detect 0x9000 config_nvs.bin 0x10000 telelogger.bin</pre>
+              <li>Flash with a single command (replace <code style="${cs}">COM3</code> with your port):
+                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">esptool.py --chip esp32 --port COM3 --baud 921600 write_flash --flash_mode dio --flash_size detect 0x9000 flash_image.bin</pre>
               </li>
             </ol>
           </details>
@@ -751,10 +797,8 @@ class FreematicsPanel extends HTMLElement {
             <ol style="font-size:.88rem;color:var(--secondary-text-color);margin:8px 0 0 0">
               <li>Download and open <a href="https://freematics.com/pages/products/freematics-one-plus-model-b/" target="_blank" rel="noopener" style="color:#2196f3">Freematics Builder</a></li>
               <li>Connect the Freematics ONE+ via USB</li>
-              <li>In Freematics Builder, select <strong>Custom Binary</strong> and choose the downloaded <code style="${cs}">telelogger.bin</code></li>
-              <li>Flash <code style="${cs}">telelogger.bin</code> at offset <code style="${cs}">0x10000</code></li>
-              <li>Then flash <code style="${cs}">config_nvs.bin</code> at offset <code style="${cs}">0x9000</code> (use the custom offset field)</li>
-              <li>Reset the device — it will boot with your WiFi and server settings already configured</li>
+              <li>In Freematics Builder select <strong>Custom Binary</strong>, choose the downloaded <code style="${cs}">flash_image.bin</code>, and set the offset to <code style="${cs}">0x9000</code></li>
+              <li>Click Flash — the device reboots with your WiFi and server settings already configured</li>
             </ol>
             <p style="font-size:.82rem;color:var(--secondary-text-color);margin:6px 0 0">
               &#8505; The Freematics Builder is available from the
@@ -771,8 +815,7 @@ class FreematicsPanel extends HTMLElement {
               <li>Add ESP32 board support: <em>File → Preferences → Board Manager URLs</em> → add <code style="${cs}">https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json</code>, then install <em>esp32 by Espressif</em></li>
               <li>Select board: <em>Tools → Board → ESP32 Arduino → ESP32 Dev Module</em></li>
               <li>Select port: <em>Tools → Port → COM3</em> (or your port)</li>
-              <li>Use <em>Sketch → Upload Using Programmer</em> with esptool or use the Serial Flasher tool from the <em>Tools</em> menu</li>
-              <li>Flash the NVS settings file separately with esptool (see Option A, step 3, but only flash <code style="${cs}">0x9000 config_nvs.bin</code>)</li>
+              <li>Flash <code style="${cs}">flash_image.bin</code> at offset <code style="${cs}">0x9000</code> using esptool (see Option A above)</li>
             </ol>
           </details>
         </div>
@@ -878,19 +921,33 @@ class FreematicsPanel extends HTMLElement {
   }
 
   async _fetchProvisioningToken(el) {
-    const nvsStatus = el ? el.querySelector("#nvs-dl-status") : null;
-    const nvsLink   = el ? el.querySelector("#dl-nvs") : null;
+    const nvsStatus      = el ? el.querySelector("#nvs-dl-status") : null;
+    const flashImageLink = el ? el.querySelector("#dl-flash-image") : null;
+    const nvsLink        = el ? el.querySelector("#dl-nvs") : null;
 
     try {
       const result = await this._hass.callApi("GET", "freematics/provisioning_token");
       if (result && result.token) {
         this._provisioningManifestUrl = result.manifest_url || "/api/freematics/manifest.json";
-        const nvsUrl = result.nvs_url || `/api/freematics/config_nvs.bin?token=${result.token}`;
+
+        // Combined single-file flash image (NVS + firmware, offset 0x9000)
+        const flashImageUrl = result.flash_image_url ||
+          `/api/freematics/flash_image.bin?token=${result.token}`;
+        if (flashImageLink) {
+          flashImageLink.href = flashImageUrl;
+        }
+
+        // NVS-only download (for advanced use / browser flash)
+        const nvsUrl = result.nvs_url ||
+          `/api/freematics/config_nvs.bin?token=${result.token}`;
         if (nvsLink) {
           nvsLink.href = nvsUrl;
         }
+
         if (nvsStatus) {
-          nvsStatus.textContent = "✓ Settings file ready — click to download.";
+            nvsStatus.innerHTML =
+            "&#10003; File ready — download link active for 5 minutes. " +
+            "<em>Generated fresh from your current settings.</em>";
           nvsStatus.style.color = "var(--success-color, #4caf50)";
         }
         // If esp-web-tools install button is already rendered, update its manifest attribute
@@ -903,6 +960,10 @@ class FreematicsPanel extends HTMLElement {
       if (nvsStatus) {
         nvsStatus.textContent = "⚠ Could not generate settings file — no integration configured.";
         nvsStatus.style.color = "#ff9800";
+      }
+      if (flashImageLink) {
+        flashImageLink.style.opacity = "0.4";
+        flashImageLink.style.pointerEvents = "none";
       }
       if (nvsLink) {
         nvsLink.style.opacity = "0.4";

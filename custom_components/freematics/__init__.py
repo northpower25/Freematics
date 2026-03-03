@@ -42,6 +42,7 @@ from .const import CONF_WEBHOOK_ID, DOMAIN
 from .views import (
     FreematicsConfigNvsView,
     FreematicsFirmwareView,
+    FreematicsFlashImageView,
     FreematicsFlasherView,
     FreematicsPersonalisedManifestView,
     FreematicsProvisioningTokenView,
@@ -80,6 +81,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsProxyOTAView())
     hass.http.register_view(FreematicsProvisioningTokenView())
     hass.http.register_view(FreematicsConfigNvsView())
+    hass.http.register_view(FreematicsFlashImageView())
 
     # Serve the www/ directory so the panel JS and custom card are reachable.
     await hass.http.async_register_static_paths(
