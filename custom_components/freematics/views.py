@@ -75,9 +75,6 @@ _MANIFEST_BASE = {
     ],
 }
 
-# Legacy alias – kept for backward compatibility
-_MANIFEST = _MANIFEST_BASE
-
 _FLASHER_HTML = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -211,28 +208,6 @@ class FreematicsFlasherView(HomeAssistantView):
             body=_FLASHER_HTML.encode("utf-8"),
             content_type="text/html",
             charset="utf-8",
-        )
-
-
-class FreematicsManifestView(HomeAssistantView):
-    """Serve the esp-web-tools firmware manifest.
-
-    Accessible at /api/freematics/manifest.json.
-
-    requires_auth is False because esp-web-tools (loaded from CDN) fetches this
-    via the browser's native fetch() API and cannot inject a HA Bearer token.
-    The manifest is non-sensitive metadata describing the firmware flash offsets.
-    """
-
-    url = "/api/freematics/manifest.json"
-    name = "api:freematics:manifest"
-    requires_auth = False
-
-    async def get(self, request: web.Request) -> web.Response:
-        """Return the firmware manifest JSON."""
-        return web.Response(
-            body=json.dumps(_MANIFEST).encode("utf-8"),
-            content_type="application/json",
         )
 
 
