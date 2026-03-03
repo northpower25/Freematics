@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.9.2";
+const PANEL_VERSION = "1.9.3";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -628,9 +628,12 @@ class FreematicsPanel extends HTMLElement {
           </p>
           <p style="font-size:.85rem;color:var(--secondary-text-color);margin:0 0 10px;background:var(--secondary-background-color,#f5f5f5);border-left:3px solid #ff9800;padding:6px 10px;border-radius:0 4px 4px 0">
             &#9888; <strong>If the flash stalls at "Connecting…":</strong>
-            put the device into download mode manually — hold the <strong>BOOT</strong> button,
-            press and release <strong>RST</strong>, then release <strong>BOOT</strong> —
-            and click the button again.
+            the device may need to be put into download mode manually.
+            Press and hold the <strong>BOOT</strong> / <strong>IO0</strong> button (if present),
+            press and release <strong>RST</strong>, then release <strong>BOOT</strong>,
+            then click the button again.
+            If your Freematics ONE+ does not have accessible BOOT/RST buttons,
+            use the <em>Manual Flash (esptool)</em> method below instead.
           </p>
           <div id="esp-container">
             <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
