@@ -70,8 +70,12 @@ _TOKEN_TTL = 300
 FIRMWARE_PATH = Path(__file__).parent / "firmware" / "telelogger.bin"
 
 # esp-web-tools manifest — describes the chip family and flash offsets.
+# 0x8000 = 32768  – partition table offset (always this address on ESP32).
 # 0x10000 = 65536 – application partition offset for ESP32.
 # 0x9000  = 36864 – NVS partition offset (huge_app partition scheme).
+# Including the partition table ensures the device always has the correct
+# huge_app partition scheme, which is required for the NVS at 0x9000 to be
+# found.  Without it, devices that had a different scheme would crash.
 _MANIFEST_BASE = {
     "name": "Freematics ONE+ Telelogger",
     "version": "5.0",
@@ -80,6 +84,7 @@ _MANIFEST_BASE = {
         {
             "chipFamily": "ESP32",
             "parts": [
+                {"path": "partition_table.bin", "offset": 32768},
                 {"path": "firmware.bin", "offset": 65536},
             ],
         }
@@ -181,6 +186,13 @@ _FLASHER_HTML = """\
     </ol>
   </div>
 
+  <div class="card warn">
+    <strong>&#9888; If the flash stalls at &ldquo;Connecting&hellip;&rdquo;:</strong><br>
+    Put the device into download mode manually: hold the <strong>BOOT</strong> button,
+    press and release <strong>RST</strong>, then release <strong>BOOT</strong>.
+    Click the button again after the device resets into download mode.
+  </div>
+
   <p style="margin-top:2rem">
     <a href="javascript:history.back()">&#8592; Back to Home Assistant</a>
     &nbsp;&nbsp;
@@ -257,6 +269,42 @@ class FreematicsFirmwareView(HomeAssistantView):
             content_type="application/octet-stream",
             headers={
                 "Content-Disposition": "attachment; filename=telelogger.bin",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+class FreematicsPartitionTableView(HomeAssistantView):
+    """Serve the huge_app partition table binary.
+
+    Accessible at /api/freematics/partition_table.bin.
+    Referenced by the esp-web-tools manifest so that the correct partition
+    scheme is always written at 0x8000 when flashing via Web Serial.
+
+    Including the partition table ensures devices with a different scheme
+    (e.g. default Arduino partitions) are migrated to huge_app automatically
+    during the Web Serial flash, which is required for the NVS partition at
+    0x9000 to be located correctly by the firmware.
+
+    requires_auth is False: the partition table is the same for all devices
+    (not device-specific) and contains no sensitive data.
+    """
+
+    url = "/api/freematics/partition_table.bin"
+    name = "api:freematics:partition_table"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return the huge_app partition table binary."""
+        from .nvs_helper import generate_partition_table  # noqa: PLC0415
+
+        hass = request.app["hass"]
+        pt_data = await hass.async_add_executor_job(generate_partition_table)
+        return web.Response(
+            body=pt_data,
+            content_type="application/octet-stream",
+            headers={
+                "Content-Disposition": "attachment; filename=partition_table.bin",
                 "Access-Control-Allow-Origin": "*",
             },
         )

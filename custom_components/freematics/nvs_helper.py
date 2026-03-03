@@ -109,7 +109,7 @@ def _make_partition_entry(
     )
 
 
-def _generate_partition_table() -> bytes:
+def generate_partition_table() -> bytes:
     """Return a 4 096-byte ESP32 partition-table binary for the huge_app scheme.
 
     The table contains an MD5 checksum entry (compatible with ESP-IDF v4.x+)
@@ -321,7 +321,7 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
 
     # Build the image: partition table, NVS bytes, 0xFF gap, then firmware.
     image = bytearray(b"\xff" * _APP_OFFSET_IN_IMAGE)
-    pt_data = _generate_partition_table()
+    pt_data = generate_partition_table()
     image[:PARTITION_TABLE_SIZE] = pt_data
     image[_NVS_OFFSET_IN_IMAGE : _NVS_OFFSET_IN_IMAGE + len(nvs_data)] = nvs_data
     image += firmware_data

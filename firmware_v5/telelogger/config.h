@@ -79,16 +79,28 @@
 **************************************/
 #ifndef ENABLE_WIFI
 #define ENABLE_WIFI 1
-// WiFi settings
+#endif
+// WiFi compile-time defaults (SSID/password are overridden at runtime via NVS)
+#ifndef WIFI_SSID
 #define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD ""
-#endif 
+#endif
 
-#ifndef SERVER_HOST
 // cellular network settings
+#ifndef CELL_APN
 #define CELL_APN ""
-// Freematics Hub server settings
+#endif
+
+// Server settings – defaults to Freematics Hub over UDP.
+// Override via build_flags to target a custom server (e.g. Home Assistant
+// with PROTOCOL_HTTPS_POST=3 and an empty SERVER_HOST to be provisioned at
+// runtime via NVS / config_nvs.bin).
+#ifndef SERVER_HOST
 #define SERVER_HOST "hub.freematics.com"
+#endif
+#ifndef SERVER_PROTOCOL
 #define SERVER_PROTOCOL PROTOCOL_UDP
 #endif
 

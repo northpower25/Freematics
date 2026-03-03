@@ -1,0 +1,58 @@
+name: Build Firmware
+
+on:
+  push:
+    paths:
+      - 'firmware_v5/telelogger/**'
+      - 'libraries/**'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ hashFiles('firmware_v5/telelogger/platformio.ini') }}
+          restore-keys: |
+            platformio-
+
+      - name: Build telelogger firmware
+        run: |
+          cd firmware_v5/telelogger
+          pio run --environment esp32dev
+
+      - name: Copy firmware binary
+        run: |
+          cp firmware_v5/telelogger/.pio/build/esp32dev/firmware.bin \
+             custom_components/freematics/firmware/telelogger.bin
+          echo "Firmware binary size: $(wc -c < custom_components/freematics/firmware/telelogger.bin) bytes"
+
+      - name: Commit updated firmware binary
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          # [skip ci] prevents this auto-commit from re-triggering the workflow.
+          # Manual changes to workflow files still trigger a fresh build as expected.
+          commit_message: "chore: rebuild telelogger.bin from source [skip ci]"
+          file_pattern: "custom_components/freematics/firmware/telelogger.bin"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
