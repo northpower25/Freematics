@@ -16,16 +16,22 @@ Stored NVS keys (namespace "storage"):
   WEBHOOK_PATH – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
   ENABLE_HTTPD – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
 
-Single-file flash image
------------------------
+Single-file flash image (esptool / browser flasher)
+----------------------------------------------------
 generate_flash_image() combines the NVS partition with the application firmware
-into one binary that can be written at NVS_PARTITION_OFFSET in a single
-esptool / Freematics Builder operation:
+into one binary that must be written at NVS_PARTITION_OFFSET (0x9000) using
+an explicit offset with esptool or via the browser-based flasher.
+
+  **Important**: Do NOT use the Freematics Builder with this combined image.
+  The Builder writes binaries at the app partition offset (0x10000), which
+  places NVS data at the wrong address and causes a restart loop.
+  For the Freematics Builder, use telelogger.bin (firmware only) and provision
+  NVS settings separately via the browser-based flasher.
 
   Layout (relative to NVS_PARTITION_OFFSET = 0x9000):
     0x0000 – 0x4FFF  NVS partition (config_nvs.bin, 20 KB)
     0x5000 – 0x6FFF  0xFF padding  (otadata region – preserved as erased)
-    0x7000 –  end    Application firmware (telelogger.bin)
+    0x7000 –  end    Application firmware (telelogger.bin, flash mode = DIO)
 
   esptool usage:
     esptool.py write_flash 0x9000 flash_image.bin
@@ -178,14 +184,17 @@ def generate_nvs_partition(
 def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
     """Combine NVS partition data with the application firmware into one binary.
 
-    The returned bytes can be flashed at NVS_PARTITION_OFFSET (0x9000) in a
-    single operation using esptool or Freematics Builder – no need to handle
-    two separate files at different offsets.
+    The returned bytes must be flashed at NVS_PARTITION_OFFSET (0x9000) using
+    esptool with an explicit offset – do **not** use the Freematics Builder with
+    this file, because the Builder writes binaries at the app partition offset
+    (0x10000) which would place NVS data at the wrong address and cause a
+    restart loop.  Use esptool or the browser-based flasher instead.
 
     Memory layout of the returned image (all offsets relative to 0x9000):
       0x0000 – 0x4FFF : NVS partition  (20 KB, your WiFi/server settings)
       0x5000 – 0x6FFF : 0xFF padding   (otadata region, written as erased)
-      0x7000 – end    : Application firmware (telelogger.bin)
+      0x7000 – end    : Application firmware (telelogger.bin, flash mode
+                        patched to DIO for maximum hardware compatibility)
 
     When flashed at 0x9000 with ``esptool.py write_flash 0x9000 flash_image.bin``
     the device boots immediately with the correct settings.  The bootloader and
@@ -199,10 +208,22 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
         Combined bytes on success, None on failure.
     """
     try:
-        firmware_data = firmware_path.read_bytes()
+        firmware_data: bytes | bytearray = firmware_path.read_bytes()
     except OSError as exc:
         _LOGGER.error("Failed to read firmware binary %s: %s", firmware_path, exc)
         return None
+
+    # Patch the firmware's flash-mode byte (offset 2 in the ESP32 image header)
+    # to DIO (0x02).  esptool's --flash_mode flag only patches binaries whose
+    # first byte is the ESP32 magic (0xE9); because the combined image starts
+    # with NVS data (not 0xE9), esptool would leave the embedded firmware in
+    # its original QIO mode.  DIO works on every ESP32 flash chip and is what
+    # the Freematics ONE+ 2nd-stage bootloader expects, so we patch here.
+    _ESP32_IMAGE_MAGIC = 0xE9
+    _FLASH_MODE_DIO = 0x02
+    if len(firmware_data) > 2 and firmware_data[0] == _ESP32_IMAGE_MAGIC:
+        firmware_data = bytearray(firmware_data)
+        firmware_data[2] = _FLASH_MODE_DIO
 
     # Build the image: NVS bytes, then 0xFF gap up to APP_PARTITION_OFFSET,
     # then firmware bytes.
