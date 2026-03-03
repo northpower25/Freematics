@@ -289,11 +289,29 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
     # with partition-table data (not 0xE9), esptool would leave the embedded
     # firmware in its original QIO mode.  DIO works on every ESP32 flash chip
     # and is what the Freematics ONE+ 2nd-stage bootloader expects.
+    #
+    # When hash_appended=1 (byte offset 23 of the image header), ESP-IDF
+    # appends a SHA-256 digest of the entire image as the last 32 bytes.
+    # The 2nd-stage bootloader verifies this digest at boot and silently calls
+    # esp_restart() if it fails – producing an endless SW_RESET boot loop.
+    # We must recompute and update the digest after changing any header byte.
     _ESP32_IMAGE_MAGIC = 0xE9
     _FLASH_MODE_DIO = 0x02
+    _HASH_APPENDED_OFFSET = 23  # byte offset of hash_appended field in image header
+    _HASH_SIZE = 32              # SHA-256 digest length in bytes
     if len(firmware_data) > 2 and firmware_data[0] == _ESP32_IMAGE_MAGIC:
         firmware_data = bytearray(firmware_data)
         firmware_data[2] = _FLASH_MODE_DIO
+        # Re-compute the appended SHA-256 if present, so the bootloader's
+        # integrity check still passes after the flash-mode byte was changed.
+        _min_hash_len = _HASH_APPENDED_OFFSET + 1 + _HASH_SIZE
+        if (
+            len(firmware_data) >= _min_hash_len
+            and firmware_data[_HASH_APPENDED_OFFSET] == 1
+        ):
+            hash_start = len(firmware_data) - _HASH_SIZE
+            new_hash = hashlib.sha256(firmware_data[:hash_start]).digest()
+            firmware_data[hash_start:] = new_hash
 
     # Build the image: partition table, NVS bytes, 0xFF gap, then firmware.
     image = bytearray(b"\xff" * _APP_OFFSET_IN_IMAGE)
