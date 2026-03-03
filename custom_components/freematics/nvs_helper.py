@@ -34,7 +34,7 @@ an explicit offset with esptool or via the browser-based flasher.
     0x7000 –  end    Application firmware (telelogger.bin, flash mode = DIO)
 
   esptool usage:
-    esptool.py write_flash 0x9000 flash_image.bin
+    python -m esptool write-flash 0x9000 flash_image.bin
 """
 
 from __future__ import annotations
@@ -196,7 +196,8 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
       0x7000 – end    : Application firmware (telelogger.bin, flash mode
                         patched to DIO for maximum hardware compatibility)
 
-    When flashed at 0x9000 with ``esptool.py write_flash 0x9000 flash_image.bin``
+    When flashed at 0x9000 with
+    ``python -m esptool write-flash 0x9000 flash_image.bin``
     the device boots immediately with the correct settings.  The bootloader and
     partition table that are already on the device are not touched.
 
