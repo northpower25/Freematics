@@ -16,37 +16,49 @@ Stored NVS keys (namespace "storage"):
   WEBHOOK_PATH – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
   ENABLE_HTTPD – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
 
-Single-file flash image (esptool / browser flasher)
-----------------------------------------------------
-generate_flash_image() combines the NVS partition with the application firmware
-into one binary that must be written at NVS_PARTITION_OFFSET (0x9000) using
-an explicit offset with esptool or via the browser-based flasher.
+Single-file flash image (esptool)
+----------------------------------
+generate_flash_image() combines the partition table, NVS partition, and the
+application firmware into one binary written at PARTITION_TABLE_OFFSET (0x8000).
+Starting at 0x8000 ensures the correct huge_app partition table is always
+programmed, which is required for the firmware to locate the NVS and app
+partitions correctly and prevents a reset loop on devices that previously
+had a different partition scheme.
 
   **Important**: Do NOT use the Freematics Builder with this combined image.
   The Builder writes binaries at the app partition offset (0x10000), which
-  places NVS data at the wrong address and causes a restart loop.
+  places partition-table data where firmware belongs and causes a restart loop.
   For the Freematics Builder, use telelogger.bin (firmware only) and provision
   NVS settings separately via the browser-based flasher.
 
-  Layout (relative to NVS_PARTITION_OFFSET = 0x9000):
-    0x0000 – 0x4FFF  NVS partition (config_nvs.bin, 20 KB)
-    0x5000 – 0x6FFF  0xFF padding  (otadata region – preserved as erased)
-    0x7000 –  end    Application firmware (telelogger.bin, flash mode = DIO)
+  Layout (relative to PARTITION_TABLE_OFFSET = 0x8000):
+    0x0000 – 0x0FFF  Partition table  (huge_app scheme, 4 KB)
+    0x1000 – 0x5FFF  NVS partition    (config_nvs.bin, 20 KB)
+    0x6000 – 0x7FFF  0xFF padding     (otadata region – preserved as erased)
+    0x8000 –  end    Application firmware (telelogger.bin, flash mode = DIO)
 
   esptool usage:
-    python -m esptool write-flash 0x9000 flash_image.bin
+    python -m esptool write-flash 0x8000 flash_image.bin
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
+import struct
 import tempfile
 import types
 from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
+
+# Flash offset of the partition table (same across all ESP32 schemes).
+PARTITION_TABLE_OFFSET = 0x8000
+
+# Size of the ESP32 partition table block.
+PARTITION_TABLE_SIZE = 0x1000  # 4 096 bytes
 
 # Standard ESP32 NVS partition size used by the huge_app partition scheme.
 NVS_PARTITION_SIZE = 0x5000  # 20 480 bytes
@@ -57,9 +69,60 @@ NVS_PARTITION_OFFSET = 0x9000
 # Flash offset of the application partition (same across all common ESP32 schemes).
 APP_PARTITION_OFFSET = 0x10000
 
-# Byte offset of the application within the combined flash image
-# (APP_PARTITION_OFFSET - NVS_PARTITION_OFFSET = 0x7000).
-_APP_OFFSET_IN_IMAGE = APP_PARTITION_OFFSET - NVS_PARTITION_OFFSET
+# Byte offsets within the combined flash image (relative to PARTITION_TABLE_OFFSET).
+_NVS_OFFSET_IN_IMAGE = NVS_PARTITION_OFFSET - PARTITION_TABLE_OFFSET   # 0x1000
+_APP_OFFSET_IN_IMAGE = APP_PARTITION_OFFSET - PARTITION_TABLE_OFFSET    # 0x8000
+
+# ---------------------------------------------------------------------------
+# Partition-table generation
+# ---------------------------------------------------------------------------
+# Each partition entry is 32 bytes:
+#   2 B magic (0xAA 0x50) | 1 B type | 1 B subtype | 4 B offset | 4 B size
+#   | 16 B label (null-padded) | 4 B flags
+_PT_MAGIC = b"\xaa\x50"
+_PT_MD5_MAGIC = b"\xeb\xeb"
+_PT_ENTRY_SIZE = 32
+
+# huge_app partition layout (matches arduino-esp32 hardware/espressif/esp32/
+# tools/partitions/huge_app.csv):
+#   nvs      data/nvs      0x9000   0x5000
+#   otadata  data/ota      0xE000   0x2000
+#   app0     app/ota_0     0x10000  0x300000
+_HUGE_APP_PARTITIONS = [
+    # (name, type, subtype, offset, size)
+    ("nvs",     0x01, 0x02, 0x9000,  0x5000),
+    ("otadata", 0x01, 0x00, 0xE000,  0x2000),
+    ("app0",    0x00, 0x10, 0x10000, 0x300000),
+]
+
+
+def _make_partition_entry(
+    name: str, ptype: int, subtype: int, offset: int, size: int, flags: int = 0
+) -> bytes:
+    label = name.encode("utf-8")[:16].ljust(16, b"\x00")
+    return (
+        _PT_MAGIC
+        + bytes([ptype, subtype])
+        + struct.pack("<II", offset, size)
+        + label
+        + struct.pack("<I", flags)
+    )
+
+
+def _generate_partition_table() -> bytes:
+    """Return a 4 096-byte ESP32 partition-table binary for the huge_app scheme.
+
+    The table contains an MD5 checksum entry (compatible with ESP-IDF v4.x+)
+    and is padded to PARTITION_TABLE_SIZE with 0xFF bytes.
+    """
+    entries = b"".join(
+        _make_partition_entry(*p) for p in _HUGE_APP_PARTITIONS
+    )
+    md5_hash = hashlib.md5(entries).digest()
+    md5_entry = _PT_MD5_MAGIC + b"\xff" * 14 + md5_hash
+    table = entries + md5_entry
+    table += b"\xff" * (PARTITION_TABLE_SIZE - len(table))
+    return table
 
 
 def _nvs_available() -> bool:
@@ -182,24 +245,30 @@ def generate_nvs_partition(
 
 
 def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
-    """Combine NVS partition data with the application firmware into one binary.
+    """Combine partition table, NVS data, and firmware into one flash image.
 
-    The returned bytes must be flashed at NVS_PARTITION_OFFSET (0x9000) using
-    esptool with an explicit offset – do **not** use the Freematics Builder with
-    this file, because the Builder writes binaries at the app partition offset
-    (0x10000) which would place NVS data at the wrong address and cause a
-    restart loop.  Use esptool or the browser-based flasher instead.
+    The returned bytes must be flashed at PARTITION_TABLE_OFFSET (0x8000) using
+    esptool – do **not** use the Freematics Builder with this file, because the
+    Builder writes binaries at the app partition offset (0x10000) which would
+    place partition-table data where firmware belongs and cause a restart loop.
+    Use esptool instead.
 
-    Memory layout of the returned image (all offsets relative to 0x9000):
-      0x0000 – 0x4FFF : NVS partition  (20 KB, your WiFi/server settings)
-      0x5000 – 0x6FFF : 0xFF padding   (otadata region, written as erased)
-      0x7000 – end    : Application firmware (telelogger.bin, flash mode
+    Including the partition table ensures the device always has the correct
+    huge_app partition scheme, which is required for the firmware to locate the
+    NVS and app partitions.  Without it, a device that previously had a different
+    partition table would enter a reset loop.
+
+    Memory layout of the returned image (all offsets relative to 0x8000):
+      0x0000 – 0x0FFF : Partition table (huge_app scheme, 4 KB)
+      0x1000 – 0x5FFF : NVS partition   (20 KB, your WiFi/server settings)
+      0x6000 – 0x7FFF : 0xFF padding    (otadata region, written as erased)
+      0x8000 – end    : Application firmware (telelogger.bin, flash mode
                         patched to DIO for maximum hardware compatibility)
 
-    When flashed at 0x9000 with
-    ``python -m esptool write-flash 0x9000 flash_image.bin``
-    the device boots immediately with the correct settings.  The bootloader and
-    partition table that are already on the device are not touched.
+    When flashed at 0x8000 with
+    ``python -m esptool write-flash 0x8000 flash_image.bin``
+    the device boots immediately with the correct settings.  The bootloader at
+    0x1000 that is already on the device is not touched.
 
     Args:
         nvs_data:      NVS partition bytes returned by generate_nvs_partition().
@@ -217,24 +286,26 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
     # Patch the firmware's flash-mode byte (offset 2 in the ESP32 image header)
     # to DIO (0x02).  esptool's --flash_mode flag only patches binaries whose
     # first byte is the ESP32 magic (0xE9); because the combined image starts
-    # with NVS data (not 0xE9), esptool would leave the embedded firmware in
-    # its original QIO mode.  DIO works on every ESP32 flash chip and is what
-    # the Freematics ONE+ 2nd-stage bootloader expects, so we patch here.
+    # with partition-table data (not 0xE9), esptool would leave the embedded
+    # firmware in its original QIO mode.  DIO works on every ESP32 flash chip
+    # and is what the Freematics ONE+ 2nd-stage bootloader expects.
     _ESP32_IMAGE_MAGIC = 0xE9
     _FLASH_MODE_DIO = 0x02
     if len(firmware_data) > 2 and firmware_data[0] == _ESP32_IMAGE_MAGIC:
         firmware_data = bytearray(firmware_data)
         firmware_data[2] = _FLASH_MODE_DIO
 
-    # Build the image: NVS bytes, then 0xFF gap up to APP_PARTITION_OFFSET,
-    # then firmware bytes.
+    # Build the image: partition table, NVS bytes, 0xFF gap, then firmware.
     image = bytearray(b"\xff" * _APP_OFFSET_IN_IMAGE)
-    image[: len(nvs_data)] = nvs_data
+    pt_data = _generate_partition_table()
+    image[:PARTITION_TABLE_SIZE] = pt_data
+    image[_NVS_OFFSET_IN_IMAGE : _NVS_OFFSET_IN_IMAGE + len(nvs_data)] = nvs_data
     image += firmware_data
 
     _LOGGER.debug(
-        "Flash image generated: %d bytes (NVS=%d, firmware=%d)",
+        "Flash image generated: %d bytes (PT=%d, NVS=%d, firmware=%d)",
         len(image),
+        len(pt_data),
         len(nvs_data),
         len(firmware_data),
     )

@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.9.0";
+const PANEL_VERSION = "1.9.1";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -721,7 +721,7 @@ class FreematicsPanel extends HTMLElement {
                   &#11015; flash_image.bin
                 </a>
                 <span style="color:var(--secondary-text-color);font-size:.82rem">
-                  &nbsp;— NVS&nbsp;+&nbsp;firmware, for <strong>esptool</strong> at offset <code style="${cs}">0x9000</code>
+                  &nbsp;— Partition table&nbsp;+&nbsp;NVS&nbsp;+&nbsp;firmware, for <strong>esptool</strong> at offset <code style="${cs}">0x8000</code>
                 </span>
                 <div id="nvs-dl-status" style="font-size:.82rem;color:var(--secondary-text-color);margin-top:2px">
                   &#9203; Generating settings file…
@@ -740,8 +740,12 @@ class FreematicsPanel extends HTMLElement {
 
             <!-- flash_image.bin info box -->
             <div style="margin-top:8px;background:var(--primary-background-color);border-radius:4px;padding:8px 10px;font-size:.82rem;color:var(--secondary-text-color)">
-              <strong style="color:var(--primary-text-color)">&#8505; What flash_image.bin contains (offset&nbsp;0x9000)</strong><br>
+              <strong style="color:var(--primary-text-color)">&#8505; What flash_image.bin contains (offset&nbsp;0x8000)</strong><br>
               <table style="margin-top:4px;border-collapse:collapse;width:100%">
+                <tr>
+                  <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0x8000</code></td>
+                  <td>Partition table (huge_app scheme, 4 KB) — ensures the correct partition layout</td>
+                </tr>
                 <tr>
                   <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0x9000</code></td>
                   <td>NVS settings (20 KB) — your WiFi, server and webhook settings,
@@ -757,15 +761,14 @@ class FreematicsPanel extends HTMLElement {
                 </tr>
               </table>
               <p style="margin:6px 0 0">
-                The bootloader at <code style="${cs}">0x1000</code> and partition table at
-                <code style="${cs}">0x8000</code> are <strong>not overwritten</strong> —
-                the factory-programmed ones remain intact.
+                The bootloader at <code style="${cs}">0x1000</code> is <strong>not overwritten</strong> —
+                the factory-programmed one remains intact.
               </p>
               <p style="margin:4px 0 0;color:#e65100">
                 &#9888; <strong>flash_image.bin cannot be used with the Freematics Builder.</strong>
                 The Builder writes binaries at the app partition offset (0x10000), which would
-                place NVS data where firmware belongs and cause a restart loop.
-                Use esptool (Option A) or the browser flasher instead.
+                place partition-table data where firmware belongs and cause a restart loop.
+                Use esptool (Option A) instead.
               </p>
             </div>
 
@@ -797,8 +800,8 @@ class FreematicsPanel extends HTMLElement {
                 <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">pip install esptool</pre>
               </li>
               <li>Connect the device via USB, find the COM port (Windows: Device Manager → Ports, e.g. <code style="${cs}">COM3</code>; Linux: <code style="${cs}">/dev/ttyUSB0</code>)</li>
-              <li>Flash with a single command (replace <code style="${cs}">COM3</code> with your port):
-                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">esptool.py --chip esp32 --port COM3 --baud 921600 write_flash 0x9000 flash_image.bin</pre>
+              <li>Flash with a single command (esptool auto-detects the port; add <code style="${cs}">--port COM3</code> if it is not found):
+                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">python -m esptool write-flash 0x8000 flash_image.bin</pre>
               </li>
             </ol>
           </details>
@@ -835,7 +838,7 @@ class FreematicsPanel extends HTMLElement {
               <li>Add ESP32 board support: <em>File → Preferences → Board Manager URLs</em> → add <code style="${cs}">https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json</code>, then install <em>esp32 by Espressif</em></li>
               <li>Select board: <em>Tools → Board → ESP32 Arduino → ESP32 Dev Module</em></li>
               <li>Select port: <em>Tools → Port → COM3</em> (or your port)</li>
-              <li>Flash <code style="${cs}">flash_image.bin</code> at offset <code style="${cs}">0x9000</code> using esptool (see Option A above)</li>
+              <li>Flash <code style="${cs}">flash_image.bin</code> at offset <code style="${cs}">0x8000</code> using esptool (see Option A above)</li>
             </ol>
           </details>
         </div>
@@ -950,7 +953,7 @@ class FreematicsPanel extends HTMLElement {
       if (result && result.token) {
         this._provisioningManifestUrl = result.manifest_url || "/api/freematics/manifest.json";
 
-        // Combined single-file flash image (NVS + firmware, offset 0x9000)
+        // Combined single-file flash image (PT + NVS + firmware, offset 0x8000)
         const flashImageUrl = result.flash_image_url ||
           `/api/freematics/flash_image.bin?token=${result.token}`;
         if (flashImageLink) {
