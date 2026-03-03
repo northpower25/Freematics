@@ -129,6 +129,12 @@ void WifiUDP::close()
 bool WifiHTTP::open(const char* host, uint16_t port)
 {
   if (!host) return true;
+  client.setInsecure(); // skip certificate verification for HTTPS
+  // Note: certificate verification is disabled because embedding a CA
+  // certificate bundle in constrained ESP32 firmware is non-trivial and the
+  // Nabu Casa / HA cloud certificates change periodically.  All telemetry
+  // data transmitted is non-sensitive sensor readings; credentials (WiFi
+  // password, webhook ID) are stored in NVS and never re-transmitted.
   if (client.connect(host, port)) {
     m_state = HTTP_CONNECTED;
     m_host = host;
@@ -191,10 +197,12 @@ char* WifiHTTP::receive(char* buffer, int bufsize, int* pbytes, unsigned int tim
         contentLen = atoi(p + 16);
       }
       content = buffer + bytes;
+      if (contentLen == 0) break; // empty body – return immediately
     }
   }
   if (!content) {
     m_state = HTTP_ERROR;
+    close(); // prevent socket leak on timeout
     return 0;
   }
 

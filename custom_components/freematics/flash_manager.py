@@ -144,8 +144,10 @@ async def async_flash_wifi(
     except aiohttp.ClientConnectorError as exc:
         return False, (
             f"Cannot connect to device at {device_ip}:{device_port}.\n"
-            f"Ensure the device is powered on, in AP mode (SSID: TELELOGGER), "
-            f"and your computer is connected to the device's WiFi network.\n"
+            f"Ensure the device is powered on, connected to the local network, "
+            f"reachable from the Home Assistant server, and that the firmware "
+            f"was compiled with ENABLE_HTTPD=1 (check that config_nvs.bin was "
+            f"flashed so ENABLE_HTTPD is set in NVS).\n"
             f"Error: {exc}"
         )
     except asyncio.TimeoutError:

@@ -39,7 +39,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-from .const import CONF_WEBHOOK_ID, DOMAIN
+from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .views import (
     FreematicsConfigNvsView,
     FreematicsFirmwareView,
@@ -54,6 +54,64 @@ from .views import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "button"]
+
+
+def _parse_freematics_payload(body: str) -> dict:
+    """Parse the Freematics text telemetry format into a sensor-key → value dict.
+
+    The firmware serialises each data sample as comma-separated ``PID:value``
+    tokens, where PID is a hexadecimal string (upper-case, no leading zeros)
+    and value is a decimal number.  The message ends with ``*XX`` (checksum).
+
+    Multi-value PIDs (e.g. the 3-axis accelerometer, PID 0x20) use semicolons
+    to separate the components: ``20:-0.02;0.01;9.81``.
+
+    OBD-II PIDs are stored by the firmware with the 0x100 bit set so they do
+    not collide with GPS/device PIDs that share the same low byte:
+      PID_SPEED (0x0D) → stored as 0x10D → hex string ``"10D"``
+
+    Example input: ``"0:17225,24:370,20:0;0;0,82:29*DA"``
+    Returns: ``{"ts": 17225.0, "battery": 3.7, "acc_x": 0.0, ..., "device_temp": 29.0}``
+    """
+    # Strip the trailing *XX checksum.
+    star = body.find("*")
+    if star != -1:
+        body = body[:star]
+
+    result: dict = {}
+    for token in body.split(","):
+        token = token.strip()
+        colon = token.find(":")
+        if colon < 0:
+            continue
+        pid_hex = token[:colon].upper()
+        value_str = token[colon + 1:]
+
+        if pid_hex not in PID_MAP:
+            continue
+
+        key, scale = PID_MAP[pid_hex]
+
+        if key == "acc":
+            # 3-axis accelerometer: expand to individual acc_x / acc_y / acc_z.
+            parts = value_str.split(";")
+            for i, axis in enumerate(("acc_x", "acc_y", "acc_z")):
+                if i < len(parts):
+                    try:
+                        result[axis] = round(float(parts[i]) * scale, 6)
+                    except (ValueError, TypeError):
+                        pass
+        else:
+            # For other multi-value PIDs use only the first component.
+            raw = value_str.split(";")[0] if ";" in value_str else value_str
+            try:
+                val = float(raw) * scale
+                result[key] = round(val, 6)
+            except (ValueError, TypeError):
+                result[key] = raw
+
+    return result
+
 
 _WWW_DIR = Path(__file__).parent / "www"
 _PANEL_URL = "freematics-dashboard"
@@ -120,10 +178,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_webhook(hass, webhook_id, request):
         """Handle incoming telemetry data from the Freematics device."""
+        # The firmware sends data in Freematics text format:
+        #   "PID_HEX:value,PID_HEX:value,...*CHECKSUM"
+        # Try JSON first for forward compatibility, then fall back to the
+        # native Freematics text format.
+        data: dict | None = None
         try:
             data = await request.json()
         except Exception:  # noqa: BLE001
-            _LOGGER.warning("Freematics webhook received non-JSON payload")
+            pass
+
+        if data is None:
+            try:
+                body = await request.text()
+                if body:
+                    data = _parse_freematics_payload(body)
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning("Freematics webhook: failed to parse payload")
+
+        if not data:
+            _LOGGER.debug("Freematics webhook received empty or unparseable payload")
             return
 
         _LOGGER.debug("Freematics webhook received: %s", data)

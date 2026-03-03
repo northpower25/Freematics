@@ -56,12 +56,54 @@ SENSOR_DEFINITIONS = {
     "heading":        ("GPS Heading",         "°",     None,               "measurement"),
     "satellites":     ("GPS Satellites",      None,    None,               "measurement"),
     "hdop":           ("GPS HDOP",            None,    None,               "measurement"),
-    "acc_x":          ("Accelerometer X",     "m/s²",  None,               "measurement"),
-    "acc_y":          ("Accelerometer Y",     "m/s²",  None,               "measurement"),
-    "acc_z":          ("Accelerometer Z",     "m/s²",  None,               "measurement"),
+    "acc_x":          ("Accelerometer X",     "g",     None,               "measurement"),
+    "acc_y":          ("Accelerometer Y",     "g",     None,               "measurement"),
+    "acc_z":          ("Accelerometer Z",     "g",     None,               "measurement"),
     "battery":        ("Battery Voltage",     "V",     "voltage",          "measurement"),
     "signal":         ("Signal Strength",     "dBm",   "signal_strength",  "measurement"),
     "device_temp":    ("Device Temperature",  "°C",    "temperature",      "measurement"),
+}
+
+# Mapping from Freematics hex PID strings (as printed by %X) to (sensor_key, scale_factor).
+#
+# The firmware serialises each sample as "PID_HEX:value" pairs separated by
+# commas and terminated with "*CHECKSUM".  OBD-II PIDs are sent with the 0x100
+# bit set so they don't collide with the custom GPS/device PIDs that share the
+# same low-byte values:
+#
+#   e.g. PID_SPEED (0x0D)  → stored as 0x10D → hex string "10D"
+#        PID_GPS_SPEED (0x0D, no 0x100 bit) → hex string "D"
+#
+# scale_factor: multiply the raw integer value before storing.
+#   e.g. PID_BATTERY_VOLTAGE is stored as voltage*100 → scale 0.01 → V
+
+# Type alias for a PID mapping entry: (sensor_key, scale_factor)
+_PidMapping = tuple[str, float]
+
+PID_MAP: dict[str, _PidMapping] = {
+    # ── Custom / device PIDs (no 0x100 bit) ─────────────────────────
+    "0":   ("ts",            1.0),   # PID_TIMESTAMP: uptime ms (skipped by sensor)
+    "A":   ("lat",           1.0),   # PID_GPS_LATITUDE
+    "B":   ("lng",           1.0),   # PID_GPS_LONGITUDE
+    "C":   ("alt",           1.0),   # PID_GPS_ALTITUDE (m)
+    "D":   ("gps_speed",     1.0),   # PID_GPS_SPEED (already converted to km/h)
+    "E":   ("heading",       1.0),   # PID_GPS_HEADING (°)
+    "F":   ("satellites",    1.0),   # PID_GPS_SAT_COUNT
+    "10":  ("gps_time",      1.0),   # PID_GPS_TIME (HHMMSS, skipped by sensor)
+    "12":  ("hdop",          1.0),   # PID_GPS_HDOP
+    "20":  ("acc",           1.0),   # PID_ACC: x;y;z in g (expanded to acc_x/y/z)
+    "24":  ("battery",       0.01),  # PID_BATTERY_VOLTAGE: raw/100 → V
+    "81":  ("signal",        1.0),   # PID_CSQ: signal strength (dBm)
+    "82":  ("device_temp",   1.0),   # PID_DEVICE_TEMP (°C)
+    # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
+    "104": ("engine_load",   1.0),   # PID_ENGINE_LOAD (%)
+    "105": ("coolant_temp",  1.0),   # PID_COOLANT_TEMP (°C)
+    "10A": ("fuel_pressure", 1.0),   # PID_FUEL_PRESSURE (kPa)
+    "10C": ("rpm",           1.0),   # PID_RPM
+    "10D": ("speed",         1.0),   # PID_SPEED (km/h)
+    "10E": ("timing_advance",1.0),   # PID_TIMING_ADVANCE (°)
+    "10F": ("intake_temp",   1.0),   # PID_INTAKE_TEMP (°C)
+    "111": ("throttle",      1.0),   # PID_THROTTLE (%)
 }
 
 # Control commands supported by the device HTTP API (/api/control)
