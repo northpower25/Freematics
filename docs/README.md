@@ -248,15 +248,10 @@ This method uses `esptool` running on the **Home Assistant server** via the **Fl
 
 **Manual flash command** (if the button fails):
 ```bash
-esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
-  write_flash --flash_mode dio --flash_size detect \
+python3 -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
+  write-flash --flash_mode dio --flash_size detect \
   0x10000 custom_components/freematics/firmware/telelogger.bin
 ```
-
-> If `esptool` is not on your PATH (e.g. HA Container), run it as a Python module:
-> ```bash
-> python3 -m esptool --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 telelogger.bin
-> ```
 
 ---
 
@@ -424,7 +419,7 @@ If the device is already running and reachable on the network, and the firmware 
 - Use Chrome or Edge 89+ — Firefox does not support Web Serial API
 - Install the USB-Serial driver for your device (CP210x or CH340)
 - Try a different USB port or cable
-- The Web Serial API requires a **trusted HTTPS connection**; it will not work over plain HTTP on a local IP. Use Nabu Casa or a self-signed cert setup, or use the Manual Flash Fallback (esptool.py) method below.
+- The Web Serial API requires a **trusted HTTPS connection**; it will not work over plain HTTP on a local IP. Use Nabu Casa or a self-signed cert setup, or use the Manual Flash Fallback (esptool) method below.
 - If the progress bar stays stuck with no messages after selecting the COM port, the browser may have failed to connect silently. Try the Manual Flash Fallback method below.
 
 **Serial via HA Server (Method C):**
@@ -434,44 +429,45 @@ If the device is already running and reachable on the network, and the firmware 
 - Try reducing baud rate (edit `flash_manager.py` to use `115200`)
 - `esptool` is automatically installed by this integration. If it's still missing, run: `pip install esptool`
 
-### Manual Flash Fallback (esptool.py)
+### Manual Flash Fallback (esptool)
 
-If all automated methods fail, you can flash the firmware manually from **your own computer** using `esptool.py`. No special installation beyond Python is required.
+If all automated methods fail, you can flash the firmware manually from **your own computer** using `esptool`.
 
-**Step 1 – Download the firmware binary**
+**Step 1 – Install Python**
 
-Download `telelogger.bin` from your Home Assistant instance:
-```
-http://<your-ha-address>/api/freematics/firmware.bin
-```
-*(e.g. `http://homeassistant.local:8123/api/freematics/firmware.bin`)*
+Download and install Python from [https://www.python.org/downloads/](https://www.python.org/downloads/).
 
-Alternatively, find the bundled binary in the integration source at:
-`custom_components/freematics/firmware/telelogger.bin`
+> **Windows**: During installation, check **"Add Python to PATH"** so that `python` is available in the Command Prompt.
 
 **Step 2 – Install esptool**
+
+Open a terminal (Windows: Command Prompt or PowerShell) and run:
 
 ```bash
 pip install esptool
 ```
 
-**Step 3 – Find the COM port**
+**Step 3 – Download `flash_image.bin`**
+
+Open the **Freematics panel** in Home Assistant (sidebar → *Freematics ONE+*) and download the `flash_image.bin` link. This file contains your NVS settings and the firmware merged into a single binary, ready to flash at offset `0x9000`.
+
+**Step 4 – Find the COM port**
 
 - **Windows**: Open *Device Manager → Ports (COM & LPT)* — the device appears as `Silicon Labs CP210x USB to UART Bridge (COM3)` or `USB-Serial CH340 (COM4)`.
 - **Linux**: `dmesg | tail` after plugging in USB — look for `/dev/ttyUSB0` or `/dev/ttyACM0`.
 - **macOS**: `ls /dev/tty.usbserial*` or `ls /dev/tty.SLAB_USBtoUART*`.
 
-**Step 4 – Flash**
+**Step 5 – Flash**
 
 ```bash
-esptool.py --chip esp32 --port COM3 --baud 921600 \
-  write_flash --flash_mode dio --flash_size detect \
-  0x10000 telelogger.bin
+python -m esptool --chip esp32 --port COM3 --baud 921600 write-flash 0x9000 flash_image.bin
 ```
 
 *(Replace `COM3` with your port, e.g. `/dev/ttyUSB0` on Linux/macOS)*
 
-> If `esptool` is not on your PATH, use: `python3 -m esptool ...`
+> **Note:** Both `write-flash` (hyphen) and `write_flash` (underscore) are accepted by esptool. On Windows, always use `python -m esptool` instead of `esptool.py` directly.
+
+After flashing the device will reboot and connect to WiFi using the credentials baked into `flash_image.bin`.
 
 **Alternative: PlatformIO / VS Code**
 
@@ -838,38 +834,45 @@ Entitätsnamen folgen dem Muster:
 - Berechtigungen: `sudo chmod 666 /dev/ttyUSB0`
 - `esptool` wird automatisch durch die Integration installiert. Falls noch nicht vorhanden: `pip install esptool`
 
-**Manuelles Flashen als Fallback (esptool.py)**
+**Manuelles Flashen als Fallback (esptool)**
 
 Wenn alle automatisierten Methoden scheitern, kann die Firmware manuell vom eigenen Computer geflasht werden.
 
-**Schritt 1 – Firmware-Binary herunterladen**
+**Schritt 1 – Python installieren**
 
-```
-http://<ha-adresse>/api/freematics/firmware.bin
-```
-*(z.B. `http://homeassistant.local:8123/api/freematics/firmware.bin`)*
+Python von [https://www.python.org/downloads/](https://www.python.org/downloads/) herunterladen und installieren.
+
+> **Windows**: Beim Installieren die Option **„Add Python to PATH"** aktivieren, damit `python` in der Eingabeaufforderung verfügbar ist.
 
 **Schritt 2 – esptool installieren**
+
+Ein Terminal öffnen (Windows: Eingabeaufforderung oder PowerShell) und eingeben:
 
 ```bash
 pip install esptool
 ```
 
-**Schritt 3 – COM-Port ermitteln**
+**Schritt 3 – `flash_image.bin` herunterladen**
+
+Das **Freematics-Panel** in Home Assistant öffnen (Seitenleiste → *Freematics ONE+*) und den Link `flash_image.bin` herunterladen. Diese Datei enthält NVS-Einstellungen und Firmware in einer einzigen Binärdatei, die bei Offset `0x9000` geflasht wird.
+
+**Schritt 4 – COM-Port ermitteln**
 
 - **Windows**: Geräte-Manager → Anschlüsse (COM & LPT) → z.B. `COM3`
 - **Linux**: `dmesg | tail` nach dem Einstecken → z.B. `/dev/ttyUSB0`
 - **macOS**: `ls /dev/tty.usbserial*`
 
-**Schritt 4 – Flashen**
+**Schritt 5 – Flashen**
 
 ```bash
-esptool.py --chip esp32 --port COM3 --baud 921600 \
-  write_flash --flash_mode dio --flash_size detect \
-  0x10000 telelogger.bin
+python -m esptool --chip esp32 --port COM3 --baud 921600 write-flash 0x9000 flash_image.bin
 ```
 
 *(COM3 durch den eigenen Port ersetzen, z.B. `/dev/ttyUSB0`)*
+
+> **Hinweis:** Sowohl `write-flash` (Bindestrich) als auch `write_flash` (Unterstrich) werden von esptool akzeptiert. Unter Windows sollte immer `python -m esptool` statt `esptool.py` verwendet werden.
+
+Nach dem Flashen startet das Gerät neu und verbindet sich mit dem WLAN anhand der in `flash_image.bin` gespeicherten Zugangsdaten.
 
 **Alternative: PlatformIO / VS Code**
 
