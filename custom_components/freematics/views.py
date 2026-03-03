@@ -10,7 +10,7 @@ Serves the following endpoints:
                                           Requires ?token=<tok> issued by
                                           /api/freematics/provisioning_token.
   GET  /api/freematics/flash_image.bin  – Combined single-file flash image
-                                          (NVS + firmware merged, written at 0x9000).
+                                          (partition table + NVS + firmware, written at 0x8000).
                                           Requires ?token=<tok> issued by
                                           /api/freematics/provisioning_token.
   GET  /api/freematics/provisioning_token – (auth required) Issue a short-lived token
@@ -35,9 +35,10 @@ NVS provisioning flow
    already stored in NVS — no post-flash manual configuration needed.
 
 For manual flashing (Freematics Builder / esptool) the panel provides a
-single flash_image.bin download that contains both the NVS partition and the
-firmware merged into one file.  The user flashes it at offset 0x9000 and the
-device boots with the correct settings without needing to handle two files.
+single flash_image.bin download that contains the partition table, the NVS
+partition and the firmware merged into one file.  The user flashes it at
+offset 0x8000 and the device boots with the correct settings without needing
+to handle multiple files.
 """
 
 from __future__ import annotations
@@ -547,21 +548,25 @@ class FreematicsConfigNvsView(HomeAssistantView):
 
 
 class FreematicsFlashImageView(HomeAssistantView):
-    """Serve a combined single-file flash image (NVS + firmware) for manual flashing.
+    """Serve a combined single-file flash image (partition table + NVS + firmware).
 
     Accessible at GET /api/freematics/flash_image.bin?token=<token>.
 
     The returned binary merges:
+      - The huge_app partition table (0x8000, 4 KB)
       - The personalised NVS partition (0x9000, 20 KB) with device settings
       - 0xFF padding covering the otadata region (0xE000–0xFFFF)
       - The pre-compiled application firmware (telelogger.bin, from 0x10000)
 
-    The whole file is written at flash offset 0x9000 in a single operation:
-      esptool.py write_flash 0x9000 flash_image.bin
-    or via Freematics Builder by selecting the file with offset 0x9000.
+    The whole file is written at flash offset 0x8000 in a single operation:
+      python -m esptool write-flash 0x8000 flash_image.bin
 
-    This avoids the need to handle two separate files at different offsets —
-    one download, one flash command, device boots with the correct settings.
+    Including the partition table ensures the correct huge_app partition scheme
+    is always programmed, preventing a reset loop on devices that previously had
+    a different partition table.
+
+    Do NOT use the Freematics Builder with this file – the Builder writes at
+    0x10000 which would corrupt the partition layout and cause a restart loop.
 
     requires_auth is False; a valid provisioning token authorises access
     (same pattern as config_nvs.bin).
