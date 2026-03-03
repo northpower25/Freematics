@@ -204,12 +204,18 @@ def generate_nvs_partition(
             input=csv_path,
             output=bin_path,
             size=hex(NVS_PARTITION_SIZE),
-            # Use NVS format version 1 (page-header byte 0xFF = single-page blobs).
-            # Version 1 is supported by every ESP-IDF/Arduino release and prevents
-            # ESP_ERR_NVS_NEW_VERSION_FOUND on devices running older firmware.
-            # Our NVS values are all small (<128 B) so multi-page blobs (v2) are
-            # not needed.
-            version=1,
+            # Use NVS format version 2 (page-header byte 0xFE).
+            # The esp_idf_nvs_partition_gen tool's version=1 writes 0xFF to the
+            # page-header version field, but ESP-IDF 4.x (used by Arduino ESP32)
+            # defines NVS_VERSION=0xFE and rejects any page whose version byte is
+            # greater than that (0xFF > 0xFE → ESP_ERR_NVS_NEW_VERSION_FOUND).
+            # This error triggers nvs_flash_erase() in the firmware, which destroys
+            # provisioned WiFi credentials before loadConfig() can read them.
+            # version=2 writes 0xFE, which satisfies ESP-IDF 4.x (0xFE == NVS_VERSION)
+            # and is also accepted by 3.x (0xFE < 0xFF = NVS_VERSION there).
+            # All our NVS values are small strings/integers so multi-page blobs
+            # (the only functional difference of version=2) are never triggered.
+            version=2,
             outdir=tmpdir,
         )
 
