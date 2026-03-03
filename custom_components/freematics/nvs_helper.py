@@ -15,6 +15,20 @@ Stored NVS keys (namespace "storage"):
   SERVER_PORT  – HTTPS port, usually 443 (firmware v5.1+)
   WEBHOOK_PATH – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
   ENABLE_HTTPD – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
+
+Single-file flash image
+-----------------------
+generate_flash_image() combines the NVS partition with the application firmware
+into one binary that can be written at NVS_PARTITION_OFFSET in a single
+esptool / Freematics Builder operation:
+
+  Layout (relative to NVS_PARTITION_OFFSET = 0x9000):
+    0x0000 – 0x4FFF  NVS partition (config_nvs.bin, 20 KB)
+    0x5000 – 0x6FFF  0xFF padding  (otadata region – preserved as erased)
+    0x7000 –  end    Application firmware (telelogger.bin)
+
+  esptool usage:
+    esptool.py write_flash 0x9000 flash_image.bin
 """
 
 from __future__ import annotations
@@ -24,6 +38,7 @@ import logging
 import os
 import tempfile
 import types
+from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +47,13 @@ NVS_PARTITION_SIZE = 0x5000  # 20 480 bytes
 
 # Flash offset of the NVS partition in the huge_app scheme.
 NVS_PARTITION_OFFSET = 0x9000
+
+# Flash offset of the application partition (same across all common ESP32 schemes).
+APP_PARTITION_OFFSET = 0x10000
+
+# Byte offset of the application within the combined flash image
+# (APP_PARTITION_OFFSET - NVS_PARTITION_OFFSET = 0x7000).
+_APP_OFFSET_IN_IMAGE = APP_PARTITION_OFFSET - NVS_PARTITION_OFFSET
 
 
 def _nvs_available() -> bool:
@@ -113,7 +135,12 @@ def generate_nvs_partition(
             input=csv_path,
             output=bin_path,
             size=hex(NVS_PARTITION_SIZE),
-            version=2,
+            # Use NVS format version 1 (page-header byte 0xFF = single-page blobs).
+            # Version 1 is supported by every ESP-IDF/Arduino release and prevents
+            # ESP_ERR_NVS_NEW_VERSION_FOUND on devices running older firmware.
+            # Our NVS values are all small (<128 B) so multi-page blobs (v2) are
+            # not needed.
+            version=1,
             outdir=tmpdir,
         )
 
@@ -146,3 +173,47 @@ def generate_nvs_partition(
             # OSError covers file I/O failures in the temp directory.
             _LOGGER.error("Failed to generate NVS partition: %s", exc)
             return None
+
+
+def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
+    """Combine NVS partition data with the application firmware into one binary.
+
+    The returned bytes can be flashed at NVS_PARTITION_OFFSET (0x9000) in a
+    single operation using esptool or Freematics Builder – no need to handle
+    two separate files at different offsets.
+
+    Memory layout of the returned image (all offsets relative to 0x9000):
+      0x0000 – 0x4FFF : NVS partition  (20 KB, your WiFi/server settings)
+      0x5000 – 0x6FFF : 0xFF padding   (otadata region, written as erased)
+      0x7000 – end    : Application firmware (telelogger.bin)
+
+    When flashed at 0x9000 with ``esptool.py write_flash 0x9000 flash_image.bin``
+    the device boots immediately with the correct settings.  The bootloader and
+    partition table that are already on the device are not touched.
+
+    Args:
+        nvs_data:      NVS partition bytes returned by generate_nvs_partition().
+        firmware_path: Path to the pre-compiled application binary (telelogger.bin).
+
+    Returns:
+        Combined bytes on success, None on failure.
+    """
+    try:
+        firmware_data = firmware_path.read_bytes()
+    except OSError as exc:
+        _LOGGER.error("Failed to read firmware binary %s: %s", firmware_path, exc)
+        return None
+
+    # Build the image: NVS bytes, then 0xFF gap up to APP_PARTITION_OFFSET,
+    # then firmware bytes.
+    image = bytearray(b"\xff" * _APP_OFFSET_IN_IMAGE)
+    image[: len(nvs_data)] = nvs_data
+    image += firmware_data
+
+    _LOGGER.debug(
+        "Flash image generated: %d bytes (NVS=%d, firmware=%d)",
+        len(image),
+        len(nvs_data),
+        len(firmware_data),
+    )
+    return bytes(image)
