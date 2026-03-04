@@ -367,9 +367,9 @@ class FreematicsProxyOTAView(HomeAssistantView):
 
         from .flash_manager import async_flash_wifi  # noqa: PLC0415
 
-        ok, msg = await async_flash_wifi(device_ip, device_port)
+        ok, msg, log_lines = await async_flash_wifi(device_ip, device_port)
         return web.Response(
-            body=json.dumps({"ok": ok, "message": msg}).encode("utf-8"),
+            body=json.dumps({"ok": ok, "message": msg, "log": log_lines}).encode("utf-8"),
             content_type="application/json",
         )
 
