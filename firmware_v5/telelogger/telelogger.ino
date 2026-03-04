@@ -1289,7 +1289,8 @@ void processBLE(int timeout)
   } else if (!strcmp(cmd, "APN?")) {
     n += snprintf(buf + n, bufsize - n, "%s", *apn ? apn : "DEFAULT");
   } else if (!strncmp(cmd, "APN=", 4)) {
-    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") == ESP_OK ? "OK" : "ERR");
+    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") == ESP_OK
+        && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
     loadConfig();
   } else if (!strcmp(cmd, "NET_OP")) {
     if (state.check(STATE_WIFI_CONNECTED)) {
@@ -1317,13 +1318,15 @@ void processBLE(int timeout)
     n += snprintf(buf + n, bufsize - n, "%s", wifiSSID[0] ? wifiSSID : "-");
   } else if (!strncmp(cmd, "SSID=", 5)) {
     const char* p = cmd + 5;
-    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_SSID", strcmp(p, "-") ? p : "") == ESP_OK ? "OK" : "ERR");
+    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_SSID", strcmp(p, "-") ? p : "") == ESP_OK
+        && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
     loadConfig();
   } else if (!strcmp(cmd, "WPWD?")) {
     n += snprintf(buf + n, bufsize - n, "%s", wifiPassword[0] ? wifiPassword : "-");
   } else if (!strncmp(cmd, "WPWD=", 5)) {
     const char* p = cmd + 5;
-    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_PWD", strcmp(p, "-") ? p : "") == ESP_OK ? "OK" : "ERR");
+    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_PWD", strcmp(p, "-") ? p : "") == ESP_OK
+        && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
     loadConfig();
 #else
   } else if (!strcmp(cmd, "SSID?") || !strcmp(cmd, "WPWD?")) {
