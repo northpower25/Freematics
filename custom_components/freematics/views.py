@@ -527,7 +527,11 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         # settings — the device will use compile-time defaults.
         pass
 
-    if webhook_id:
+    # In datalogger mode (HTTPD enabled) the device serves a local HTTP API and
+    # must NOT send webhooks to HA – leave webhook_path empty so the firmware
+    # falls back to the legacy Freematics Hub path (or sends nothing when no
+    # hub host is set).  Webhooks are only used in telelogger mode.
+    if webhook_id and not enable_httpd:
         webhook_path = f"/api/webhook/{webhook_id}"
 
     return {

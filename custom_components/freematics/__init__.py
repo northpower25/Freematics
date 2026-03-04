@@ -210,6 +210,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webhook_id,
         handle_webhook,
         local_only=False,
+        allowed_methods=["POST"],
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {

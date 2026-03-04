@@ -69,9 +69,10 @@ class _FreematicsButton(ButtonEntity):
         """Initialise shared attributes."""
         self._entry = entry
         self._webhook_id = webhook_id
+        device_slug = webhook_id[:8]
         self._attr_device_info = {
             "identifiers": {(DOMAIN, webhook_id)},
-            "name": "Freematics ONE+",
+            "name": f"Freematics ONE+ ({device_slug})",
             "manufacturer": "Freematics",
             "model": "ONE+",
         }
