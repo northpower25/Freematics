@@ -148,10 +148,13 @@ bool WifiHTTP::open(const char* host, uint16_t port)
   //   RX 4096 B – sufficient for any HA/Nabu Casa webhook response record.
   //   TX 1024 B – records are split transparently by mbedtls_ssl_write() so
   //              multi-record writes work even when the payload exceeds 1 KB.
-#if ESP_ARDUINO_VERSION_MAJOR < 3
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR < 3
   // setBufferSizes was removed in arduino-esp32 3.x (ESP-IDF 5.x uses
   // CONFIG_MBEDTLS_DYNAMIC_BUFFER instead).  Keep it for 2.x to avoid
   // MBEDTLS_ERR_SSL_ALLOC_FAILED when heap is constrained by WiFi+BLE+HTTPD.
+  // Guard with defined() to prevent compiling this on toolchains where
+  // ESP_ARDUINO_VERSION_MAJOR is not yet defined (treated as 0 by the
+  // preprocessor, which would incorrectly include this 2.x-only call).
   client.setBufferSizes(4096, 1024);
 #endif
   if (client.connect(host, port)) {
