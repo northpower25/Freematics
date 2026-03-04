@@ -49,10 +49,13 @@ String ClientWIFI::getIP()
 bool ClientWIFI::begin(const char* ssid, const char* password)
 {
   //listAPs();
-  WiFi.begin(ssid, password);
 #ifndef ARDUINO_ESP32C3_DEV
-  WiFi.setTxPower(WIFI_POWER_8_5dBm); 
+  // Set TX power before begin so the full connection handshake (auth + DHCP)
+  // uses this power level. 17 dBm gives reliable range without maximum
+  // interference to the co-located cellular radio.
+  WiFi.setTxPower(WIFI_POWER_17dBm);
 #endif
+  WiFi.begin(ssid, password);
   return true;
 }
 
@@ -217,7 +220,10 @@ char* WifiHTTP::receive(char* buffer, int bufsize, int* pbytes, unsigned int tim
 *******************************************************************************/
 bool CellSIMCOM::begin(CFreematics* device)
 {
-  getBuffer();
+  if (!getBuffer()) {
+    Serial.println("[CELL] OOM: buffer allocation failed");
+    return false;
+  }
   m_device = device;
   for (byte n = 0; n < 30; n++) {
     device->xbTogglePower(200);
@@ -283,6 +289,7 @@ void CellSIMCOM::end()
 
 bool CellSIMCOM::setup(const char* apn, const char* username, const char* password, unsigned int timeout)
 {
+  if (!m_buffer) return false;
   uint32_t t = millis();
   bool success = false;
 
@@ -565,6 +572,7 @@ String CellSIMCOM::queryIP(const char* host)
 
 bool CellSIMCOM::sendCommand(const char* cmd, unsigned int timeout, const char* expected)
 {
+  if (!m_buffer) return false;
   if (cmd) {
     m_device->xbWrite(cmd);
     delay(10);

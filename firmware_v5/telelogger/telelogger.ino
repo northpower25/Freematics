@@ -1405,15 +1405,14 @@ void setup()
 {
   delay(500);
 
-  // Initialize NVS.  If the partition is genuinely corrupt, erase it and
-  // reinitialize so the device can still boot instead of looping.
-  // NOTE: this erase destroys any provisioned WiFi/server settings; it should
-  // only be reached on truly corrupt data – a freshly-provisioned
-  // config_nvs.bin written by the HA integration will NOT trigger it because
-  // the partition is generated with NVS page-header version 0xFE, which is
-  // exactly what ESP-IDF 4.x (Arduino ESP32) expects (NVS_VERSION = 0xFE).
+  // Initialize NVS.  Only erase and reinitialize for the two errors that ESP-IDF
+  // documents as requiring a full partition erase: no free pages (partition is
+  // full) and new-version-found (written by a newer NVS implementation).
+  // For all other errors the partition may still be partially readable; erasing
+  // it would destroy provisioned WiFi/server credentials unnecessarily and
+  // prevent WiFi from connecting on subsequent boots.
   esp_err_t err = nvs_flash_init();
-  if (err != ESP_OK) {
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     if (nvs_flash_erase() == ESP_OK) {
       err = nvs_flash_init();
     }
