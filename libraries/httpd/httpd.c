@@ -616,6 +616,13 @@ void mwHttpLoop(HttpParam *hp, uint32_t timeout)
 
 		//fill structure with data
 		_mwInitSocketData(phsSocketCur);
+		if (!phsSocketCur->buffer) {
+			SYSLOG(LOG_INFO,"[%d] OOM: dropping connection\n",phsSocketCur->socket);
+			closesocket(phsSocketCur->socket);
+			phsSocketCur->socket = 0;
+			hp->stats.clientCount--;
+			break;
+		}
 		phsSocketCur->tmExpirationTime = time(NULL) + HTTP_EXPIRATION_TIME;
 
 		//update max client count
