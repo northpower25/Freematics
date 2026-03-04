@@ -402,7 +402,10 @@ bool serverSetup(IPAddress& ip)
 
     mwInitParam(&httpParam, 80, "/spiffs");
     httpParam.pxUrlHandler = urlHandlerList;
-    httpParam.maxClients = 4;
+    // Limit to 2 simultaneous clients to reduce peak heap usage.
+    // With HTTP_BUFFER_SIZE = 4 KB, two connections consume only 8 KB versus
+    // the 64 KB that four 16 KB buffers would have needed.
+    httpParam.maxClients = 2;
 
     if (mwServerStart(&httpParam)) {
         return false;

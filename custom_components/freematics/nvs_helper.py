@@ -8,13 +8,15 @@ The generated image is compatible with the NVS partition at offset 0x9000
 used by the 'huge_app' partition scheme (board_build.partitions = huge_app.csv).
 
 Stored NVS keys (namespace "storage"):
-  WIFI_SSID    – WiFi SSID
-  WIFI_PWD     – WiFi password
-  CELL_APN     – Cellular APN (empty string = auto)
-  SERVER_HOST  – HA hostname / Nabu Casa *.ui.nabu.casa (firmware v5.1+)
-  SERVER_PORT  – HTTPS port, usually 443 (firmware v5.1+)
-  WEBHOOK_PATH – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
-  ENABLE_HTTPD – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
+  WIFI_SSID     – WiFi SSID
+  WIFI_PWD      – WiFi password
+  CELL_APN      – Cellular APN (empty string = auto)
+  SERVER_HOST   – HA hostname / Nabu Casa *.ui.nabu.casa (firmware v5.1+)
+  SERVER_PORT   – HTTPS port, usually 443 (firmware v5.1+)
+  WEBHOOK_PATH  – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
+  ENABLE_HTTPD  – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
+  DATA_INTERVAL – Telemetry post interval in ms (≥500; 0 = firmware default ≈1000 ms)
+  SYNC_INTERVAL – Server-sync check interval in seconds (0 = firmware default 120 s)
 
 Single-file flash image (esptool)
 ----------------------------------
@@ -141,7 +143,9 @@ def generate_nvs_partition(
     server_host: str = "",
     server_port: int = 443,
     webhook_path: str = "",
-    enable_httpd: bool = True,
+    enable_httpd: bool = False,
+    data_interval_ms: int = 0,
+    sync_interval_s: int = 0,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -187,9 +191,15 @@ def generate_nvs_partition(
         _add_u16("SERVER_PORT", server_port)
     if webhook_path:
         _add_str("WEBHOOK_PATH", webhook_path)
-    # Enable the built-in HTTP server on first boot (requires ENABLE_HTTPD=1
-    # compiled into the firmware).
+    # Enable the built-in HTTP server (requires ENABLE_HTTPD=1 compiled into firmware).
+    # Defaults to disabled to preserve RAM for the TLS webhook client.
     _add_u8("ENABLE_HTTPD", 1 if enable_httpd else 0)
+    # Optional data-interval override (ms).  0 = firmware compile-time default.
+    if data_interval_ms and data_interval_ms >= 500:
+        _add_u16("DATA_INTERVAL", data_interval_ms)
+    # Optional server-sync-interval override (s).  0 = firmware compile-time default.
+    if sync_interval_s and sync_interval_s > 0:
+        _add_u16("SYNC_INTERVAL", sync_interval_s)
 
     csv_content = "\n".join(rows) + "\n"
 

@@ -32,6 +32,9 @@ extern char serverHost[];
 extern uint16_t serverPort;
 // WEBHOOK_PATH: when non-empty, replaces the legacy /hub/api/post/<devid> path.
 extern char webhookPath[];
+// Runtime HTTP-server flag: 1 when the built-in HTTPD is running (set by loadConfig()).
+// Used by TeleClientHTTP::shutdown() to avoid disconnecting WiFi while HTTPD is active.
+extern uint8_t enableHttpd;
 #undef SERVER_HOST
 #define SERVER_HOST serverHost
 #undef SERVER_PORT
@@ -551,7 +554,11 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
 #if ENABLE_WIFI
-  if ((wifi.connected() && wifi.state() != HTTP_CONNECTED) || cell.state() != HTTP_CONNECTED) {
+  // Only check the active interface: WiFi when connected, cellular otherwise.
+  // The old OR condition checked cell.state() unconditionally, which was always
+  // HTTP_DISCONNECTED when WiFi was in use, forcing a new TLS handshake before
+  // every single POST and preventing keep-alive reuse.
+  if (wifi.connected() ? wifi.state() != HTTP_CONNECTED : cell.state() != HTTP_CONNECTED) {
 #else
   if (cell.state() != HTTP_CONNECTED) {
 #endif
@@ -681,15 +688,22 @@ bool TeleClientHTTP::connect(bool quick)
   }
   if (quick) return true;
   if (!login) {
-    Serial.print("LOGIN(");
-    Serial.print(SERVER_HOST);
-    Serial.print(':');
-    Serial.print(SERVER_PORT);
-    Serial.println(")...");
-    // log in or reconnect to Freematics Hub
-    if (notify(EVENT_LOGIN)) {
-      lastSyncTime = millis();
+    if (webhookPath[0]) {
+      // Webhook mode: HA has no /notify endpoint, so skip the login handshake.
+      // Mark as logged-in immediately so the transmit loop proceeds.
       login = true;
+      lastSyncTime = millis();
+    } else {
+      Serial.print("LOGIN(");
+      Serial.print(SERVER_HOST);
+      Serial.print(':');
+      Serial.print(SERVER_PORT);
+      Serial.println(")...");
+      // log in or reconnect to Freematics Hub
+      if (notify(EVENT_LOGIN)) {
+        lastSyncTime = millis();
+        login = true;
+      }
     }
   }
   return true;
@@ -703,14 +717,27 @@ bool TeleClientHTTP::ping()
 void TeleClientHTTP::shutdown()
 {
   if (login) {
-    notify(EVENT_LOGOUT);
+    // Only send logout for Freematics Hub (webhookPath empty); HA has no logout endpoint.
+    if (!webhookPath[0]) notify(EVENT_LOGOUT);
     login = false;
     Serial.println("[NET] Logout");
   }
 #if ENABLE_WIFI
   if (wifi.connected()) {
+    wifi.close(); // close the active TLS session
+#if ENABLE_HTTPD
+    // Keep the WiFi station interface alive so the built-in HTTP server
+    // (if enabled at runtime via enableHttpd) remains reachable during standby.
+    if (!enableHttpd) {
+      wifi.end();
+      Serial.println("[WIFI] Deactivated");
+    } else {
+      Serial.println("[WIFI] TLS closed, HTTPD still running");
+    }
+#else
     wifi.end();
     Serial.println("[WIFI] Deactivated");
+#endif
     return;
   }
 #endif

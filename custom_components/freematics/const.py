@@ -39,6 +39,21 @@ SIGNAL_DATA_RECEIVED = f"{DOMAIN}_data_received"
 # Dispatcher signal prefix for webhook data
 DISPATCHER_PREFIX = DOMAIN
 
+# Advanced firmware settings stored in NVS and written to the device during flash
+CONF_ENABLE_HTTPD = "enable_httpd"
+CONF_DATA_INTERVAL_MS = "data_interval_ms"
+CONF_SYNC_INTERVAL_S = "sync_interval_s"
+
+# Device model identifiers (Freematics ONE+ variants)
+CONF_DEVICE_MODEL = "device_model"
+DEVICE_MODEL_A = "model_a"   # Model A: WiFi + Bluetooth (no cellular)
+DEVICE_MODEL_B = "model_b"   # Model B: WiFi + Bluetooth + 4G cellular
+DEVICE_MODEL_H = "model_h"   # Model H: WiFi only (no BT, no cellular)
+
+# Defaults for advanced settings (0 = use firmware compile-time default)
+DEFAULT_DATA_INTERVAL_MS = 0    # 0 = firmware default ≈1000 ms
+DEFAULT_SYNC_INTERVAL_S = 0     # 0 = firmware default 120 s
+
 # JSON payload keys sent by the firmware → (friendly name, unit, device class, state class)
 SENSOR_DEFINITIONS = {
     "speed":          ("Speed",               "km/h",  "speed",            "measurement"),
