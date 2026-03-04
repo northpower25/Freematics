@@ -15,6 +15,7 @@ Stored NVS keys (namespace "storage"):
   SERVER_PORT   – HTTPS port, usually 443 (firmware v5.1+)
   WEBHOOK_PATH  – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
   ENABLE_HTTPD  – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
+  ENABLE_BLE    – 0 = disable BLE SPP server (frees ~100 KB heap for TLS webhook)
   DATA_INTERVAL – Telemetry post interval in ms (≥500; 0 = firmware default ≈1000 ms)
   SYNC_INTERVAL – Server-sync check interval in seconds (0 = firmware default 120 s)
 
@@ -144,6 +145,7 @@ def generate_nvs_partition(
     server_port: int = 443,
     webhook_path: str = "",
     enable_httpd: bool = False,
+    enable_ble: bool = False,
     data_interval_ms: int = 0,
     sync_interval_s: int = 0,
 ) -> bytes | None:
@@ -194,6 +196,11 @@ def generate_nvs_partition(
     # Enable the built-in HTTP server (requires ENABLE_HTTPD=1 compiled into firmware).
     # Defaults to disabled to preserve RAM for the TLS webhook client.
     _add_u8("ENABLE_HTTPD", 1 if enable_httpd else 0)
+    # Enable/disable BLE SPP server.  Disabling frees ~100 KB of heap, which
+    # prevents MBEDTLS_ERR_SSL_ALLOC_FAILED on the HTTPS webhook connection.
+    # The firmware defaults to BLE on for un-provisioned devices; this key
+    # overrides that default.
+    _add_u8("ENABLE_BLE", 1 if enable_ble else 0)
     # Optional data-interval override (ms).  0 = firmware compile-time default.
     if data_interval_ms and data_interval_ms >= 500:
         _add_u16("DATA_INTERVAL", data_interval_ms)

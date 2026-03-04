@@ -90,6 +90,11 @@ char webhookPath[128] = "";
 // provisioned by the HA integration config_nvs.bin.  Only takes effect
 // when the firmware is compiled with ENABLE_HTTPD=1.
 uint8_t enableHttpd = 0;
+// Runtime BLE enable – set to 0 via NVS key ENABLE_BLE to disable the BLE
+// SPP server and free ~100 KB heap for the TLS webhook client.  Defaults to
+// 1 (on) so devices that were never provisioned keep the previous behaviour.
+// Only takes effect when the firmware is compiled with ENABLE_BLE=1.
+uint8_t enableBle = 1;
 nvs_handle_t nvs;
 
 // live data
@@ -1259,6 +1264,18 @@ void loadConfig()
     enableHttpd = nvsHttpd;
   }
 
+#if ENABLE_BLE
+  // Enable/disable BLE at runtime.  NVS key ENABLE_BLE is written by the HA
+  // integration (0 = off, 1 = on).  Disabling BLE frees ~100 KB of heap,
+  // which prevents MBEDTLS_ERR_SSL_ALLOC_FAILED during the TLS handshake for
+  // the HTTPS webhook.  The key is absent on un-provisioned devices so the
+  // default (enableBle = 1) preserves backwards-compatible behaviour.
+  uint8_t nvsBle = 1;
+  if (nvs_get_u8(nvs, "ENABLE_BLE", &nvsBle) == ESP_OK) {
+    enableBle = nvsBle;
+  }
+#endif
+
   // Optional data-interval override (milliseconds). Minimum 500 ms to avoid
   // flooding the server or the SD card.  0 / missing = keep compile-time default.
   uint16_t nvsDataInterval = 0;
@@ -1276,6 +1293,10 @@ void loadConfig()
 void processBLE(int timeout)
 {
 #if ENABLE_BLE
+  if (!enableBle) {
+    if (timeout) delay(timeout);
+    return;
+  }
   static byte echo = 0;
   char* cmd;
   if (!(cmd = ble_recv_command(timeout))) {
@@ -1545,8 +1566,10 @@ if (!state.check(STATE_MEMS_READY)) do {
   state.set(STATE_WORKING);
 
 #if ENABLE_BLE
-  // init BLE
-  ble_init("FreematicsPlus");
+  if (enableBle) {
+    // init BLE
+    ble_init("FreematicsPlus");
+  }
 #endif
 
   // initialize components

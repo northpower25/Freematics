@@ -41,6 +41,7 @@ DISPATCHER_PREFIX = DOMAIN
 
 # Advanced firmware settings stored in NVS and written to the device during flash
 CONF_ENABLE_HTTPD = "enable_httpd"
+CONF_ENABLE_BLE = "enable_ble"
 CONF_DATA_INTERVAL_MS = "data_interval_ms"
 CONF_SYNC_INTERVAL_S = "sync_interval_s"
 

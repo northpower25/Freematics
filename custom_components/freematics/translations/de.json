@@ -40,9 +40,10 @@
       },
       "advanced": {
         "title": "Freematics ONE+ – Erweiterte Firmware-Einstellungen",
-        "description": "Diese Einstellungen werden während des Flashens in den NVS (nicht-flüchtigen Speicher) des Geräts geschrieben und gelten ab dem nächsten Boot.\n\n**Interner HTTP-Server**: Stellt eine lokale REST-API (`/api/live`, `/api/info`, …) auf Port 80 bereit. *Deaktivieren*, um ~4 KB RAM zu sparen und die Webhook-Zuverlässigkeit zu verbessern. Nur sinnvoll, wenn Sie Live-Datenzugriff im lokalen Netzwerk benötigen.\n\n**Datenübertragungs-Intervall**: Wie häufig (ms) das Gerät Telemetriedaten an den Webhook sendet. `0` = Firmware-Standard (~1000 ms).\n\n**Server-Sync-Intervall**: Wie häufig (s) das Gerät die Verbindung prüft. `0` = Firmware-Standard (120 s).",
+        "description": "Diese Einstellungen werden während des Flashens in den NVS (nicht-flüchtigen Speicher) des Geräts geschrieben und gelten ab dem nächsten Boot.\n\n**Betriebsmodi**\n\n- **Telelogger (Webhook → Home Assistant)** *(empfohlen)*: HTTPD und BLE *deaktivieren*. Dies gibt den meisten RAM frei (~100 KB durch BLE + ~4 KB durch HTTPD) und verhindert den TLS-Speicherfehler (`-32512`), der die Webhook-Verbindung blockiert.\n- **Datalogger (lokale HTTP-API)**: HTTPD aktivieren, um `/api/live`, `/api/info` und ähnliche REST-Endpunkte auf Port 80 für den lokalen Netzwerkzugriff bereitzustellen. BLE kann optional für die Freematics Controller App aktiviert werden.\n\n**Interner HTTP-Server (HTTPD)**: Lokale REST-API auf Port 80. Deaktivieren spart ~4 KB RAM.\n\n**BLE (Bluetooth)**: SPP-Server für die Freematics Controller App. *Deaktivieren* gibt ~100 KB RAM frei – **erforderlich** für zuverlässigen Webhook/HTTPS-Betrieb auf Model A/B mit WLAN.\n\n**Datenübertragungs-Intervall**: Wie häufig (ms) das Gerät Telemetriedaten an den Webhook sendet. `0` = Firmware-Standard (~1000 ms).\n\n**Server-Sync-Intervall**: Wie häufig (s) das Gerät die Verbindung prüft. `0` = Firmware-Standard (120 s).",
         "data": {
-          "enable_httpd": "Internen HTTP-Server aktivieren",
+          "enable_httpd": "Internen HTTP-Server aktivieren (HTTPD)",
+          "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard ~1000)",
           "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard 120)"
         }
@@ -72,7 +73,8 @@
           "wifi_password": "WLAN-Passwort",
           "cell_apn": "Mobilfunk-APN",
           "device_model": "Gerätemodell",
-          "enable_httpd": "Internen HTTP-Server aktivieren",
+          "enable_httpd": "Internen HTTP-Server aktivieren (HTTPD)",
+          "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard)",
           "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard)",
           "device_ip": "Geräte-IP-Adresse",

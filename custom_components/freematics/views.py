@@ -57,6 +57,7 @@ from homeassistant.components.http import HomeAssistantView
 from .const import (
     CONF_CELL_APN,
     CONF_DATA_INTERVAL_MS,
+    CONF_ENABLE_BLE,
     CONF_ENABLE_HTTPD,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
@@ -493,6 +494,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     cell_apn = cfg.get(CONF_CELL_APN, "")
     webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
     enable_httpd = bool(cfg.get(CONF_ENABLE_HTTPD, False))
+    enable_ble = bool(cfg.get(CONF_ENABLE_BLE, False))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
 
@@ -527,6 +529,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "server_port": server_port,
         "webhook_path": webhook_path,
         "enable_httpd": enable_httpd,
+        "enable_ble": enable_ble,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
     }
@@ -582,6 +585,9 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs["server_port"],
             kwargs["webhook_path"],
             kwargs["enable_httpd"],
+            kwargs["enable_ble"],
+            kwargs["data_interval_ms"],
+            kwargs["sync_interval_s"],
         )
 
         if nvs_data is None:
@@ -664,6 +670,9 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs["server_port"],
             kwargs["webhook_path"],
             kwargs["enable_httpd"],
+            kwargs["enable_ble"],
+            kwargs["data_interval_ms"],
+            kwargs["sync_interval_s"],
         )
 
         if nvs_data is None:

@@ -56,7 +56,7 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **Freematics ONE+** and click it
-3. Follow the 5-step wizard:
+3. Follow the 7-step wizard:
 
 ### Step 1 – Connection Type
 
@@ -92,7 +92,41 @@ A unique webhook ID is auto-generated. **Copy these values** — you will need t
 
 You can edit the Webhook ID if you want a custom value, or leave the auto-generated one.
 
-### Step 5 – Flash Method
+### Step 5 – Device Model
+
+Select your Freematics ONE+ hardware model (A, B, or H).
+
+### Step 6 – Advanced Firmware Settings (Operating Mode)
+
+This step lets you choose between two operating modes and configure BLE. Settings are written to the device's NVS during flash.
+
+#### Telelogger mode *(Webhook → Home Assistant, recommended)*
+
+| Setting | Recommended value |
+|---|---|
+| Enable HTTPD | ❌ Off |
+| Enable BLE | ❌ Off |
+
+**Why disable BLE?** The BLE stack consumes approximately 100 KB of heap. When WiFi is also active, there may not be enough contiguous free memory for the TLS handshake, causing a `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error and preventing the HTTPS webhook from connecting. Disabling BLE is the **primary fix** for this error.
+
+**Why disable HTTPD?** The built-in HTTP server uses another ~4 KB of heap. Disabling it further improves stability.
+
+#### Datalogger mode *(local HTTP API)*
+
+| Setting | Recommended value |
+|---|---|
+| Enable HTTPD | ✅ On |
+| Enable BLE | Optional (for Freematics Controller App) |
+
+Enable HTTPD to expose `/api/live`, `/api/info`, and related REST endpoints on port 80. Useful for local network access without Home Assistant.
+
+> **Note:** The firmware always logs to the SD card regardless of mode. "Telelogger" and "Datalogger" refer to how data is transmitted, not whether it is stored locally.
+
+#### BLE (Bluetooth)
+
+The BLE SPP server allows the **Freematics Controller App** to connect to the device over Bluetooth. If you do not use the app, leave BLE disabled to maximise available heap for the TLS webhook client.
+
+### Step 7 – Flash Method
 
 Choose how to flash the firmware:
 
@@ -395,6 +429,25 @@ If the device is already running and reachable on the network, and the firmware 
 ---
 
 ## Troubleshooting
+
+### Webhook not connecting – SSL memory error (`-32512`)
+
+If your serial monitor shows:
+
+```
+[E][ssl_client.cpp] _handle_error(): (-32512) SSL - Memory allocation failed
+[HTTP] Unable to connect
+```
+
+This is `MBEDTLS_ERR_SSL_ALLOC_FAILED`. The BLE stack (~100 KB) and optionally the built-in HTTP server (~4 KB) leave insufficient contiguous heap for the TLS handshake.
+
+**Fix:** Go to the integration **Options** → **Advanced Firmware Settings** and:
+
+1. Set **Enable BLE** → ❌ Off
+2. Set **Enable HTTPD** → ❌ Off
+3. Re-flash the device
+
+Disabling BLE is the most impactful change. After flashing, the webhook connection should succeed.
 
 ### No sensor data arriving
 

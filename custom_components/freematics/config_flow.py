@@ -17,6 +17,7 @@ from .const import (
     CONF_DEVICE_IP,
     CONF_DEVICE_MODEL,
     CONF_DEVICE_PORT,
+    CONF_ENABLE_BLE,
     CONF_ENABLE_HTTPD,
     CONF_FLASH_METHOD,
     CONF_SERIAL_PORT,
@@ -202,6 +203,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_ENABLE_HTTPD, default=False): bool,
+                    vol.Optional(CONF_ENABLE_BLE, default=False): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -297,6 +299,10 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_ENABLE_HTTPD,
                         default=current.get(CONF_ENABLE_HTTPD, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ENABLE_BLE,
+                        default=current.get(CONF_ENABLE_BLE, False),
                     ): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,
