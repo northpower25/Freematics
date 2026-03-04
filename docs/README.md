@@ -96,35 +96,20 @@ You can edit the Webhook ID if you want a custom value, or leave the auto-genera
 
 Select your Freematics ONE+ hardware model (A, B, or H).
 
-### Step 6 – Advanced Firmware Settings (Operating Mode)
+### Step 6 – Operating Mode
 
-This step lets you choose between two operating modes and configure BLE. Settings are written to the device's NVS during flash.
+Choose how the device should operate after flashing:
 
-#### Telelogger mode *(Webhook → Home Assistant, recommended)*
-
-| Setting | Recommended value |
+| Mode | Description |
 |---|---|
-| Enable HTTPD | ❌ Off |
-| Enable BLE | ❌ Off |
+| **Telelogger – Webhook → Home Assistant** *(recommended)* | Pushes telemetry directly to the HA webhook. HTTPD and BLE are automatically disabled, freeing ~104 KB of heap — **required** for the TLS connection to succeed. |
+| **Datalogger – Local HTTP API (HTTPD)** | Enables the built-in HTTP server on port 80 (`/api/live`, `/api/info`, …) for local network access. Use this if you don't need the HA webhook or want a local dashboard. |
 
-**Why disable BLE?** The BLE stack consumes approximately 100 KB of heap. When WiFi is also active, there may not be enough contiguous free memory for the TLS handshake, causing a `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error and preventing the HTTPS webhook from connecting. Disabling BLE is the **primary fix** for this error.
+**BLE (Bluetooth SPP server)** — independent of the mode selection. Enable only if you use the Freematics Controller App over Bluetooth. Keeping BLE off is strongly recommended for Telelogger mode because the BLE stack uses ~100 KB of heap.
 
-**Why disable HTTPD?** The built-in HTTP server uses another ~4 KB of heap. Disabling it further improves stability.
+**Intervals** — leave at `0` to keep firmware defaults (~1000 ms data interval, 120 s sync interval).
 
-#### Datalogger mode *(local HTTP API)*
-
-| Setting | Recommended value |
-|---|---|
-| Enable HTTPD | ✅ On |
-| Enable BLE | Optional (for Freematics Controller App) |
-
-Enable HTTPD to expose `/api/live`, `/api/info`, and related REST endpoints on port 80. Useful for local network access without Home Assistant.
-
-> **Note:** The firmware always logs to the SD card regardless of mode. "Telelogger" and "Datalogger" refer to how data is transmitted, not whether it is stored locally.
-
-#### BLE (Bluetooth)
-
-The BLE SPP server allows the **Freematics Controller App** to connect to the device over Bluetooth. If you do not use the app, leave BLE disabled to maximise available heap for the TLS webhook client.
+> **Note:** The firmware always logs data to the SD card regardless of mode. "Telelogger" and "Datalogger" describe how data is *transmitted*, not whether it is stored locally.
 
 ### Step 7 – Flash Method
 
