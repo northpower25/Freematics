@@ -1206,6 +1206,12 @@ void showSysInfo()
   oled.print("DEVICE ID:");
   oled.println(devid);
 #endif
+  Serial.print("FW:");
+  Serial.print(FIRMWARE_VERSION);
+  Serial.print(" Built:");
+  Serial.print(__DATE__);
+  Serial.print(" ");
+  Serial.println(__TIME__);
 }
 
 void loadConfig()
