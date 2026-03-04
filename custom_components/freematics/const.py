@@ -61,29 +61,36 @@ DEVICE_MODEL_H = "model_h"   # Model H: WiFi only (no BT, no cellular)
 DEFAULT_DATA_INTERVAL_MS = 0    # 0 = firmware default ≈1000 ms
 DEFAULT_SYNC_INTERVAL_S = 0     # 0 = firmware default 120 s
 
+# Number of raw webhook payloads to keep in the debug entity's history
+DEBUG_HISTORY_SIZE = 100
+
 # JSON payload keys sent by the firmware → (friendly name, unit, device class, state class)
 SENSOR_DEFINITIONS = {
-    "speed":          ("Speed",               "km/h",  "speed",            "measurement"),
-    "rpm":            ("RPM",                 "rpm",   None,               "measurement"),
-    "throttle":       ("Throttle",            "%",     None,               "measurement"),
-    "engine_load":    ("Engine Load",         "%",     None,               "measurement"),
-    "coolant_temp":   ("Coolant Temperature", "°C",    "temperature",      "measurement"),
-    "intake_temp":    ("Intake Temperature",  "°C",    "temperature",      "measurement"),
-    "fuel_pressure":  ("Fuel Pressure",       "kPa",   "pressure",         "measurement"),
-    "timing_advance": ("Timing Advance",      "°",     None,               "measurement"),
-    "lat":            ("GPS Latitude",        "°",     None,               "measurement"),
-    "lng":            ("GPS Longitude",       "°",     None,               "measurement"),
-    "alt":            ("GPS Altitude",        "m",     None,               "measurement"),
-    "gps_speed":      ("GPS Speed",           "km/h",  "speed",            "measurement"),
-    "heading":        ("GPS Heading",         "°",     None,               "measurement"),
-    "satellites":     ("GPS Satellites",      None,    None,               "measurement"),
-    "hdop":           ("GPS HDOP",            None,    None,               "measurement"),
-    "acc_x":          ("Accelerometer X",     "g",     None,               "measurement"),
-    "acc_y":          ("Accelerometer Y",     "g",     None,               "measurement"),
-    "acc_z":          ("Accelerometer Z",     "g",     None,               "measurement"),
-    "battery":        ("Battery Voltage",     "V",     "voltage",          "measurement"),
-    "signal":         ("Signal Strength",     "dBm",   "signal_strength",  "measurement"),
-    "device_temp":    ("Device Temperature",  "°C",    "temperature",      "measurement"),
+    "speed":                ("Speed",                      "km/h",  "speed",            "measurement"),
+    "rpm":                  ("RPM",                        "rpm",   None,               "measurement"),
+    "throttle":             ("Throttle",                   "%",     None,               "measurement"),
+    "engine_load":          ("Engine Load",                "%",     None,               "measurement"),
+    "coolant_temp":         ("Coolant Temperature",        "°C",    "temperature",      "measurement"),
+    "intake_temp":          ("Intake Temperature",         "°C",    "temperature",      "measurement"),
+    "fuel_pressure":        ("Fuel Pressure",              "kPa",   "pressure",         "measurement"),
+    "timing_advance":       ("Timing Advance",             "°",     None,               "measurement"),
+    "short_fuel_trim_1":    ("Short-Term Fuel Trim B1",    "%",     None,               "measurement"),
+    "long_fuel_trim_1":     ("Long-Term Fuel Trim B1",     "%",     None,               "measurement"),
+    "short_fuel_trim_2":    ("Short-Term Fuel Trim B2",    "%",     None,               "measurement"),
+    "long_fuel_trim_2":     ("Long-Term Fuel Trim B2",     "%",     None,               "measurement"),
+    "lat":                  ("GPS Latitude",               "°",     None,               "measurement"),
+    "lng":                  ("GPS Longitude",              "°",     None,               "measurement"),
+    "alt":                  ("GPS Altitude",               "m",     None,               "measurement"),
+    "gps_speed":            ("GPS Speed",                  "km/h",  "speed",            "measurement"),
+    "heading":              ("GPS Heading",                "°",     None,               "measurement"),
+    "satellites":           ("GPS Satellites",             None,    None,               "measurement"),
+    "hdop":                 ("GPS HDOP",                   None,    None,               "measurement"),
+    "acc_x":                ("Accelerometer X",            "g",     None,               "measurement"),
+    "acc_y":                ("Accelerometer Y",            "g",     None,               "measurement"),
+    "acc_z":                ("Accelerometer Z",            "g",     None,               "measurement"),
+    "battery":              ("Battery Voltage",            "V",     "voltage",          "measurement"),
+    "signal":               ("Signal Strength",            "dBm",   "signal_strength",  "measurement"),
+    "device_temp":          ("Device Temperature",         "°C",    "temperature",      "measurement"),
 }
 
 # Mapping from Freematics hex PID strings (as printed by %X) to (sensor_key, scale_factor).
@@ -118,14 +125,18 @@ PID_MAP: dict[str, _PidMapping] = {
     "81":  ("signal",        1.0),   # PID_CSQ: signal strength (dBm)
     "82":  ("device_temp",   1.0),   # PID_DEVICE_TEMP (°C)
     # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
-    "104": ("engine_load",   1.0),   # PID_ENGINE_LOAD (%)
-    "105": ("coolant_temp",  1.0),   # PID_COOLANT_TEMP (°C)
-    "10A": ("fuel_pressure", 1.0),   # PID_FUEL_PRESSURE (kPa)
-    "10C": ("rpm",           1.0),   # PID_RPM
-    "10D": ("speed",         1.0),   # PID_SPEED (km/h)
-    "10E": ("timing_advance",1.0),   # PID_TIMING_ADVANCE (°)
-    "10F": ("intake_temp",   1.0),   # PID_INTAKE_TEMP (°C)
-    "111": ("throttle",      1.0),   # PID_THROTTLE (%)
+    "104": ("engine_load",        1.0),   # PID_ENGINE_LOAD (%)
+    "105": ("coolant_temp",       1.0),   # PID_COOLANT_TEMP (°C)
+    "106": ("short_fuel_trim_1",  1.0),   # PID_SHORT_TERM_FUEL_TRIM_1 (%)
+    "107": ("long_fuel_trim_1",   1.0),   # PID_LONG_TERM_FUEL_TRIM_1 (%)
+    "108": ("short_fuel_trim_2",  1.0),   # PID_SHORT_TERM_FUEL_TRIM_2 (%)
+    "109": ("long_fuel_trim_2",   1.0),   # PID_LONG_TERM_FUEL_TRIM_2 (%)
+    "10A": ("fuel_pressure",      1.0),   # PID_FUEL_PRESSURE (kPa)
+    "10C": ("rpm",                1.0),   # PID_RPM
+    "10D": ("speed",              1.0),   # PID_SPEED (km/h)
+    "10E": ("timing_advance",     1.0),   # PID_TIMING_ADVANCE (°)
+    "10F": ("intake_temp",        1.0),   # PID_INTAKE_TEMP (°C)
+    "111": ("throttle",           1.0),   # PID_THROTTLE (%)
 }
 
 # Control commands supported by the device HTTP API (/api/control)

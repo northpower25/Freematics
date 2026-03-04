@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from pathlib import Path
 
 from homeassistant.components import frontend
@@ -40,6 +41,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
+from .const import (
+    CONF_CONNECTION_TYPE,
+    CONN_TYPE_CELLULAR,
+    CONN_TYPE_WIFI,
+    DEBUG_HISTORY_SIZE,
+)
 from .views import (
     FreematicsConfigNvsView,
     FreematicsFirmwareView,
@@ -53,7 +60,7 @@ from .views import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "button"]
+PLATFORMS = ["sensor", "button", "device_tracker"]
 
 
 def _parse_freematics_payload(body: str) -> dict:
@@ -176,6 +183,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Freematics ONE+ from a config entry."""
     webhook_id = entry.data[CONF_WEBHOOK_ID]
 
+    # Determine display label for the configured connection type.
+    conn_type = entry.data.get(CONF_CONNECTION_TYPE, CONN_TYPE_WIFI)
+    if conn_type == CONN_TYPE_CELLULAR:
+        conn_label = "LTE"
+    elif conn_type == CONN_TYPE_WIFI:
+        conn_label = "WiFi"
+    else:
+        conn_label = "WiFi+LTE"
+
+    # Per-device debug state: rolling history of raw payloads and error log.
+    raw_history: deque[str] = deque(maxlen=DEBUG_HISTORY_SIZE)
+    error_log: deque[str] = deque(maxlen=DEBUG_HISTORY_SIZE)
+
     async def handle_webhook(hass, webhook_id, request):
         """Handle incoming telemetry data from the Freematics device."""
         # The firmware sends data in Freematics text format:
@@ -183,25 +203,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Try JSON first for forward compatibility, then fall back to the
         # native Freematics text format.
         data: dict | None = None
+        raw_body: str = ""
         try:
             data = await request.json()
+            raw_body = str(data)
         except Exception:  # noqa: BLE001
             pass
 
         if data is None:
             try:
-                body = await request.text()
-                if body:
-                    data = _parse_freematics_payload(body)
+                raw_body = await request.text()
+                if raw_body:
+                    data = _parse_freematics_payload(raw_body)
             except Exception:  # noqa: BLE001
-                _LOGGER.warning("Freematics webhook: failed to parse payload")
+                msg = "Freematics webhook: failed to parse payload"
+                _LOGGER.warning(msg)
+                error_log.append(msg)
+
+        # Store raw payload in rolling history for the debug entity.
+        if raw_body:
+            raw_history.appendleft(raw_body)
 
         if not data:
             _LOGGER.debug("Freematics webhook received empty or unparseable payload")
+            # Still notify debug sensor so errors / raw history are visible.
+            if raw_body:
+                async_dispatcher_send(
+                    hass,
+                    f"{DOMAIN}_{webhook_id}_debug",
+                    {
+                        "connection_type": conn_label,
+                        "raw_data": list(raw_history),
+                        "errors": list(error_log),
+                    },
+                )
             return
 
         _LOGGER.debug("Freematics webhook received: %s", data)
         async_dispatcher_send(hass, f"{DOMAIN}_{webhook_id}", data)
+
+        # Notify the debug sensor of the current raw history + errors.
+        async_dispatcher_send(
+            hass,
+            f"{DOMAIN}_{webhook_id}_debug",
+            {
+                "connection_type": conn_label,
+                "raw_data": list(raw_history),
+                "errors": list(error_log),
+            },
+        )
 
     async_register(
         hass,
@@ -215,6 +265,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         CONF_WEBHOOK_ID: webhook_id,
+        "connection_type": conn_label,
+        "raw_history": raw_history,
+        "error_log": error_log,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
