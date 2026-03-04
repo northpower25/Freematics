@@ -41,6 +41,10 @@
 #define WIFI_TIMEOUT 5000
 
 extern uint32_t fileid;
+#if ENABLE_WIFI
+extern char wifiSSID[];
+extern char wifiPassword[];
+#endif
 
 extern "C"
 {
@@ -366,13 +370,35 @@ void serverProcess(int timeout)
 bool serverSetup(IPAddress& ip)
 {
 #if NET_DEVICE == NET_WIFI || ENABLE_WIFI
-    WiFi.mode (WIFI_AP_STA);
+    WiFi.mode(WIFI_AP_STA);
 #else
-    WiFi.mode (WIFI_AP);
+    WiFi.mode(WIFI_AP);
 #endif
 
-    WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
-    ip = WiFi.softAPIP();
+    bool staConnected = false;
+#if ENABLE_WIFI
+    // Try to connect to the home WiFi network first so the HTTPD is
+    // reachable on the local network IP rather than the AP fallback IP.
+    if (wifiSSID[0]) {
+        Serial.print("[WIFI] Joining SSID:");
+        Serial.println(wifiSSID);
+        WiFi.begin(wifiSSID, wifiPassword);
+        for (uint32_t t = millis(); millis() - t < WIFI_JOIN_TIMEOUT;) {
+            if (WiFi.status() == WL_CONNECTED) break;
+            delay(50);
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+            staConnected = true;
+            ip = WiFi.localIP();
+        } else {
+            Serial.println("[WIFI] STA timeout, starting AP");
+        }
+    }
+#endif
+    if (!staConnected) {
+        WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+        ip = WiFi.softAPIP();
+    }
 
     mwInitParam(&httpParam, 80, "/spiffs");
     httpParam.pxUrlHandler = urlHandlerList;

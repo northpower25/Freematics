@@ -195,6 +195,13 @@
 #define ENABLE_HTTPD 0
 #endif
 
+// Firmware version string – bumped manually on significant releases.
+// Printed at boot alongside the __DATE__/__TIME__ build timestamp so users
+// can confirm they are running the expected build.
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "5.1"
+#endif
+
 // enable(1)/disable(0) BLE SPP server (for Freematics Controller App).
 #ifndef ENABLE_BLE
 #define ENABLE_BLE 1
