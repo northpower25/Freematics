@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.10.0";
+const PANEL_VERSION = "1.11.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -314,15 +314,26 @@ class FreematicsPanel extends HTMLElement {
   /* ── entity discovery ───────────────────────────────────────────── */
 
   /**
-   * Scan hass.states for sensor.freematics_one_*_speed entities and
+   * Scan hass.states for sensor.freematics_*_speed entities and
    * return the list of unique entity prefixes, e.g.
-   *   ["sensor.freematics_one_a1b2c3d4"]
+   *   ["sensor.freematics_b1af617d"]
+   *
+   * The regex uses \w+ which includes underscores, so it correctly matches
+   * ALL known entity-ID variants regardless of how many underscore-separated
+   * segments appear between "freematics_" and "_speed":
+   *   • Current installs: sensor.freematics_<id8>_speed
+   *                   e.g. sensor.freematics_b1af617d_speed
+   *   • PR-36 era:        sensor.freematics_one_<id8>_speed
+   *   • Legacy installs:  sensor.freematics_one_unknown_speed
+   *   • Minimal name:     sensor.freematics_one_speed
+   * The non-greedy \w+? combined with the $ anchor ensures only the LAST
+   * "_speed" is matched, giving the correct prefix for all variants.
    */
   _discoverDevices() {
     if (!this._hass) return [];
     const prefixes = new Set();
     for (const entityId of Object.keys(this._hass.states)) {
-      const m = entityId.match(/^(sensor\.freematics_one_\w+?)_speed$/);
+      const m = entityId.match(/^(sensor\.freematics_\w+?)_speed$/);
       if (m) prefixes.add(m[1]);
     }
     return [...prefixes];
