@@ -40,7 +40,7 @@
       },
       "advanced": {
         "title": "Freematics ONE+ – Advanced Firmware Settings",
-        "description": "These settings are written to the device's NVS (non-volatile storage) during flash and take effect at boot.\n\n**Built-in HTTP server**: Provides a local REST API (`/api/live`, `/api/info`, …) on port 80. *Disable* to save ~4 KB of RAM, which improves webhook reliability. Only useful if you need live data access from the local network.\n\n**Data-transmission interval**: How often (ms) the device POSTs telemetry to the webhook. `0` = firmware default (~1 000 ms).\n\n**Server-sync interval**: How often (s) the device checks connectivity. `0` = firmware default (120 s).",
+        "description": "These settings are written to the device's NVS (non-volatile storage) during flash and take effect at boot.\n\n**Built-in HTTP server**: Provides a local REST API (`/api/live`, `/api/info`, …) on port 80. *Disable* to save ~4 KB of RAM, which improves webhook reliability. Only useful if you need live data access from the local network.\n\n**Data-transmission interval**: How often (ms) the device POSTs telemetry to the webhook. `0` = firmware default (~1000 ms).\n\n**Server-sync interval**: How often (s) the device checks connectivity. `0` = firmware default (120 s).",
         "data": {
           "enable_httpd": "Enable built-in HTTP server",
           "data_interval_ms": "Data-transmission interval (ms, 0 = default ~1000)",

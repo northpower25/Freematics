@@ -40,7 +40,7 @@
       },
       "advanced": {
         "title": "Freematics ONE+ – Erweiterte Firmware-Einstellungen",
-        "description": "Diese Einstellungen werden während des Flashens in den NVS (nicht-flüchtigen Speicher) des Geräts geschrieben und gelten ab dem nächsten Boot.\n\n**Interner HTTP-Server**: Stellt eine lokale REST-API (`/api/live`, `/api/info`, …) auf Port 80 bereit. *Deaktivieren*, um ~4 KB RAM zu sparen und die Webhook-Zuverlässigkeit zu verbessern. Nur sinnvoll, wenn Sie Live-Datenzugriff im lokalen Netzwerk benötigen.\n\n**Datenübertragungs-Intervall**: Wie häufig (ms) das Gerät Telemetriedaten an den Webhook sendet. `0` = Firmware-Standard (~1.000 ms).\n\n**Server-Sync-Intervall**: Wie häufig (s) das Gerät die Verbindung prüft. `0` = Firmware-Standard (120 s).",
+        "description": "Diese Einstellungen werden während des Flashens in den NVS (nicht-flüchtigen Speicher) des Geräts geschrieben und gelten ab dem nächsten Boot.\n\n**Interner HTTP-Server**: Stellt eine lokale REST-API (`/api/live`, `/api/info`, …) auf Port 80 bereit. *Deaktivieren*, um ~4 KB RAM zu sparen und die Webhook-Zuverlässigkeit zu verbessern. Nur sinnvoll, wenn Sie Live-Datenzugriff im lokalen Netzwerk benötigen.\n\n**Datenübertragungs-Intervall**: Wie häufig (ms) das Gerät Telemetriedaten an den Webhook sendet. `0` = Firmware-Standard (~1000 ms).\n\n**Server-Sync-Intervall**: Wie häufig (s) das Gerät die Verbindung prüft. `0` = Firmware-Standard (120 s).",
         "data": {
           "enable_httpd": "Internen HTTP-Server aktivieren",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard ~1000)",
