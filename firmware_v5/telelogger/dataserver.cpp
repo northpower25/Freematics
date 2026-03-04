@@ -51,7 +51,9 @@ uint32_t hall_sens_read();
 HttpParam httpParam;
 
 int handlerLiveData(UrlHandlerParam* param);
-int handlerControl(UrlHandlerParam* param);
+
+extern nvs_handle_t nvs;
+extern void loadConfig();
 
 uint16_t hex2uint16(const char *p);
 
@@ -294,9 +296,52 @@ int handlerLogDelete(UrlHandlerParam* param)
     return FLAG_DATA_RAW;
 }
 
+int handlerControl(UrlHandlerParam* param)
+{
+    char *buf = param->pucBuffer;
+    int bufsize = param->bufSize;
+    const char* cmd = mwGetVarValue(param->pxVars, "cmd", "");
+    int n = 0;
+
+    if (!*cmd) {
+        n = snprintf(buf, bufsize, "ERR");
+#if ENABLE_WIFI
+    } else if (!strncmp(cmd, "SSID=", 5)) {
+        const char* p = cmd + 5;
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_str(nvs, "WIFI_SSID", strcmp(p, "-") ? p : "") == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strncmp(cmd, "WPWD=", 5)) {
+        const char* p = cmd + 5;
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_str(nvs, "WIFI_PWD", strcmp(p, "-") ? p : "") == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+#endif
+    } else if (!strncmp(cmd, "APN=", 4)) {
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_str(nvs, "CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strcmp(cmd, "RESET")) {
+        n = snprintf(buf, bufsize, "OK");
+        param->contentLength = n;
+        param->contentType = HTTPFILETYPE_TEXT;
+        ESP.restart();
+    } else {
+        n = snprintf(buf, bufsize, "ERR");
+    }
+
+    param->contentLength = n;
+    param->contentType = HTTPFILETYPE_TEXT;
+    return FLAG_DATA_RAW;
+}
+
 UrlHandler urlHandlerList[]={
     {"api/live", handlerLiveData},
     {"api/info", handlerInfo},
+    {"api/control", handlerControl},
 #if STORAGE != STORAGE_NONE
     {"api/list", handlerLogList},
     {"api/data", handlerLogData},
@@ -320,7 +365,7 @@ void serverProcess(int timeout)
 
 bool serverSetup(IPAddress& ip)
 {
-#if NET_DEVICE == NET_WIFI
+#if NET_DEVICE == NET_WIFI || ENABLE_WIFI
     WiFi.mode (WIFI_AP_STA);
 #else
     WiFi.mode (WIFI_AP);
