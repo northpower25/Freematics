@@ -27,35 +27,33 @@ async def async_setup_entry(
     """Set up Freematics sensor entities from a config entry."""
     webhook_id = entry.data[CONF_WEBHOOK_ID]
 
+    # Pre-create one sensor for every key in SENSOR_DEFINITIONS so all
+    # potential entities are visible in HA immediately after setup – even
+    # before the first webhook packet arrives.  Entities whose data has not
+    # yet been received will show as "unavailable" until updated.
     sensors: dict[str, FreematicsSensor] = {}
+    initial_entities: list[FreematicsSensor] = []
+    for key in SENSOR_DEFINITIONS:
+        sensor_uid = f"{webhook_id}_{key}"
+        sensor = FreematicsSensor(
+            webhook_id=webhook_id,
+            key=key,
+        )
+        sensors[sensor_uid] = sensor
+        initial_entities.append(sensor)
+    async_add_entities(initial_entities)
 
     @callback
     def handle_data(data: dict) -> None:
-        """Process incoming webhook data and update / create sensors."""
-        new_entities = []
-        device_id = data.get("device_id", "unknown")
-
+        """Process incoming webhook data and update sensors."""
         for key, value in data.items():
-            if key in ("device_id", "ts", "gps_time"):
-                continue
             if key not in SENSOR_DEFINITIONS:
                 _LOGGER.debug("Unknown telemetry key '%s' - skipping", key)
                 continue
 
             sensor_uid = f"{webhook_id}_{key}"
-            if sensor_uid not in sensors:
-                sensor = FreematicsSensor(
-                    webhook_id=webhook_id,
-                    device_id=device_id,
-                    key=key,
-                )
-                sensors[sensor_uid] = sensor
-                new_entities.append(sensor)
-
-            sensors[sensor_uid].update_state(value)
-
-        if new_entities:
-            async_add_entities(new_entities)
+            if sensor_uid in sensors:
+                sensors[sensor_uid].update_state(value)
 
     entry.async_on_unload(
         async_dispatcher_connect(
@@ -72,7 +70,7 @@ class FreematicsSensor(SensorEntity):
     _attr_should_poll = False
     _attr_has_entity_name = True
 
-    def __init__(self, webhook_id: str, device_id: str, key: str) -> None:
+    def __init__(self, webhook_id: str, key: str) -> None:
         """Initialise the sensor."""
         name, unit, device_class, state_class = SENSOR_DEFINITIONS[key]
 
@@ -100,7 +98,7 @@ class FreematicsSensor(SensorEntity):
 
         self._attr_device_info = {
             "identifiers": {(DOMAIN, webhook_id)},
-            "name": f"Freematics ONE+ ({device_id})",
+            "name": "Freematics ONE+",
             "manufacturer": "Freematics",
             "model": "ONE+",
         }

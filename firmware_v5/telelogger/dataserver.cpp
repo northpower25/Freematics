@@ -248,25 +248,26 @@ int handlerLogList(UrlHandlerParam* param)
     if (root) {
         while(file = root.openNextFile()) {
             const char *fn = file.name();
-            if (!strncmp(fn, "/DATA/", 6)) {
-                fn += 6;
-                unsigned int size = file.size();
+            // Handle both full-path ("/DATA/83.CSV") and basename-only ("83.CSV")
+            // returned by different versions of the Arduino ESP32 SD library.
+            const char *p = strrchr(fn, '/');
+            if (p) fn = p + 1;
+            unsigned int size = file.size();
+            unsigned int id = atoi(fn);
+            if (id) {
                 Serial.print(fn);
                 Serial.print(' ');
                 Serial.print(size);
                 Serial.println(" bytes");
-                unsigned int id = atoi(fn);
-                if (id) {
-                    n += snprintf(buf + n, bufsize - n, "{\"id\":%u,\"size\":%u",
-                        id, size);
-                    if (id == fileid) {
-                        n += snprintf(buf + n, bufsize - n, ",\"active\":true");
-                    }
-                    n += snprintf(buf + n, bufsize - n, "},");
+                n += snprintf(buf + n, bufsize - n, "{\"id\":%u,\"size\":%u",
+                    id, size);
+                if (id == fileid) {
+                    n += snprintf(buf + n, bufsize - n, ",\"active\":true");
                 }
+                n += snprintf(buf + n, bufsize - n, "},");
             }
         }
-        if (buf[n - 1] == ',') n--;
+        if (n > 0 && buf[n - 1] == ',') n--;
     }
     n += snprintf(buf + n, bufsize - n, "]");
     param->contentType=HTTPFILETYPE_JSON;
