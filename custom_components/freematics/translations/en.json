@@ -31,6 +31,22 @@
           "webhook_id": "Webhook ID"
         }
       },
+      "device": {
+        "title": "Freematics ONE+ – Device Model",
+        "description": "Select your Freematics ONE+ hardware model. This helps tailor the recommended firmware settings.\n\n- **Model A**: WiFi + Bluetooth, no cellular module\n- **Model B**: WiFi + Bluetooth + 4G LTE cellular\n- **Model H**: WiFi only (no Bluetooth, no cellular)\n\nDetailed hardware specifications at [freematics.com](https://freematics.com).",
+        "data": {
+          "device_model": "Device model"
+        }
+      },
+      "advanced": {
+        "title": "Freematics ONE+ – Advanced Firmware Settings",
+        "description": "These settings are written to the device's NVS (non-volatile storage) during flash and take effect at boot.\n\n**Built-in HTTP server**: Provides a local REST API (`/api/live`, `/api/info`, …) on port 80. *Disable* to save ~4 KB of RAM, which improves webhook reliability. Only useful if you need live data access from the local network.\n\n**Data-transmission interval**: How often (ms) the device POSTs telemetry to the webhook. `0` = firmware default (~1000 ms).\n\n**Server-sync interval**: How often (s) the device checks connectivity. `0` = firmware default (120 s).",
+        "data": {
+          "enable_httpd": "Enable built-in HTTP server",
+          "data_interval_ms": "Data-transmission interval (ms, 0 = default ~1000)",
+          "sync_interval_s": "Server-sync interval (s, 0 = default 120)"
+        }
+      },
       "flash": {
         "title": "Freematics ONE+ – Flash Method",
         "description": "Choose how to flash the firmware onto the device.\n\n**WiFi OTA** *(recommended)*: The device must be powered on and reachable on your network, or in AP mode (connect to WiFi network **{ap_ssid}** with password **{ap_password}**, then enter `192.168.4.1` as Device IP). Works regardless of where Home Assistant is hosted.\n\n**Serial USB (HA server)**: Runs `esptool` on the Home Assistant server. Only works if the Freematics ONE+ is connected via USB **directly to the HA server**.\n\n**Serial USB (your computer)**: If the device is connected to the computer where your browser is running, use the [Browser Flasher]({flasher_url}) instead. It uses the Web Serial API (Chrome/Edge 89+) and requires no installation.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.\n\nFor detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
@@ -50,11 +66,15 @@
     "step": {
       "init": {
         "title": "Freematics ONE+ – Update Settings",
-        "description": "Update the device connection settings. Changes will be applied on the next flash or when you press **Send Config to Device**.",
+        "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.",
         "data": {
           "wifi_ssid": "WiFi SSID",
           "wifi_password": "WiFi Password",
           "cell_apn": "Cellular APN",
+          "device_model": "Device model",
+          "enable_httpd": "Enable built-in HTTP server",
+          "data_interval_ms": "Data-transmission interval (ms, 0 = default)",
+          "sync_interval_s": "Server-sync interval (s, 0 = default)",
           "device_ip": "Device IP address",
           "device_port": "Device HTTP port",
           "flash_method": "Flash method",

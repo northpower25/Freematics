@@ -13,18 +13,27 @@ from homeassistant.helpers.network import get_url
 from .const import (
     CONF_CELL_APN,
     CONF_CONNECTION_TYPE,
+    CONF_DATA_INTERVAL_MS,
     CONF_DEVICE_IP,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_PORT,
+    CONF_ENABLE_HTTPD,
     CONF_FLASH_METHOD,
     CONF_SERIAL_PORT,
     CONF_SIM_PIN,
+    CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
     CONN_TYPE_BOTH,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
+    DEFAULT_DATA_INTERVAL_MS,
     DEFAULT_DEVICE_PORT,
+    DEFAULT_SYNC_INTERVAL_S,
+    DEVICE_MODEL_A,
+    DEVICE_MODEL_B,
+    DEVICE_MODEL_H,
     DOMAIN,
     FLASH_METHOD_SERIAL,
     FLASH_METHOD_WIFI,
@@ -39,7 +48,9 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
       2. wifi        – WiFi credentials (if wifi/both)
       3. cellular    – APN / SIM PIN (if cellular/both)
       4. webhook     – review auto-generated webhook URL / firmware settings
-      5. flash       – choose flash method and device address
+      5. device      – select device model (A / B / H)
+      6. advanced    – optional firmware tuning (HTTPD, intervals)
+      7. flash       – choose flash method and device address
     """
 
     VERSION = 1
@@ -126,7 +137,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Generate and display webhook URL / firmware configuration."""
         if user_input is not None:
             self._data.update(user_input)
-            return await self.async_step_flash()
+            return await self.async_step_device()
 
         # Webhook ID is generated once in __init__; resolve HA base URL here
         try:
@@ -154,7 +165,55 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------------
-    # Step 5 – Flash method
+    # Step 5 – Device model
+    # ------------------------------------------------------------------
+    async def async_step_device(self, user_input=None):
+        """Select the Freematics ONE+ hardware model."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_advanced()
+
+        return self.async_show_form(
+            step_id="device",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_DEVICE_MODEL, default=DEVICE_MODEL_A): vol.In(
+                        {
+                            DEVICE_MODEL_A: "Model A – WiFi + Bluetooth (no cellular)",
+                            DEVICE_MODEL_B: "Model B – WiFi + Bluetooth + 4G cellular",
+                            DEVICE_MODEL_H: "Model H – WiFi only (no BT/cellular)",
+                        }
+                    ),
+                }
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Step 6 – Advanced firmware settings
+    # ------------------------------------------------------------------
+    async def async_step_advanced(self, user_input=None):
+        """Optional advanced firmware settings (HTTPD, intervals)."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_flash()
+
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_ENABLE_HTTPD, default=False): bool,
+                    vol.Optional(
+                        CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
+                    ): vol.All(int, vol.Range(min=0, max=60000)),
+                    vol.Optional(
+                        CONF_SYNC_INTERVAL_S, default=DEFAULT_SYNC_INTERVAL_S
+                    ): vol.All(int, vol.Range(min=0, max=3600)),
+                }
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Step 7 – Flash method
     # ------------------------------------------------------------------
     async def async_step_flash(self, user_input=None):
         """Choose flash method: serial USB or WiFi OTA."""
@@ -225,6 +284,28 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(CONF_WIFI_SSID, default=current.get(CONF_WIFI_SSID, "")): str,
                     vol.Optional(CONF_WIFI_PASSWORD, default=current.get(CONF_WIFI_PASSWORD, "")): str,
                     vol.Optional(CONF_CELL_APN, default=current.get(CONF_CELL_APN, "")): str,
+                    vol.Optional(
+                        CONF_DEVICE_MODEL,
+                        default=current.get(CONF_DEVICE_MODEL, DEVICE_MODEL_A),
+                    ): vol.In(
+                        {
+                            DEVICE_MODEL_A: "Model A – WiFi + Bluetooth",
+                            DEVICE_MODEL_B: "Model B – WiFi + Bluetooth + 4G cellular",
+                            DEVICE_MODEL_H: "Model H – WiFi only",
+                        }
+                    ),
+                    vol.Optional(
+                        CONF_ENABLE_HTTPD,
+                        default=current.get(CONF_ENABLE_HTTPD, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_DATA_INTERVAL_MS,
+                        default=current.get(CONF_DATA_INTERVAL_MS, DEFAULT_DATA_INTERVAL_MS),
+                    ): vol.All(int, vol.Range(min=0, max=60000)),
+                    vol.Optional(
+                        CONF_SYNC_INTERVAL_S,
+                        default=current.get(CONF_SYNC_INTERVAL_S, DEFAULT_SYNC_INTERVAL_S),
+                    ): vol.All(int, vol.Range(min=0, max=3600)),
                     vol.Optional(CONF_DEVICE_IP, default=current.get(CONF_DEVICE_IP, "")): str,
                     vol.Optional(CONF_DEVICE_PORT, default=current.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)): int,
                     vol.Optional(CONF_FLASH_METHOD, default=current.get(CONF_FLASH_METHOD, FLASH_METHOD_WIFI)): vol.In(

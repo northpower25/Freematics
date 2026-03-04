@@ -1254,6 +1254,19 @@ void loadConfig()
   if (nvs_get_u8(nvs, "ENABLE_HTTPD", &nvsHttpd) == ESP_OK) {
     enableHttpd = nvsHttpd;
   }
+
+  // Optional data-interval override (milliseconds). Minimum 500 ms to avoid
+  // flooding the server or the SD card.  0 / missing = keep compile-time default.
+  uint16_t nvsDataInterval = 0;
+  if (nvs_get_u16(nvs, "DATA_INTERVAL", &nvsDataInterval) == ESP_OK && nvsDataInterval >= 500) {
+    dataInterval = nvsDataInterval;
+  }
+
+  // Optional server-sync-interval override (seconds).  0 = keep default.
+  uint16_t nvsSyncInterval = 0;
+  if (nvs_get_u16(nvs, "SYNC_INTERVAL", &nvsSyncInterval) == ESP_OK && nvsSyncInterval > 0) {
+    syncInterval = (int32_t)nvsSyncInterval * 1000;
+  }
 }
 
 void processBLE(int timeout)
@@ -1535,8 +1548,10 @@ if (!state.check(STATE_MEMS_READY)) do {
   // initialize components
   initialize();
 
-  // initialize network and maintain connection
-  subtask.create(telemetry, "telemetry", 2, 8192);
+  // initialize network and maintain connection.
+  // Stack of 16 KB gives mbedTLS / WiFiClientSecure enough room for the TLS
+  // handshake (typically 4–6 KB of stack) on top of the task's own frames.
+  subtask.create(telemetry, "telemetry", 2, 16384);
 
 #ifdef PIN_LED
   digitalWrite(PIN_LED, LOW);

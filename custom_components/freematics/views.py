@@ -56,6 +56,9 @@ from homeassistant.components.http import HomeAssistantView
 
 from .const import (
     CONF_CELL_APN,
+    CONF_DATA_INTERVAL_MS,
+    CONF_ENABLE_HTTPD,
+    CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
@@ -489,6 +492,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     wifi_password = cfg.get(CONF_WIFI_PASSWORD, "")
     cell_apn = cfg.get(CONF_CELL_APN, "")
     webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
+    enable_httpd = bool(cfg.get(CONF_ENABLE_HTTPD, False))
+    data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
+    sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
 
     server_host = ""
     server_port = 443
@@ -520,7 +526,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "server_host": server_host,
         "server_port": server_port,
         "webhook_path": webhook_path,
-        "enable_httpd": True,
+        "enable_httpd": enable_httpd,
+        "data_interval_ms": data_interval_ms,
+        "sync_interval_s": sync_interval_s,
     }
 
 

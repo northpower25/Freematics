@@ -156,8 +156,11 @@ typedef struct {
 #define MAX_POST_PAYLOAD_SIZE (128*1024 /*bytes*/)
 #define HTTP_MAX_CLIENTS_DEFAULT 32
 #else
-#define HTTP_BUFFER_SIZE (16*1024 /*bytes*/)
-#define MAX_POST_PAYLOAD_SIZE (16*1024 /*bytes*/)
+// ESP32 / Arduino: use a smaller per-connection buffer to leave room for
+// the WiFi + BLE stacks, the TLS session used by the webhook client, and
+// the FreeRTOS task stacks.  16 KB × 4 clients = 64 KB was causing OOM.
+#define HTTP_BUFFER_SIZE (4*1024 /*bytes*/)
+#define MAX_POST_PAYLOAD_SIZE (4*1024 /*bytes*/)
 #define HTTP_MAX_CLIENTS_DEFAULT 16
 #endif
 
