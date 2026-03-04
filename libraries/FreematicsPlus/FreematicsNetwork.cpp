@@ -138,6 +138,17 @@ bool WifiHTTP::open(const char* host, uint16_t port)
   // Nabu Casa / HA cloud certificates change periodically.  All telemetry
   // data transmitted is non-sensitive sensor readings; credentials (WiFi
   // password, webhook ID) are stored in NVS and never re-transmitted.
+  //
+  // Reduce TLS I/O buffer sizes (requires MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH,
+  // enabled by default in ESP-IDF 4.4+ / arduino-esp32 2.0+).  The default
+  // 16384-byte receive buffer + 4096-byte send buffer totals ~20 KB of
+  // contiguous heap, which frequently cannot be satisfied when WiFi, BLE, and
+  // the built-in HTTP server are running simultaneously on the ESP32's ~230 KB
+  // heap, causing MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512).
+  //   RX 4096 B – sufficient for any HA/Nabu Casa webhook response record.
+  //   TX 1024 B – records are split transparently by mbedtls_ssl_write() so
+  //              multi-record writes work even when the payload exceeds 1 KB.
+  client.setBufferSizes(4096, 1024);
   if (client.connect(host, port)) {
     m_state = HTTP_CONNECTED;
     m_host = host;
