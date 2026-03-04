@@ -537,7 +537,9 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
 #if ENABLE_WIFI
   if (wifi.connected())
   {
-    return wifi.send(METHOD_GET, path) && wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1) && wifi.code() == 200;
+    char* buf = cell.getBuffer();
+    if (!buf) return false;
+    return wifi.send(METHOD_GET, path) && wifi.receive(buf, RECV_BUF_SIZE - 1) && wifi.code() == 200;
   }
   else
 #endif
@@ -608,7 +610,12 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 #if ENABLE_WIFI
   if (wifi.connected())
   {
-    content = wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1, &recvBytes);
+    char* buf = cell.getBuffer();
+    if (!buf) {
+      Serial.println("[HTTP] OOM: receive buffer");
+      return false;
+    }
+    content = wifi.receive(buf, RECV_BUF_SIZE - 1, &recvBytes);
   }
   else
 #endif
@@ -650,13 +657,13 @@ bool TeleClientHTTP::connect(bool quick)
 #endif
   }
 
-  // connect to HTTP server
+  // When WiFi is connected use only WiFi (cell is uninitialised); otherwise use cell.
   bool success = false;
-
 #if ENABLE_WIFI
-  if (wifi.connected()) success = wifi.open(SERVER_HOST, SERVER_PORT);
+  if (wifi.connected()) {
+    success = wifi.open(SERVER_HOST, SERVER_PORT);
+  } else {
 #endif
-  if (!success) {
     for (byte attempts = 0; !success && attempts < 3; attempts++) {
       success = cell.open(SERVER_HOST, SERVER_PORT);
       if (!success) {
@@ -665,9 +672,11 @@ bool TeleClientHTTP::connect(bool quick)
         cell.init();
       }
     }
+#if ENABLE_WIFI
   }
+#endif
   if (!success) {
-    Serial.println("[CELL] Unable to connect");
+    Serial.println("[HTTP] Unable to connect");
     return false;
   }
   if (quick) return true;
