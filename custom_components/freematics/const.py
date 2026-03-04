@@ -39,8 +39,15 @@ SIGNAL_DATA_RECEIVED = f"{DOMAIN}_data_received"
 # Dispatcher signal prefix for webhook data
 DISPATCHER_PREFIX = DOMAIN
 
+# Operating mode – determines which firmware features are enabled
+CONF_OPERATING_MODE = "operating_mode"
+OPERATING_MODE_TELELOGGER = "telelogger"   # Webhook → HA; HTTPD=off, BLE=off
+OPERATING_MODE_DATALOGGER = "datalogger"   # local HTTP API; HTTPD=on
+DEFAULT_OPERATING_MODE = OPERATING_MODE_TELELOGGER
+
 # Advanced firmware settings stored in NVS and written to the device during flash
 CONF_ENABLE_HTTPD = "enable_httpd"
+CONF_ENABLE_BLE = "enable_ble"
 CONF_DATA_INTERVAL_MS = "data_interval_ms"
 CONF_SYNC_INTERVAL_S = "sync_interval_s"
 

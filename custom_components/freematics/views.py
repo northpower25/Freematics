@@ -57,12 +57,15 @@ from homeassistant.components.http import HomeAssistantView
 from .const import (
     CONF_CELL_APN,
     CONF_DATA_INTERVAL_MS,
+    CONF_ENABLE_BLE,
     CONF_ENABLE_HTTPD,
+    CONF_OPERATING_MODE,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
     DOMAIN,
+    OPERATING_MODE_DATALOGGER,
 )
 
 # Token time-to-live in seconds (5 minutes).  After expiry the token is
@@ -492,9 +495,17 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     wifi_password = cfg.get(CONF_WIFI_PASSWORD, "")
     cell_apn = cfg.get(CONF_CELL_APN, "")
     webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
-    enable_httpd = bool(cfg.get(CONF_ENABLE_HTTPD, False))
+    enable_ble = bool(cfg.get(CONF_ENABLE_BLE, False))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
+
+    # Derive enable_httpd from the operating_mode selector (new entries) or
+    # fall back to the legacy enable_httpd boolean for pre-existing entries.
+    operating_mode = cfg.get(CONF_OPERATING_MODE)
+    if operating_mode is not None:
+        enable_httpd = (operating_mode == OPERATING_MODE_DATALOGGER)
+    else:
+        enable_httpd = bool(cfg.get(CONF_ENABLE_HTTPD, False))
 
     server_host = ""
     server_port = 443
@@ -527,6 +538,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "server_port": server_port,
         "webhook_path": webhook_path,
         "enable_httpd": enable_httpd,
+        "enable_ble": enable_ble,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
     }
@@ -582,6 +594,9 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs["server_port"],
             kwargs["webhook_path"],
             kwargs["enable_httpd"],
+            kwargs["enable_ble"],
+            kwargs["data_interval_ms"],
+            kwargs["sync_interval_s"],
         )
 
         if nvs_data is None:
@@ -664,6 +679,9 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs["server_port"],
             kwargs["webhook_path"],
             kwargs["enable_httpd"],
+            kwargs["enable_ble"],
+            kwargs["data_interval_ms"],
+            kwargs["sync_interval_s"],
         )
 
         if nvs_data is None:

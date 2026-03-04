@@ -17,8 +17,9 @@ from .const import (
     CONF_DEVICE_IP,
     CONF_DEVICE_MODEL,
     CONF_DEVICE_PORT,
-    CONF_ENABLE_HTTPD,
+    CONF_ENABLE_BLE,
     CONF_FLASH_METHOD,
+    CONF_OPERATING_MODE,
     CONF_SERIAL_PORT,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
@@ -30,6 +31,7 @@ from .const import (
     CONN_TYPE_WIFI,
     DEFAULT_DATA_INTERVAL_MS,
     DEFAULT_DEVICE_PORT,
+    DEFAULT_OPERATING_MODE,
     DEFAULT_SYNC_INTERVAL_S,
     DEVICE_MODEL_A,
     DEVICE_MODEL_B,
@@ -37,6 +39,8 @@ from .const import (
     DOMAIN,
     FLASH_METHOD_SERIAL,
     FLASH_METHOD_WIFI,
+    OPERATING_MODE_DATALOGGER,
+    OPERATING_MODE_TELELOGGER,
 )
 
 
@@ -49,7 +53,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
       3. cellular    – APN / SIM PIN (if cellular/both)
       4. webhook     – review auto-generated webhook URL / firmware settings
       5. device      – select device model (A / B / H)
-      6. advanced    – optional firmware tuning (HTTPD, intervals)
+      6. advanced    – operating mode (Telelogger vs Datalogger), BLE, intervals
       7. flash       – choose flash method and device address
     """
 
@@ -192,7 +196,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Step 6 – Advanced firmware settings
     # ------------------------------------------------------------------
     async def async_step_advanced(self, user_input=None):
-        """Optional advanced firmware settings (HTTPD, intervals)."""
+        """Select operating mode and optional firmware tuning."""
         if user_input is not None:
             self._data.update(user_input)
             return await self.async_step_flash()
@@ -201,7 +205,15 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="advanced",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(CONF_ENABLE_HTTPD, default=False): bool,
+                    vol.Required(
+                        CONF_OPERATING_MODE, default=DEFAULT_OPERATING_MODE
+                    ): vol.In(
+                        {
+                            OPERATING_MODE_TELELOGGER: "Telelogger – Webhook → Home Assistant (recommended)",
+                            OPERATING_MODE_DATALOGGER: "Datalogger – Local HTTP API (HTTPD on port 80)",
+                        }
+                    ),
+                    vol.Optional(CONF_ENABLE_BLE, default=False): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -277,6 +289,21 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
 
         current = {**self._config_entry.data, **self._config_entry.options}
 
+        # Derive current operating mode with backwards-compat fallback.
+        # Entries created before the operating_mode field was added have an
+        # enable_httpd boolean instead; infer the mode from that.
+        # CONF_ENABLE_HTTPD is imported locally (not at module level) because it
+        # is only needed for this legacy fallback path and should not be used in
+        # new config-flow steps.
+        stored_mode = current.get(CONF_OPERATING_MODE)
+        if stored_mode is None:
+            from .const import CONF_ENABLE_HTTPD  # noqa: PLC0415 – legacy compat only
+            stored_mode = (
+                OPERATING_MODE_DATALOGGER
+                if current.get(CONF_ENABLE_HTTPD, False)
+                else OPERATING_MODE_TELELOGGER
+            )
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -294,9 +321,18 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                             DEVICE_MODEL_H: "Model H – WiFi only",
                         }
                     ),
+                    vol.Required(
+                        CONF_OPERATING_MODE,
+                        default=stored_mode,
+                    ): vol.In(
+                        {
+                            OPERATING_MODE_TELELOGGER: "Telelogger – Webhook → Home Assistant (recommended)",
+                            OPERATING_MODE_DATALOGGER: "Datalogger – Local HTTP API (HTTPD on port 80)",
+                        }
+                    ),
                     vol.Optional(
-                        CONF_ENABLE_HTTPD,
-                        default=current.get(CONF_ENABLE_HTTPD, False),
+                        CONF_ENABLE_BLE,
+                        default=current.get(CONF_ENABLE_BLE, False),
                     ): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,
