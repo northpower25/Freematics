@@ -26,13 +26,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up Freematics sensor entities from a config entry."""
     webhook_id = entry.data[CONF_WEBHOOK_ID]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    conn_label = entry_data.get("connection_type", "WiFi")
 
     # Pre-create one sensor for every key in SENSOR_DEFINITIONS so all
     # potential entities are visible in HA immediately after setup – even
     # before the first webhook packet arrives.  Entities whose data has not
     # yet been received will show as "unavailable" until updated.
     sensors: dict[str, FreematicsSensor] = {}
-    initial_entities: list[FreematicsSensor] = []
+    initial_entities: list[SensorEntity] = []
     for key in SENSOR_DEFINITIONS:
         sensor_uid = f"{webhook_id}_{key}"
         sensor = FreematicsSensor(
@@ -41,6 +43,15 @@ async def async_setup_entry(
         )
         sensors[sensor_uid] = sensor
         initial_entities.append(sensor)
+
+    # Debug sensor – shows connection type as state; raw webhook history and
+    # error log as attributes.
+    debug_sensor = FreematicsDebugSensor(
+        webhook_id=webhook_id,
+        initial_connection_type=conn_label,
+    )
+    initial_entities.append(debug_sensor)
+
     async_add_entities(initial_entities)
 
     @callback
@@ -55,11 +66,23 @@ async def async_setup_entry(
             if sensor_uid in sensors:
                 sensors[sensor_uid].update_state(value)
 
+    @callback
+    def handle_debug(debug_data: dict) -> None:
+        """Forward debug / history data to the debug sensor."""
+        debug_sensor.update_debug(debug_data)
+
     entry.async_on_unload(
         async_dispatcher_connect(
             hass,
             f"{DOMAIN}_{webhook_id}",
             handle_data,
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            f"{DOMAIN}_{webhook_id}_debug",
+            handle_debug,
         )
     )
 
@@ -122,4 +145,45 @@ class FreematicsSensor(SensorEntity):
             self._attr_native_value = float(value)
         except (TypeError, ValueError):
             self._attr_native_value = value
+        self.async_write_ha_state()
+
+
+class FreematicsDebugSensor(SensorEntity):
+    """Debug sensor that exposes connection type and raw webhook history."""
+
+    _attr_should_poll = False
+    _attr_has_entity_name = False
+    _attr_icon = "mdi:bug"
+
+    def __init__(self, webhook_id: str, initial_connection_type: str) -> None:
+        """Initialise the debug sensor."""
+        device_slug = webhook_id[:8]
+        self._webhook_id = webhook_id
+        self._attr_name = "Debug"
+        self._attr_unique_id = f"freematics_{webhook_id}_debug"
+        self._attr_suggested_object_id = f"freematics_{device_slug}_debug"
+        self._attr_native_value = initial_connection_type
+        self._raw_data: list[str] = []
+        self._errors: list[str] = []
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, webhook_id)},
+            "name": f"Freematics ONE+ ({device_slug})",
+            "manufacturer": "Freematics",
+            "model": "ONE+",
+        }
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return raw webhook history and error log as attributes."""
+        return {
+            "raw_data": self._raw_data,
+            "errors": self._errors,
+        }
+
+    @callback
+    def update_debug(self, debug_data: dict) -> None:
+        """Receive updated debug info from the webhook handler."""
+        self._attr_native_value = debug_data.get("connection_type", self._attr_native_value)
+        self._raw_data = debug_data.get("raw_data", self._raw_data)
+        self._errors = debug_data.get("errors", self._errors)
         self.async_write_ha_state()
