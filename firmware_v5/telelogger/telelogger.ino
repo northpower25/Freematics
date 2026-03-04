@@ -1173,16 +1173,20 @@ void showSysInfo()
   Serial.print("MHz FLASH:");
   Serial.print(ESP.getFlashChipSize() >> 20);
   Serial.println("MB");
-  Serial.print("IRAM:");
+  // ESP.getHeapSize() returns the total DRAM heap available to the application.
+  // The ESP32's 520 KB SRAM is shared with the WiFi (~60 KB), BLE (~100 KB),
+  // and FreeRTOS/driver stacks, so the application heap is typically ~230 KB.
+  // PSRAM (external SPI RAM, present on ESP32-WROVER / Freematics ONE+ Model B)
+  // is reported separately and is only used when BOARD_HAS_PSRAM is set at
+  // compile time (see platformio.ini for details).
+  Serial.print("RAM:");
   Serial.print(ESP.getHeapSize() >> 10);
   Serial.print("KB");
-#if BOARD_HAS_PSRAM
   if (psramInit()) {
     Serial.print(" PSRAM:");
     Serial.print(esp_spiram_get_size() >> 20);
     Serial.print("MB");
   }
-#endif
   Serial.println();
 
   int rtc = rtc_clk_slow_freq_get();
