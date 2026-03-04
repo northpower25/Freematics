@@ -16,6 +16,7 @@ import ipaddress
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -93,14 +94,25 @@ async def async_flash_serial(
 async def async_flash_wifi(
     device_ip: str,
     device_port: int = 80,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[str]]:
     """Upload firmware to the device via HTTP OTA.
 
     The device must be running a firmware with ENABLE_HTTPD=1 and an OTA
     endpoint at /api/ota that accepts a multipart firmware upload.
 
-    Returns (success, message).
+    Returns (success, message, log_lines) where log_lines is a list of
+    timestamped log entries suitable for display in the UI log panel.
     """
+    log: list[str] = []
+
+    def _log(level: str, msg: str) -> None:
+        ts = time.strftime("%H:%M:%S")
+        log.append(f"[{ts}] [{level.upper()}] {msg}")
+        if level == "error":
+            _LOGGER.error("WiFi OTA: %s", msg)
+        else:
+            _LOGGER.info("WiFi OTA: %s", msg)
+
     # Validate device_ip is a plain IP address (not a URL or hostname) to
     # prevent SSRF: ipaddress.ip_address rejects everything except IPv4/IPv6
     # literals, so it cannot be manipulated into a request to an unexpected host.
@@ -109,23 +121,36 @@ async def async_flash_wifi(
     try:
         validated_ip = str(ipaddress.ip_address(device_ip))
     except ValueError:
-        return False, f"Invalid device IP address: {device_ip!r}. Must be a plain IPv4 or IPv6 address."
+        msg = f"Invalid device IP address: {device_ip!r}. Must be a plain IPv4 or IPv6 address."
+        _log("error", msg)
+        return False, msg, log
     try:
         import aiohttp  # noqa: PLC0415
     except ImportError:
-        return False, "aiohttp not available – cannot perform WiFi OTA flash."
+        msg = "aiohttp not available – cannot perform WiFi OTA flash."
+        _log("error", msg)
+        return False, msg, log
 
     if not _firmware_exists():
-        return False, f"Firmware binary not found at {FIRMWARE_PATH}"
+        msg = f"Firmware binary not found at {FIRMWARE_PATH}"
+        _log("error", msg)
+        return False, msg, log
 
     url = f"http://{validated_ip}:{device_port}{OTA_UPLOAD_PATH}"
-    _LOGGER.info("WiFi OTA flash to %s", url)
+    _log("info", f"Target URL: {url}")
 
     try:
         firmware_data = FIRMWARE_PATH.read_bytes()
     except OSError as exc:
-        return False, f"Cannot read firmware file: {exc}"
+        msg = f"Cannot read firmware file: {exc}"
+        _log("error", msg)
+        return False, msg, log
 
+    firmware_kb = len(firmware_data) / 1024
+    _log("info", f"Firmware size: {firmware_kb:.1f} KB ({len(firmware_data)} bytes)")
+    _log("info", "Connecting to device…")
+
+    t_start = time.monotonic()
     try:
         async with aiohttp.ClientSession() as session:
             form = aiohttp.FormData()
@@ -135,25 +160,42 @@ async def async_flash_wifi(
                 filename="telelogger.bin",
                 content_type="application/octet-stream",
             )
+            _log("info", "Uploading firmware (multipart POST)…")
             async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=120)) as resp:
                 text = await resp.text()
+                elapsed = time.monotonic() - t_start
                 if resp.status == 200:
-                    return True, f"OTA flash successful: {text}"
-                return False, f"OTA failed, HTTP {resp.status}: {text}"
+                    _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
+                    _log("ok", f"Device response: {text.strip()}")
+                    msg = f"OTA flash successful ({elapsed:.1f} s): {text.strip()}"
+                    return True, msg, log
+                _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — device response: {text.strip()}")
+                msg = f"OTA failed, HTTP {resp.status}: {text.strip()}"
+                return False, msg, log
 
     except aiohttp.ClientConnectorError as exc:
-        return False, (
-            f"Cannot connect to device at {device_ip}:{device_port}.\n"
+        elapsed = time.monotonic() - t_start
+        detail = (
+            f"Cannot connect to device at {device_ip}:{device_port} "
+            f"after {elapsed:.1f} s.\n"
             f"Ensure the device is powered on, connected to the local network, "
             f"reachable from the Home Assistant server, and that the firmware "
             f"was compiled with ENABLE_HTTPD=1 (check that config_nvs.bin was "
             f"flashed so ENABLE_HTTPD is set in NVS).\n"
             f"Error: {exc}"
         )
+        _log("error", f"Connection error after {elapsed:.1f} s: {exc}")
+        return False, detail, log
     except asyncio.TimeoutError:
-        return False, "OTA flash timed out after 120 seconds."
+        elapsed = time.monotonic() - t_start
+        msg = f"OTA flash timed out after {elapsed:.1f} s (limit 120 s)."
+        _log("error", msg)
+        return False, msg, log
     except Exception as exc:  # noqa: BLE001
-        return False, f"OTA flash failed: {exc}"
+        elapsed = time.monotonic() - t_start
+        msg = f"OTA flash failed after {elapsed:.1f} s: {exc}"
+        _log("error", msg)
+        return False, msg, log
 
 
 async def async_send_config(

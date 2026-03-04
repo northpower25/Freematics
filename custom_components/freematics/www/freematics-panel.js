@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.9.4";
+const PANEL_VERSION = "1.10.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -217,6 +217,20 @@ const STYLES = `
   .log-entry.ok     { color: #55efc4; }
   .log-entry.err    { color: #ff7675; }
   .log-entry.warn   { color: #fdcb6e; }
+  .ota-log {
+    background: #1a1a2e;
+    color: #c8d6e5;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 0.80rem;
+    padding: 10px 12px;
+    border-radius: 6px;
+    min-height: 60px;
+    max-height: 180px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 8px;
+  }
 `;
 
 // Module-level guard: tracks whether the esp-web-tools <script> tag has
@@ -701,6 +715,7 @@ class FreematicsPanel extends HTMLElement {
             font-family:inherit;margin-bottom:8px;
           ">&#128246; Flash via WiFi OTA</button>
           <div id="wifi-ota-status" style="display:none;font-size:.88rem;margin-top:4px"></div>
+          <div class="ota-log" id="ota-log" style="display:none"></div>
         </div>
 
         <!-- ── Manual flash (esptool / Freematics Builder) ─────────── -->
@@ -894,6 +909,7 @@ class FreematicsPanel extends HTMLElement {
         const ipInput  = shadow.getElementById("ota-ip-input");
         const portInput = shadow.getElementById("ota-port-input");
         const statusDiv = shadow.getElementById("wifi-ota-status");
+        const otaLog    = shadow.getElementById("ota-log");
 
         const ip   = (ipInput  ? ipInput.value  : "").trim();
         const port = portInput ? (parseInt(portInput.value) || 80) : 80;
@@ -904,30 +920,50 @@ class FreematicsPanel extends HTMLElement {
           statusDiv.innerHTML = `<span style="color:${color}">${html}</span>`;
         };
 
+        const addLog = (cls, text) => this._appendOtaLog(cls, text);
+
         if (!ip) {
           showStatus("#ff9800", "&#9888; Please enter the device IP address.");
           return;
         }
 
+        // Reset log panel and show it
+        if (otaLog) { otaLog.innerHTML = ""; otaLog.style.display = "block"; }
         wifiOtaBtn.disabled = true;
         wifiOtaBtn.textContent = "⏳ Uploading…";
-        showStatus("#2196f3", "&#9203; Uploading firmware to device… (this may take ~30 s)");
+        showStatus("#2196f3", "&#9203; Uploading firmware… (may take ~30 s)");
+        addLog("info", `Starting WiFi OTA flash to ${ip}:${port}…`);
 
         try {
+          addLog("info", "Sending request to HA server…");
           const result = await this._hass.callApi("POST", "freematics/wifi_ota", {
             device_ip: ip,
             device_port: port,
           });
+
+          // Render server-side log lines first
+          if (result && Array.isArray(result.log)) {
+            for (const line of result.log) {
+              const cls = line.includes("[ERROR]") ? "err"
+                        : line.includes("[OK]")    ? "ok"
+                        : "info";
+              addLog(cls, line);
+            }
+          }
+
           if (result && result.ok) {
             const msg = result.message || "Flash successful!";
             showStatus("#4caf50", `&#10003; ${msg}`);
+            addLog("ok", "✓ OTA flash completed successfully.");
           } else {
             const msg = (result && result.message) ? result.message : "OTA flash failed.";
             showStatus("#f44336", `&#10007; OTA flash failed: ${msg}`);
+            addLog("err", `✗ ${msg}`);
           }
         } catch (err) {
           const msg = (err && err.message) ? err.message : String(err);
           showStatus("#f44336", `&#10007; OTA flash failed: ${msg}`);
+          addLog("err", `✗ ${msg}`);
         } finally {
           wifiOtaBtn.disabled = false;
           wifiOtaBtn.textContent = "📶 Flash via WiFi OTA";
@@ -1174,7 +1210,7 @@ class FreematicsPanel extends HTMLElement {
       dialog.logger = {
         log:   (msg) => this._appendFlashLog("info", String(msg)),
         error: (msg) => this._appendFlashLog("err",  String(msg)),
-        debug: (_msg) => { /* suppress verbose debug output */ },
+        debug: (msg) => this._appendFlashLog("warn", `[dbg] ${String(msg)}`),
       };
     }
 
@@ -1344,6 +1380,20 @@ class FreematicsPanel extends HTMLElement {
     const entry = document.createElement("div");
     entry.className   = `log-entry ${cls}`;
     entry.textContent = `[${ts}] ${text}`;
+    logEl.appendChild(entry);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  _appendOtaLog(cls, text) {
+    const shadow = this.shadowRoot;
+    const logEl = shadow.querySelector("#ota-log");
+    if (!logEl) return;
+    const ts = new Date().toLocaleTimeString();
+    const entry = document.createElement("div");
+    entry.className   = `log-entry ${cls}`;
+    // If the text already contains a server-side timestamp like [HH:MM:SS] skip
+    // adding a second prefix; otherwise prepend the client-side time.
+    entry.textContent = /^\[\d{1,2}:\d{2}:\d{2}\]/.test(text) ? text : `[${ts}] ${text}`;
     logEl.appendChild(entry);
     logEl.scrollTop = logEl.scrollHeight;
   }
