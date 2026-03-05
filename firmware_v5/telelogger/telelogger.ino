@@ -338,10 +338,18 @@ bool processGPS(CBuffer* buffer)
     *(p + 1) = 0;
   }
   if (gd->lng == 0 && gd->lat == 0) {
-    // coordinates not ready
+    // No position fix yet – still log satellite count and HDOP so that
+    // sensor.gps_satellites / sensor.gps_hdop in HA show the GPS is actively
+    // searching even before the first valid position is obtained.
+    if (buffer) {
+      if (gd->sat) buffer->add(PID_GPS_SAT_COUNT, ELEMENT_UINT8, &gd->sat, sizeof(uint8_t));
+      if (gd->hdop) buffer->add(PID_GPS_HDOP, ELEMENT_UINT8, &gd->hdop, sizeof(uint8_t));
+    }
     if (gd->date) {
       Serial.print("[GNSS] ");
-      Serial.println(isoTime);
+      Serial.print(isoTime);
+      Serial.print(" SATS:");
+      Serial.println(gd->sat);
     }
     return false;
   }
@@ -687,9 +695,25 @@ void process()
         return;
       }
     }
-  } else if (obd.init(PROTO_AUTO, true)) {
-    state.set(STATE_OBD_READY);
-    Serial.println("[OBD] ECU ON");
+  } else {
+    // STATE_OBD_READY not set – attempt reconnection.
+    // Limit to one attempt every 30 s: obd.init() sends ATZ which hard-resets
+    // the ELM327.  Calling it every process() cycle (every 1–5 s) resets the
+    // adapter before it can finish its auto-protocol detection, creating a
+    // permanent reconnect loop where OBD-II never connects.
+    // Use full init (quick=false): tries readPID twice instead of once, which
+    // is more robust for ECUs that are slow to respond after engine start.
+    // lastOBDReinit=0 at declaration means the first attempt is deferred until
+    // millis() >= 30000 (~30 s after boot), giving initialize()'s own init
+    // attempt a clear head-start and the ECU time to become ready.
+    static uint32_t lastOBDReinit = 0;
+    if (millis() - lastOBDReinit >= 30000) {
+      lastOBDReinit = millis();
+      if (obd.init(PROTO_AUTO, false)) {
+        state.set(STATE_OBD_READY);
+        Serial.println("[OBD] ECU ON");
+      }
+    }
   }
 #endif
 
