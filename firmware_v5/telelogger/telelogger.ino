@@ -773,6 +773,13 @@ void process()
 
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
+    // Prepend a timestamp record (PID 0) before the data payload so that the
+    // /api/data endpoint (handlerLogData in dataserver.cpp) can correlate each
+    // CSV record with a time offset.  The network serialisation path already
+    // does this via store.timestamp(buffer->timestamp); the file path was
+    // missing it, causing ts to remain 0 throughout CSV parsing and breaking
+    // all time-filtered data queries.
+    logger.timestamp(buffer->timestamp);
     buffer->serialize(logger);
     uint16_t sizeKB = (uint16_t)(logger.size() >> 10);
     if (sizeKB != lastSizeKB) {
