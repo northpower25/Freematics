@@ -46,6 +46,7 @@ from .const import (
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEBUG_HISTORY_SIZE,
+    SENSOR_DEFINITIONS,
 )
 from .views import (
     FreematicsConfigNvsView,
@@ -175,6 +176,88 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         },
         require_admin=False,
     )
+
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old config entries to the current version.
+
+    Version 1 → 2
+    ~~~~~~~~~~~~~~
+    Entity IDs were previously derived from the human-readable sensor name
+    (e.g. ``sensor.accelerometer_x``) because no ``suggested_object_id`` was
+    set.  Version 2 enforces the ``sensor.freematics_{id8}_{key}`` scheme
+    that matches the dashboard discovery regex and multi-device naming
+    conventions introduced in PR #39.  The migration looks up each entity by
+    its stable unique_id and renames it to the canonical form.
+    """
+    _LOGGER.info(
+        "Migrating Freematics config entry from version %s", config_entry.version
+    )
+
+    if config_entry.version < 2:
+        from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+        registry = er.async_get(hass)
+        webhook_id = config_entry.data[CONF_WEBHOOK_ID]
+        device_slug = webhook_id[:8]
+
+        # ── Sensor entities ────────────────────────────────────────────
+        for key in SENSOR_DEFINITIONS:
+            unique_id = f"freematics_{webhook_id}_{key}"
+            entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+            if entity_id is None:
+                continue
+            new_entity_id = f"sensor.freematics_{device_slug}_{key}"
+            if entity_id != new_entity_id:
+                try:
+                    registry.async_update_entity(entity_id, new_entity_id=new_entity_id)
+                    _LOGGER.debug("Renamed %s → %s", entity_id, new_entity_id)
+                except Exception as exc:  # noqa: BLE001 – migration must not abort on rename failure
+                    _LOGGER.warning(
+                        "Could not rename %s → %s: %s", entity_id, new_entity_id, exc
+                    )
+
+        # ── Debug sensor ───────────────────────────────────────────────
+        debug_unique_id = f"freematics_{webhook_id}_debug"
+        debug_entity_id = registry.async_get_entity_id("sensor", DOMAIN, debug_unique_id)
+        if debug_entity_id is not None:
+            new_debug_id = f"sensor.freematics_{device_slug}_debug"
+            if debug_entity_id != new_debug_id:
+                try:
+                    registry.async_update_entity(debug_entity_id, new_entity_id=new_debug_id)
+                    _LOGGER.debug("Renamed %s → %s", debug_entity_id, new_debug_id)
+                except Exception as exc:  # noqa: BLE001 – migration must not abort on rename failure
+                    _LOGGER.warning(
+                        "Could not rename %s → %s: %s", debug_entity_id, new_debug_id, exc
+                    )
+
+        # ── Device tracker ─────────────────────────────────────────────
+        # "standort" is the established suffix used by device_tracker.py and
+        # must match the unique_id / suggested_object_id set there.
+        tracker_unique_id = f"freematics_{webhook_id}_standort"
+        tracker_entity_id = registry.async_get_entity_id(
+            "device_tracker", DOMAIN, tracker_unique_id
+        )
+        if tracker_entity_id is not None:
+            new_tracker_id = f"device_tracker.freematics_{device_slug}_standort"
+            if tracker_entity_id != new_tracker_id:
+                try:
+                    registry.async_update_entity(
+                        tracker_entity_id, new_entity_id=new_tracker_id
+                    )
+                    _LOGGER.debug("Renamed %s → %s", tracker_entity_id, new_tracker_id)
+                except Exception as exc:  # noqa: BLE001 – migration must not abort on rename failure
+                    _LOGGER.warning(
+                        "Could not rename %s → %s: %s",
+                        tracker_entity_id,
+                        new_tracker_id,
+                        exc,
+                    )
+
+        hass.config_entries.async_update_entry(config_entry, version=2)
+        _LOGGER.info("Migration to version 2 complete")
 
     return True
 
