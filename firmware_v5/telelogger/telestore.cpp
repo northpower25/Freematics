@@ -135,6 +135,20 @@ void FileLogger::dispatch(const char* buf, byte len)
     m_size += (len + 1);
 }
 
+void FileLogger::logEvent(const char* text)
+{
+    // Prefix with PID 0xFE so the line is properly formatted for CSV yet
+    // never matched by normal data queries (handlerLogData skips unknown PIDs).
+    // The raw /api/log file view shows the full human-readable text.
+    // 160 bytes = 4 ("FE,") + up to 155 chars of text + NUL; callers format
+    // their message into diag[128] so the combined length is always ≤ 132.
+    char buf[160];
+    int n = snprintf(buf, sizeof(buf), "FE,%s", text);
+    if (n > 0 && n < (int)sizeof(buf)) {
+        dispatch(buf, (byte)n);
+    }
+}
+
 int FileLogger::getFileID(File& root)
 {
     if (root) {

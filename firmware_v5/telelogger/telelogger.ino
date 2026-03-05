@@ -560,6 +560,25 @@ void initialize()
   }
   if (state.check(STATE_STORAGE_READY)) {
     fileid = logger.begin();
+    if (fileid) {
+      // Write a diagnostic boot banner so that every CSV log file carries
+      // the firmware version, device ID, and the initial subsystem status
+      // that would otherwise only appear on the serial console.
+      char diag[128];
+      logger.timestamp(millis());
+      snprintf(diag, sizeof(diag), "BOOT FW=%s ID=%s", FIRMWARE_VERSION, devid);
+      logger.logEvent(diag);
+      snprintf(diag, sizeof(diag), "STATE OBD=%c GPS=%c MEMS=%c",
+          state.check(STATE_OBD_READY)  ? '1' : '0',
+          state.check(STATE_GPS_READY)  ? '1' : '0',
+          state.check(STATE_MEMS_READY) ? '1' : '0');
+      logger.logEvent(diag);
+#if ENABLE_WIFI
+      snprintf(diag, sizeof(diag), "WIFI SSID=%s", wifiSSID[0] ? wifiSSID : "-");
+      logger.logEvent(diag);
+#endif
+      logger.flush();
+    }
   }
 #endif
 
@@ -571,6 +590,13 @@ void initialize()
       memcpy(vin, buf, sizeof(vin) - 1);
       Serial.print("VIN:");
       Serial.println(vin);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) {
+        char diag[32];
+        snprintf(diag, sizeof(diag), "VIN=%s", vin);
+        logger.logEvent(diag);
+      }
+#endif
     }
     int dtcCount = obd.readDTC(dtc, sizeof(dtc) / sizeof(dtc[0]));
     if (dtcCount > 0) {
@@ -691,6 +717,9 @@ void process()
     if (obd.errors >= MAX_OBD_ERRORS) {
       if (!obd.init()) {
         Serial.println("[OBD] ECU OFF");
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OBD ECU_OFF");
+#endif
         state.clear(STATE_OBD_READY | STATE_WORKING);
         return;
       }
@@ -788,6 +817,28 @@ void process()
       Serial.print("[FILE] ");
       Serial.print(sizeKB);
       Serial.println("KB");
+    }
+    // Detect and log subsystem state transitions (OBD/GPS/WiFi/Cell).
+    // prevDiagState is initialised to 0xFFFF so the very first call
+    // always writes a STATUS line, establishing the initial state in the CSV.
+    {
+      static uint16_t prevDiagState = 0xFFFF; /* impossible mask value forces initial STATUS entry */
+      const uint16_t DIAG_MASK = STATE_OBD_READY | STATE_GPS_READY | STATE_GPS_ONLINE
+                                | STATE_WIFI_CONNECTED | STATE_CELL_CONNECTED;
+      uint16_t cur = state.m_state & DIAG_MASK;
+      if (cur != prevDiagState) {
+        char diag[128];
+        snprintf(diag, sizeof(diag),
+            "STATUS OBD=%c GPS=%c FIX=%c WIFI=%c CELL=%c t=%lu",
+            state.check(STATE_OBD_READY)      ? '1' : '0',
+            state.check(STATE_GPS_READY)      ? '1' : '0',
+            state.check(STATE_GPS_ONLINE)     ? '1' : '0',
+            state.check(STATE_WIFI_CONNECTED) ? '1' : '0',
+            state.check(STATE_CELL_CONNECTED) ? '1' : '0',
+            millis() / 1000);
+        logger.logEvent(diag);
+        prevDiagState = cur;
+      }
     }
   }
 #endif

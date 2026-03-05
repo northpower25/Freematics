@@ -69,6 +69,11 @@ public:
     {
         m_file.flush();
     }
+    // Write a human-readable diagnostic/event line to the log file.
+    // The line is formatted as "FE,<text>" (PID 0xFE is reserved for events
+    // and is never queried by handlerLogData(), so it is silently skipped
+    // during data queries while remaining fully visible in the raw file view).
+    void logEvent(const char* text);
 protected:
     int getFileID(File& root);
     uint32_t m_dataTime = 0;
