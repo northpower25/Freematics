@@ -153,11 +153,19 @@ class FreematicsSensor(SensorEntity):
 
 
 class FreematicsDebugSensor(SensorEntity):
-    """Debug sensor that exposes connection type and raw webhook history."""
+    """Debug sensor that exposes detailed device diagnostics as attributes.
+
+    The state value shows the active connection type (WiFi / LTE).  All
+    diagnostic fields that cannot be determined from the webhook payload alone
+    are initialised to "Unbekannt" (unknown) and remain so until the device
+    sends data that allows them to be inferred.
+    """
 
     _attr_should_poll = False
     _attr_has_entity_name = True
     _attr_icon = "mdi:bug"
+
+    _UNK = "Unbekannt"
 
     def __init__(self, webhook_id: str, initial_connection_type: str) -> None:
         """Initialise the debug sensor."""
@@ -167,8 +175,6 @@ class FreematicsDebugSensor(SensorEntity):
         self._attr_unique_id = f"freematics_{webhook_id}_debug"
         self._attr_suggested_object_id = f"freematics_{device_slug}_debug"
         self._attr_native_value = initial_connection_type
-        self._raw_data: list[str] = []
-        self._errors: list[str] = []
         self._attr_device_info = {
             "identifiers": {(DOMAIN, webhook_id)},
             "name": f"Freematics ONE+ ({device_slug})",
@@ -176,18 +182,91 @@ class FreematicsDebugSensor(SensorEntity):
             "model": "ONE+",
         }
 
+        # Initialise all diagnostic attributes to "Unbekannt".
+        _u = self._UNK
+        self._debug: dict = {
+            "fw_version": _u,
+            "connection_mode": _u,
+            "connection_errors": 0,
+            "last_wifi_connection": _u,
+            "last_lte_connection": _u,
+            "last_packet_time": _u,
+            "gps_configured": _u,
+            "gps_active": _u,
+            "gps_satellites": _u,
+            "gps_errors": 0,
+            "last_gps_connection": _u,
+            "obd_configured": _u,
+            "obd_active": _u,
+            "obd_services": _u,
+            "obd_errors": 0,
+            "last_obd_connection": _u,
+            "sd_configured": _u,
+            "sd_present": _u,
+            "sd_storage": _u,
+            "httpd_configured": _u,
+            "httpd_active": _u,
+            "httpd_port": _u,
+            "httpd_errors": _u,
+            "ble_configured": _u,
+            "ble_active": _u,
+            "raw_data": [],
+            "errors": [],
+        }
+
     @property
     def extra_state_attributes(self) -> dict:
-        """Return raw webhook history and error log as attributes."""
+        """Return all diagnostic attributes."""
+        d = self._debug
         return {
-            "raw_data": self._raw_data,
-            "errors": self._errors,
+            # Firmware
+            "FW Version": d["fw_version"],
+            # Connection
+            "Verbindungsmodus": d["connection_mode"],
+            "Verbindungsfehler": d["connection_errors"],
+            "WiFi letzte Verbindung": d["last_wifi_connection"],
+            "LTE letzte Verbindung": d["last_lte_connection"],
+            "Letztes Paket": d["last_packet_time"],
+            # GPS
+            "GPS eingestellt": d["gps_configured"],
+            "GPS aktiv": d["gps_active"],
+            "GPS Anzahl Satelliten": d["gps_satellites"],
+            "GPS Anzahl Fehler": d["gps_errors"],
+            "GPS letzte Verbindung": d["last_gps_connection"],
+            # OBD2
+            "OBD2 Verbindung eingestellt": d["obd_configured"],
+            "OBD2 aktiv": d["obd_active"],
+            "OBD2 Dienste": d["obd_services"],
+            "OBD2 Anzahl Fehler": d["obd_errors"],
+            "OBD2 letzte Verbindung": d["last_obd_connection"],
+            # SD card
+            "SD Karte eingestellt": d["sd_configured"],
+            "SD Karte vorhanden": d["sd_present"],
+            "SD Speicherplatz": d["sd_storage"],
+            # HTTPD
+            "HTTPD eingestellt": d["httpd_configured"],
+            "HTTPD aktiv": d["httpd_active"],
+            "HTTPD PORT": d["httpd_port"],
+            "HTTPD Anzahl Fehler": d["httpd_errors"],
+            # BLE
+            "BLE eingestellt": d["ble_configured"],
+            "BLE aktiv": d["ble_active"],
+            # Raw debug data
+            "raw_data": d["raw_data"],
+            "errors": d["errors"],
         }
 
     @callback
     def update_debug(self, debug_data: dict) -> None:
         """Receive updated debug info from the webhook handler."""
-        self._attr_native_value = debug_data.get("connection_type", self._attr_native_value)
-        self._raw_data = debug_data.get("raw_data", self._raw_data)
-        self._errors = debug_data.get("errors", self._errors)
+        conn_type = debug_data.get("connection_type")
+        if conn_type:
+            self._attr_native_value = conn_type
+
+        # Merge all incoming fields into the stored debug dict.
+        for key in self._debug:
+            if key in debug_data:
+                self._debug[key] = debug_data[key]
+
         self.async_write_ha_state()
+

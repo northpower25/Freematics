@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 from homeassistant.components import frontend
@@ -270,14 +271,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     conn_type = entry.data.get(CONF_CONNECTION_TYPE, CONN_TYPE_WIFI)
     if conn_type == CONN_TYPE_CELLULAR:
         conn_label = "LTE"
+        conn_mode = 1
     elif conn_type == CONN_TYPE_WIFI:
         conn_label = "WiFi"
+        conn_mode = 2
     else:
         conn_label = "WiFi+LTE"
+        conn_mode = 3
 
     # Per-device debug state: rolling history of raw payloads and error log.
     raw_history: deque[str] = deque(maxlen=DEBUG_HISTORY_SIZE)
     error_log: deque[str] = deque(maxlen=DEBUG_HISTORY_SIZE)
+
+    # Diagnostic tracking state – updated on every incoming webhook.
+    diag: dict = {
+        "conn_errors": 0,
+        "last_wifi_connection": None,
+        "last_lte_connection": None,
+        "last_packet_time": None,
+        # GPS
+        "gps_active": False,
+        "gps_satellites": None,
+        "gps_errors": 0,
+        "last_gps_connection": None,
+        # OBD2
+        "obd_active": False,
+        "obd_errors": 0,
+        "last_obd_connection": None,
+        "obd_services_seen": set(),
+    }
+
+    # OBD-II sensor keys (those that require an active OBD2 connection)
+    _OBD_KEYS = {
+        "speed", "rpm", "throttle", "engine_load", "coolant_temp",
+        "intake_temp", "fuel_pressure", "timing_advance",
+        "short_fuel_trim_1", "long_fuel_trim_1",
+        "short_fuel_trim_2", "long_fuel_trim_2",
+    }
 
     async def handle_webhook(hass, webhook_id, request):
         """Handle incoming telemetry data from the Freematics device."""
@@ -302,38 +332,66 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 msg = "Freematics webhook: failed to parse payload"
                 _LOGGER.warning(msg)
                 error_log.append(msg)
+                diag["conn_errors"] += 1
 
         # Store raw payload in rolling history for the debug entity.
         if raw_body:
             raw_history.appendleft(raw_body)
 
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
         if not data:
             _LOGGER.debug("Freematics webhook received empty or unparseable payload")
+            diag["conn_errors"] += 1
             # Still notify debug sensor so errors / raw history are visible.
             if raw_body:
                 async_dispatcher_send(
                     hass,
                     f"{DOMAIN}_{webhook_id}_debug",
-                    {
-                        "connection_type": conn_label,
-                        "raw_data": list(raw_history),
-                        "errors": list(error_log),
-                    },
+                    _build_debug_payload(conn_label, conn_mode, diag, raw_history, error_log, now_iso),
                 )
             return
 
         _LOGGER.debug("Freematics webhook received: %s", data)
+
+        # ── Update diagnostic state from received data ─────────────────
+        diag["last_packet_time"] = now_iso
+        if conn_mode == 1:
+            diag["last_lte_connection"] = now_iso
+        else:
+            diag["last_wifi_connection"] = now_iso
+
+        # GPS: mark active when valid lat/lng coordinates arrive; do NOT reset
+        # to False on packets without GPS data because not every telemetry
+        # packet carries a GPS fix (the firmware only transmits GPS when a new
+        # fix is available).  last_gps_connection already tells the user when
+        # GPS last delivered a valid position.
+        has_gps = "lat" in data and "lng" in data
+        if has_gps:
+            diag["gps_active"] = True
+            diag["last_gps_connection"] = now_iso
+
+        # GPS satellite count (sent even without a full position fix)
+        if "satellites" in data:
+            diag["gps_satellites"] = data["satellites"]
+
+        # OBD2: mark active when any OBD2-specific key arrives; do NOT reset to
+        # False on packets without OBD data – the firmware does not include OBD
+        # PIDs in every telemetry frame (they are skipped when the ECU is slow),
+        # so absence in a single packet does not imply OBD is disconnected.
+        obd_keys_present = {k for k in data if k in _OBD_KEYS}
+        if obd_keys_present:
+            diag["obd_active"] = True
+            diag["last_obd_connection"] = now_iso
+            diag["obd_services_seen"].update(obd_keys_present)
+
         async_dispatcher_send(hass, f"{DOMAIN}_{webhook_id}", data)
 
-        # Notify the debug sensor of the current raw history + errors.
+        # Notify the debug sensor of the current diagnostic state.
         async_dispatcher_send(
             hass,
             f"{DOMAIN}_{webhook_id}_debug",
-            {
-                "connection_type": conn_label,
-                "raw_data": list(raw_history),
-                "errors": list(error_log),
-            },
+            _build_debug_payload(conn_label, conn_mode, diag, raw_history, error_log, now_iso),
         )
 
     async_register(
@@ -355,6 +413,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _build_debug_payload(
+    conn_label: str,
+    conn_mode: int,
+    diag: dict,
+    raw_history: deque,
+    error_log: deque,
+    now_iso: str,
+) -> dict:
+    """Assemble the debug dispatcher payload from current diagnostic state."""
+    _UNK = "Unbekannt"
+
+    return {
+        "connection_type": conn_label,
+        "connection_mode": conn_mode,
+        "connection_errors": diag["conn_errors"],
+        "last_wifi_connection": diag["last_wifi_connection"] or _UNK,
+        "last_lte_connection": diag["last_lte_connection"] or _UNK,
+        "last_packet_time": diag["last_packet_time"] or _UNK,
+        # GPS
+        "gps_configured": "Unbekannt",
+        "gps_active": 1 if diag["gps_active"] else 0,
+        "gps_satellites": diag["gps_satellites"] if diag["gps_satellites"] is not None else _UNK,
+        "gps_errors": diag["gps_errors"],
+        "last_gps_connection": diag["last_gps_connection"] or _UNK,
+        # OBD2
+        "obd_configured": "Unbekannt",
+        "obd_active": 1 if diag["obd_active"] else 0,
+        "obd_services": sorted(diag["obd_services_seen"]) if diag["obd_services_seen"] else _UNK,
+        "obd_errors": diag["obd_errors"],
+        "last_obd_connection": diag["last_obd_connection"] or _UNK,
+        # SD card – not determinable from webhook alone
+        "sd_configured": _UNK,
+        "sd_present": _UNK,
+        "sd_storage": _UNK,
+        # HTTPD – not determinable from webhook alone
+        "httpd_configured": _UNK,
+        "httpd_active": _UNK,
+        "httpd_port": _UNK,
+        "httpd_errors": _UNK,
+        # BLE – not determinable from webhook alone
+        "ble_configured": _UNK,
+        "ble_active": _UNK,
+        # FW version – not transmitted in webhook payloads
+        "fw_version": _UNK,
+        # Raw data for advanced debugging
+        "raw_data": list(raw_history),
+        "errors": list(error_log),
+    }
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
