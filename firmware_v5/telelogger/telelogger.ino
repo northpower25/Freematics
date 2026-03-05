@@ -426,6 +426,26 @@ void processMEMS(CBuffer* buffer)
   accSum[2] += acc[2];
   accCount++;
 
+  // Update lastMotionTime whenever the instantaneous bias-corrected
+  // acceleration exceeds MOTION_THRESHOLD.  This is the fallback motion
+  // source when OBD-II and GPS are both unavailable: without it the
+  // stationary-timeout logic in process() would put the device into
+  // STANDBY (and disconnect WiFi) after ~3 minutes even while the
+  // vehicle is driving.  Uses instantaneous values (same approach as
+  // waitMotion()) rather than the per-buffer average so that brief
+  // manoeuvres (cornering, braking) are detected even across long
+  // sampling windows.
+  {
+    float motion = 0;
+    for (byte i = 0; i < 3; i++) {
+      float m = acc[i] - accBias[i];
+      motion += m * m;
+    }
+    if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
+      lastMotionTime = millis();
+    }
+  }
+
   if (buffer) {
     if (accCount) {
       float value[3];
@@ -433,31 +453,11 @@ void processMEMS(CBuffer* buffer)
       value[1] = accSum[1] / accCount - accBias[1];
       value[2] = accSum[2] / accCount - accBias[2];
       buffer->add(PID_ACC, ELEMENT_FLOAT_D2, value, sizeof(value), 3);
-/*
-      Serial.print("[ACC] ");
-      Serial.print(value[0]);
-      Serial.print('/');
-      Serial.print(value[1]);
-      Serial.print('/');
-      Serial.println(value[2]);
-*/
 #if ENABLE_ORIENTATION
       value[0] = ori.yaw;
       value[1] = ori.pitch;
       value[2] = ori.roll;
       buffer->add(PID_ORIENTATION, ELEMENT_FLOAT_D2, value, sizeof(value), 3);
-#endif
-#if 0
-      // calculate motion
-      float motion = 0;
-      for (byte i = 0; i < 3; i++) {
-        motion += value[i] * value[i];
-      }
-      if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
-        lastMotionTime = millis();
-        Serial.print("Motion:");
-        Serial.println(motion);
-      }
 #endif
     }
     accSum[0] = 0;
@@ -560,6 +560,25 @@ void initialize()
   }
   if (state.check(STATE_STORAGE_READY)) {
     fileid = logger.begin();
+    if (fileid) {
+      // Write a diagnostic boot banner so that every CSV log file carries
+      // the firmware version, device ID, and the initial subsystem status
+      // that would otherwise only appear on the serial console.
+      char diag[128];
+      logger.timestamp(millis());
+      snprintf(diag, sizeof(diag), "BOOT FW=%s ID=%s", FIRMWARE_VERSION, devid);
+      logger.logEvent(diag);
+      snprintf(diag, sizeof(diag), "STATE OBD=%c GPS=%c MEMS=%c",
+          state.check(STATE_OBD_READY)  ? '1' : '0',
+          state.check(STATE_GPS_READY)  ? '1' : '0',
+          state.check(STATE_MEMS_READY) ? '1' : '0');
+      logger.logEvent(diag);
+#if ENABLE_WIFI
+      snprintf(diag, sizeof(diag), "WIFI SSID=%s", wifiSSID[0] ? wifiSSID : "-");
+      logger.logEvent(diag);
+#endif
+      logger.flush();
+    }
   }
 #endif
 
@@ -571,6 +590,13 @@ void initialize()
       memcpy(vin, buf, sizeof(vin) - 1);
       Serial.print("VIN:");
       Serial.println(vin);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) {
+        char diag[32];
+        snprintf(diag, sizeof(diag), "VIN=%s", vin);
+        logger.logEvent(diag);
+      }
+#endif
     }
     int dtcCount = obd.readDTC(dtc, sizeof(dtc) / sizeof(dtc[0]));
     if (dtcCount > 0) {
@@ -691,6 +717,9 @@ void process()
     if (obd.errors >= MAX_OBD_ERRORS) {
       if (!obd.init()) {
         Serial.println("[OBD] ECU OFF");
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OBD ECU_OFF");
+#endif
         state.clear(STATE_OBD_READY | STATE_WORKING);
         return;
       }
@@ -773,6 +802,13 @@ void process()
 
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
+    // Prepend a timestamp record (PID 0) before the data payload so that the
+    // /api/data endpoint (handlerLogData in dataserver.cpp) can correlate each
+    // CSV record with a time offset.  The network serialisation path already
+    // does this via store.timestamp(buffer->timestamp); the file path was
+    // missing it, causing ts to remain 0 throughout CSV parsing and breaking
+    // all time-filtered data queries.
+    logger.timestamp(buffer->timestamp);
     buffer->serialize(logger);
     uint16_t sizeKB = (uint16_t)(logger.size() >> 10);
     if (sizeKB != lastSizeKB) {
@@ -781,6 +817,28 @@ void process()
       Serial.print("[FILE] ");
       Serial.print(sizeKB);
       Serial.println("KB");
+    }
+    // Detect and log subsystem state transitions (OBD/GPS/WiFi/Cell).
+    // prevDiagState is initialised to 0xFFFF so the very first call
+    // always writes a STATUS line, establishing the initial state in the CSV.
+    {
+      static uint16_t prevDiagState = 0xFFFF; /* impossible mask value forces initial STATUS entry */
+      const uint16_t DIAG_MASK = STATE_OBD_READY | STATE_GPS_READY | STATE_GPS_ONLINE
+                                | STATE_WIFI_CONNECTED | STATE_CELL_CONNECTED;
+      uint16_t cur = state.m_state & DIAG_MASK;
+      if (cur != prevDiagState) {
+        char diag[128];
+        snprintf(diag, sizeof(diag),
+            "STATUS OBD=%c GPS=%c FIX=%c WIFI=%c CELL=%c t=%lu",
+            state.check(STATE_OBD_READY)      ? '1' : '0',
+            state.check(STATE_GPS_READY)      ? '1' : '0',
+            state.check(STATE_GPS_ONLINE)     ? '1' : '0',
+            state.check(STATE_WIFI_CONNECTED) ? '1' : '0',
+            state.check(STATE_CELL_CONNECTED) ? '1' : '0',
+            millis() / 1000);
+        logger.logEvent(diag);
+        prevDiagState = cur;
+      }
     }
   }
 #endif
