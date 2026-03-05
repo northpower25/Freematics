@@ -11,7 +11,7 @@
  *                  native browser dialog; no manual port entry is needed.
  */
 
-const PANEL_VERSION = "1.11.0";
+const PANEL_VERSION = "1.12.0";
 
 /* -------------------------------------------------------------------------
  * Styles
