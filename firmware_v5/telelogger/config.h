@@ -72,7 +72,11 @@
 #endif
 
 // maximum consecutive OBD access errors before entering standby
-#define MAX_OBD_ERRORS 3
+// Set to a high value so that a temporarily unreachable ECU does not
+// permanently disconnect OBD-II.  The process() loop already retries
+// obd.init() every 30 s when STATE_OBD_READY is clear, so a hard cap
+// is rarely needed.
+#define MAX_OBD_ERRORS 999
 
 /**************************************
 * Networking configurations
@@ -167,8 +171,10 @@
 // change the following line to change GNSS setting
 #define GNSS GNSS_STANDALONE
 #endif
-// keeping GNSS power on during standby 
-#define GNSS_ALWAYS_ON 0
+// keeping GNSS power on during standby (recommended: set to 1 so the GPS
+// receiver maintains its almanac/ephemeris and achieves a faster fix after
+// the device wakes up from standby mode)
+#define GNSS_ALWAYS_ON 1
 // GNSS reset timeout while no signal
 #define GNSS_RESET_TIMEOUT 300 /* seconds */
 
