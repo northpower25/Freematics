@@ -57,7 +57,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
       7. flash       – choose flash method and device address
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialise flow state."""
