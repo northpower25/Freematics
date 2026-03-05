@@ -61,8 +61,10 @@ DEVICE_MODEL_H = "model_h"   # Model H: WiFi only (no BT, no cellular)
 DEFAULT_DATA_INTERVAL_MS = 0    # 0 = firmware default ≈1000 ms
 DEFAULT_SYNC_INTERVAL_S = 0     # 0 = firmware default 120 s
 
-# Number of raw webhook payloads to keep in the debug entity's history
-DEBUG_HISTORY_SIZE = 100
+# Number of raw webhook payloads to keep in the debug entity's history.
+# 5000 entries cover enough history for error analysis (each payload is
+# typically < 200 bytes, so the list stays well within Python memory limits).
+DEBUG_HISTORY_SIZE = 5000
 
 # JSON payload keys sent by the firmware → (friendly name, unit, device class, state class)
 SENSOR_DEFINITIONS = {

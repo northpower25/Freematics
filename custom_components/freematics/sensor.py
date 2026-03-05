@@ -91,11 +91,15 @@ class FreematicsSensor(SensorEntity):
     """A sensor entity representing a single telemetry data point."""
 
     _attr_should_poll = False
-    # has_entity_name=False: HA does NOT prepend the device name when generating
-    # the entity_id, so _attr_suggested_object_id fully controls the entity_id
-    # suffix. This is required so the dashboard JS can look up entities using
-    # the SENSOR_DEFINITIONS key directly (e.g. prefix + "_battery").
-    _attr_has_entity_name = False
+    # has_entity_name=True: HA prepends the device name when displaying the
+    # entity, producing e.g. "Freematics ONE+ (b1af617d) Speed" instead of
+    # just "Speed".  This makes it easy to identify which device each sensor
+    # belongs to, especially when multiple Freematics ONE+ devices are
+    # managed in the same Home Assistant instance.
+    # _attr_suggested_object_id still controls the entity_id, so the entity
+    # IDs (e.g. sensor.freematics_b1af617d_speed) are not affected and the
+    # dashboard JS discovery pattern continues to work unchanged.
+    _attr_has_entity_name = True
 
     def __init__(self, webhook_id: str, key: str) -> None:
         """Initialise the sensor."""
@@ -152,7 +156,7 @@ class FreematicsDebugSensor(SensorEntity):
     """Debug sensor that exposes connection type and raw webhook history."""
 
     _attr_should_poll = False
-    _attr_has_entity_name = False
+    _attr_has_entity_name = True
     _attr_icon = "mdi:bug"
 
     def __init__(self, webhook_id: str, initial_connection_type: str) -> None:
