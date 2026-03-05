@@ -426,6 +426,26 @@ void processMEMS(CBuffer* buffer)
   accSum[2] += acc[2];
   accCount++;
 
+  // Update lastMotionTime whenever the instantaneous bias-corrected
+  // acceleration exceeds MOTION_THRESHOLD.  This is the fallback motion
+  // source when OBD-II and GPS are both unavailable: without it the
+  // stationary-timeout logic in process() would put the device into
+  // STANDBY (and disconnect WiFi) after ~3 minutes even while the
+  // vehicle is driving.  Uses instantaneous values (same approach as
+  // waitMotion()) rather than the per-buffer average so that brief
+  // manoeuvres (cornering, braking) are detected even across long
+  // sampling windows.
+  {
+    float motion = 0;
+    for (byte i = 0; i < 3; i++) {
+      float m = acc[i] - accBias[i];
+      motion += m * m;
+    }
+    if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
+      lastMotionTime = millis();
+    }
+  }
+
   if (buffer) {
     if (accCount) {
       float value[3];
@@ -433,31 +453,11 @@ void processMEMS(CBuffer* buffer)
       value[1] = accSum[1] / accCount - accBias[1];
       value[2] = accSum[2] / accCount - accBias[2];
       buffer->add(PID_ACC, ELEMENT_FLOAT_D2, value, sizeof(value), 3);
-/*
-      Serial.print("[ACC] ");
-      Serial.print(value[0]);
-      Serial.print('/');
-      Serial.print(value[1]);
-      Serial.print('/');
-      Serial.println(value[2]);
-*/
 #if ENABLE_ORIENTATION
       value[0] = ori.yaw;
       value[1] = ori.pitch;
       value[2] = ori.roll;
       buffer->add(PID_ORIENTATION, ELEMENT_FLOAT_D2, value, sizeof(value), 3);
-#endif
-#if 0
-      // calculate motion
-      float motion = 0;
-      for (byte i = 0; i < 3; i++) {
-        motion += value[i] * value[i];
-      }
-      if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
-        lastMotionTime = millis();
-        Serial.print("Motion:");
-        Serial.println(motion);
-      }
 #endif
     }
     accSum[0] = 0;
