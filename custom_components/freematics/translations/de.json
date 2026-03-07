@@ -72,6 +72,7 @@
           "wifi_ssid": "WLAN-SSID",
           "wifi_password": "WLAN-Passwort",
           "cell_apn": "Mobilfunk-APN",
+          "sim_pin": "SIM-PIN (optional)",
           "device_model": "Gerätemodell",
           "operating_mode": "Betriebsmodus",
           "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",

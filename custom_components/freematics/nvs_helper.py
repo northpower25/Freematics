@@ -11,6 +11,7 @@ Stored NVS keys (namespace "storage"):
   WIFI_SSID     – WiFi SSID
   WIFI_PWD      – WiFi password
   CELL_APN      – Cellular APN (empty string = auto)
+  SIM_PIN       – SIM card PIN (empty string = no PIN / unlocked)
   SERVER_HOST   – HA hostname / Nabu Casa *.ui.nabu.casa (firmware v5.1+)
   SERVER_PORT   – HTTPS port, usually 443 (firmware v5.1+)
   WEBHOOK_PATH  – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
@@ -148,6 +149,7 @@ def generate_nvs_partition(
     enable_ble: bool = False,
     data_interval_ms: int = 0,
     sync_interval_s: int = 0,
+    sim_pin: str = "",
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -187,6 +189,10 @@ def generate_nvs_partition(
         _add_str("WIFI_PWD", wifi_password)
     # Always write APN (empty string means auto-detect)
     _add_str("CELL_APN", cell_apn)
+    # Write SIM PIN only when provided.  An absent NVS key causes the firmware to
+    # fall back to the compile-time SIM_CARD_PIN constant (default: empty string).
+    if sim_pin:
+        _add_str("SIM_PIN", sim_pin)
     if server_host:
         _add_str("SERVER_HOST", server_host)
     if server_port and server_host:

@@ -329,6 +329,11 @@ int handlerControl(UrlHandlerParam* param)
             nvs_set_str(nvs, "CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
+    } else if (!strncmp(cmd, "PIN=", 4)) {
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_str(nvs, "SIM_PIN", strcmp(cmd + 4, "CLEAR") ? cmd + 4 : "") == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
     } else if (!strcmp(cmd, "RESET")) {
         n = snprintf(buf, bufsize, "OK");
         param->contentLength = n;

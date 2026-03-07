@@ -60,6 +60,7 @@ from .const import (
     CONF_ENABLE_BLE,
     CONF_ENABLE_HTTPD,
     CONF_OPERATING_MODE,
+    CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
@@ -494,6 +495,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     wifi_ssid = cfg.get(CONF_WIFI_SSID, "")
     wifi_password = cfg.get(CONF_WIFI_PASSWORD, "")
     cell_apn = cfg.get(CONF_CELL_APN, "")
+    sim_pin = cfg.get(CONF_SIM_PIN, "")
     webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
     enable_ble = bool(cfg.get(CONF_ENABLE_BLE, False))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
@@ -538,6 +540,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "wifi_ssid": wifi_ssid,
         "wifi_password": wifi_password,
         "cell_apn": cell_apn,
+        "sim_pin": sim_pin,
         "server_host": server_host,
         "server_port": server_port,
         "webhook_path": webhook_path,
@@ -601,6 +604,7 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs["enable_ble"],
             kwargs["data_interval_ms"],
             kwargs["sync_interval_s"],
+            kwargs["sim_pin"],
         )
 
         if nvs_data is None:
@@ -686,6 +690,7 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs["enable_ble"],
             kwargs["data_interval_ms"],
             kwargs["sync_interval_s"],
+            kwargs["sim_pin"],
         )
 
         if nvs_data is None:

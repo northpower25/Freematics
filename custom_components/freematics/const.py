@@ -145,5 +145,6 @@ PID_MAP: dict[str, _PidMapping] = {
 CMD_SSID = "SSID={}"
 CMD_WIFI_PWD = "WPWD={}"
 CMD_APN = "APN={}"
+CMD_SIM_PIN = "PIN={}"
 CMD_RESET = "RESET"
 CMD_UPTIME = "UPTIME"
