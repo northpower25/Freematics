@@ -658,9 +658,18 @@ bool TeleClientHTTP::connect(bool quick)
 #endif
   } else {
 #if ENABLE_WIFI
-    if (!wifi.connected()) cell.close();
+    if (!wifi.connected()) {
+      // Full HTTPS-service reset (AT+CHTTPSSTOP → AT+CHTTPSSTART + SSL config)
+      // on every quick reconnect, not just on first connect.  Without this the
+      // SIM7600 HTTPS stack can be left in a partial state after a server-side
+      // close, causing every subsequent AT+CHTTPSOPSE to report success while
+      // still returning ERROR for AT+CHTTPSSEND.
+      cell.close();
+      cell.init();
+    }
 #else
     cell.close();
+    cell.init();
 #endif
   }
 

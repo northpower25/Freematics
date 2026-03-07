@@ -156,6 +156,10 @@ public:
     bool close();
     bool send(HTTP_METHOD method, const char* host, uint16_t port, const char* path, const char* payload = 0, int payloadSize = 0);
     char* receive(int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
+protected:
+    // Override to detect +CHTTPSCLSE: URCs that arrive during any AT command
+    // and mark the session disconnected before send() tries to use it.
+    void inbound() override;
 };
 
 #endif
