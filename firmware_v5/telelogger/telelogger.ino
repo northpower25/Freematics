@@ -895,9 +895,19 @@ bool initCell(bool quick = false)
 #endif
   Serial.print("CELL:");
   Serial.println(teleClient.cell.deviceName());
-  if (!teleClient.cell.checkSIM(simPin)) {
-    Serial.println("NO SIM CARD");
-    //return false;
+  // Retry checkSIM up to 3 times; the SIM may not be ready immediately after power-on
+  {
+    bool simReady = false;
+    for (byte simRetry = 0; simRetry < 3 && !simReady; simRetry++) {
+      if (teleClient.cell.checkSIM(simPin)) {
+        simReady = true;
+      } else if (simRetry < 2) {
+        delay(2000);
+      }
+    }
+    if (!simReady) {
+      Serial.println("NO SIM CARD");
+    }
   }
   Serial.print("IMEI:");
   Serial.println(teleClient.cell.IMEI);

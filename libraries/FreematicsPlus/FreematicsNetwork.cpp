@@ -853,7 +853,8 @@ bool CellHTTP::close()
   } else if (m_type == CELL_SIM7670) {
     return sendCommand("AT+HTTPTERM\r");
   } else {
-    return sendCommand("AT+CIPCLOSE=0\r");
+    // SIM7600: HTTPS session close requires connection ID 0
+    return sendCommand("AT+CHTTPSCLSE=0\r", 1000, "+CHTTPSCLSE:");
   }
 }
 
@@ -898,7 +899,25 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
       }
     }
     return true;
+  } else if (m_type == CELL_SIM7600) {
+    // SIM7600 requires connection ID prefix (0) and longer timeouts for cellular RTT
+    String header = genHeader(method, path, payload, payloadSize);
+    int len = header.length();
+    sprintf(m_buffer, "AT+CHTTPSSEND=0,%u\r", len + payloadSize);
+    if (!sendCommand(m_buffer, 1000, ">")) {
+      m_state = HTTP_DISCONNECTED;
+      return false;
+    }
+    // send HTTP header
+    m_device->xbWrite(header.c_str());
+    // send POST payload if any
+    if (payload) m_device->xbWrite(payload, payloadSize);
+    if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CHTTPSSEND:")) {
+      m_state = HTTP_SENT;
+      return true;
+    }
   } else {
+    // SIM5360 (legacy, no connection ID prefix)
     String header = genHeader(method, path, payload, payloadSize);
     int len = header.length();
     sprintf(m_buffer, "AT+CHTTPSSEND=%u\r", len + payloadSize);
@@ -980,7 +999,11 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     */
     // TODO: implement for multiple chunks of data
     // only process first chunk now
-    sprintf(m_buffer, "AT+CHTTPSRECV=%u\r", RECV_BUF_SIZE - 32);
+    // SIM7600 requires connection ID 0 prefix; SIM5360 does not
+    if (m_type == CELL_SIM7600)
+      sprintf(m_buffer, "AT+CHTTPSRECV=0,%u\r", RECV_BUF_SIZE - 32);
+    else
+      sprintf(m_buffer, "AT+CHTTPSRECV=%u\r", RECV_BUF_SIZE - 32);
     if (sendCommand(m_buffer, timeout, legacy ? "\r\n+CHTTPSRECV: 0" : "\r\n+CHTTPSRECV:0")) {
       char *p = strstr(m_buffer, "\r\n+CHTTPSRECV: DATA");
       if (p) {
