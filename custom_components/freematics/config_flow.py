@@ -311,6 +311,7 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(CONF_WIFI_SSID, default=current.get(CONF_WIFI_SSID, "")): str,
                     vol.Optional(CONF_WIFI_PASSWORD, default=current.get(CONF_WIFI_PASSWORD, "")): str,
                     vol.Optional(CONF_CELL_APN, default=current.get(CONF_CELL_APN, "")): str,
+                    vol.Optional(CONF_SIM_PIN, default=current.get(CONF_SIM_PIN, "")): str,
                     vol.Optional(
                         CONF_DEVICE_MODEL,
                         default=current.get(CONF_DEVICE_MODEL, DEVICE_MODEL_A),

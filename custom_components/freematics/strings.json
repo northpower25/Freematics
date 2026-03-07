@@ -72,6 +72,7 @@
           "wifi_ssid": "WiFi SSID",
           "wifi_password": "WiFi Password",
           "cell_apn": "Cellular APN",
+          "sim_pin": "SIM PIN (optional)",
           "device_model": "Device model",
           "operating_mode": "Operating mode",
           "enable_ble": "Enable BLE (Bluetooth SPP server)",

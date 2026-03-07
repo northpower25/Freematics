@@ -77,6 +77,7 @@ int deviceTemp = 0;
 
 // config data
 char apn[32];
+char simPin[16] = SIM_CARD_PIN;
 #if ENABLE_WIFI
 char wifiSSID[32] = WIFI_SSID;
 char wifiPassword[32] = WIFI_PASSWORD;
@@ -894,7 +895,7 @@ bool initCell(bool quick = false)
 #endif
   Serial.print("CELL:");
   Serial.println(teleClient.cell.deviceName());
-  if (!teleClient.cell.checkSIM(SIM_CARD_PIN)) {
+  if (!teleClient.cell.checkSIM(simPin)) {
     Serial.println("NO SIM CARD");
     //return false;
   }
@@ -1317,6 +1318,14 @@ void loadConfig()
     strcpy(apn, CELL_APN);
   }
 
+  len = sizeof(simPin);
+  simPin[0] = 0;
+  nvs_get_str(nvs, "SIM_PIN", simPin, &len);
+  if (!simPin[0]) {
+    strncpy(simPin, SIM_CARD_PIN, sizeof(simPin) - 1);
+    simPin[sizeof(simPin) - 1] = 0;
+  }
+
 #if ENABLE_WIFI
   len = sizeof(wifiSSID);
   nvs_get_str(nvs, "WIFI_SSID", wifiSSID, &len);
@@ -1418,6 +1427,12 @@ void processBLE(int timeout)
     n += snprintf(buf + n, bufsize - n, "%s", *apn ? apn : "DEFAULT");
   } else if (!strncmp(cmd, "APN=", 4)) {
     n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") == ESP_OK
+        && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+    loadConfig();
+  } else if (!strcmp(cmd, "PIN?")) {
+    n += snprintf(buf + n, bufsize - n, "%s", *simPin ? "SET" : "NONE");
+  } else if (!strncmp(cmd, "PIN=", 4)) {
+    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "SIM_PIN", strcmp(cmd + 4, "CLEAR") ? cmd + 4 : "") == ESP_OK
         && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
     loadConfig();
   } else if (!strcmp(cmd, "NET_OP")) {
