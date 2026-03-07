@@ -19,7 +19,7 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   header += " HTTP/1.1\r\nConnection: keep-alive\r\nHost: ";
   header += m_host;
   if (method != METHOD_GET) {
-    header += "\r\nContent-length: ";
+    header += "\r\nContent-Type: text/plain\r\nContent-length: ";
     header += String(payloadSize);
   }
   header += "\r\n\r\n";
@@ -857,6 +857,15 @@ bool CellHTTP::open(const char* host, uint16_t port)
         if (p) {
           p = strchr(p, ',');
           if (!p || atoi(p + 1) == 0) {
+            // TLS handshake succeeded; but check whether the server already
+            // closed the session in the same URC burst (happens when the
+            // server sends a TLS close_notify or TCP RST immediately after
+            // the handshake — e.g. due to idle-timeout or protocol mismatch).
+            if (strstr(m_buffer, "+CHTTPSCLSE")) {
+              Serial.println("[CELL] Session closed immediately after TLS");
+              m_state = HTTP_DISCONNECTED;
+              return false;
+            }
             m_state = HTTP_CONNECTED;
             m_host = host;
             return true;
@@ -884,6 +893,22 @@ bool CellHTTP::close()
   } else {
     // SIM7600: HTTPS session close requires connection ID 0
     return sendCommand("AT+CHTTPSCLSE=0\r", 1000, "+CHTTPSCLSE:");
+  }
+}
+
+void CellHTTP::inbound()
+{
+  // Handle base-class URCs (incoming data, GPS position updates, etc.).
+  CellSIMCOM::inbound();
+  // Detect unsolicited +CHTTPSCLSE: that the modem emits when the remote
+  // server closes the TLS session (TCP FIN / TLS close_notify / RST).
+  // This URC often arrives while the firmware is busy processing an unrelated
+  // AT command (e.g. AT+CSQ for RSSI), which means inbound() is the only
+  // place where it is reliably seen.  Marking the state as DISCONNECTED here
+  // ensures that transmit()'s guard `cell.state() != HTTP_CONNECTED` triggers
+  // a proper reconnect instead of calling AT+CHTTPSSEND on a dead session.
+  if (m_buffer && strstr(m_buffer, "+CHTTPSCLSE")) {
+    m_state = HTTP_DISCONNECTED;
   }
 }
 
