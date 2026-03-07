@@ -782,6 +782,16 @@ void CellHTTP::init()
   if (m_type == CELL_SIM7670) {
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
+  } else if (m_type == CELL_SIM7600) {
+    // Configure SSL context 0 to skip certificate verification and use TLS 1.2.
+    // The SIM7600's built-in CA store may not include the Let's Encrypt / Nabu
+    // Casa issuer, so authmode=0 (no cert check) is required — identical to
+    // WiFiClientSecure::setInsecure() used on the Wi-Fi path.
+    sendCommand("AT+CHTTPSSTOP\r");
+    sendCommand("AT+CHTTPSSTART\r");
+    sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
+    sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
+    sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
@@ -829,12 +839,31 @@ bool CellHTTP::open(const char* host, uint16_t port)
     return true;
   } else {
     memset(m_buffer, 0, RECV_BUF_SIZE);
+    if (m_type == CELL_SIM7600 && host) {
+      // Set SNI so servers that host multiple certificates (e.g. Nabu Casa
+      // *.ui.nabu.casa) send the correct leaf certificate during TLS handshake.
+      sprintf(m_buffer, "AT+CSSLCFG=\"sni\",0,\"%s\"\r", host);
+      sendCommand(m_buffer);
+    }
     sprintf(m_buffer, "AT+CHTTPSOPSE=\"%s\",%u,%u\r", host, port, port == 443 ? 2: 1);
     if (sendCommand(m_buffer, 1000)) {
       if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CHTTPSOPSE:")) {
-        m_state = HTTP_CONNECTED;
-        m_host = host;
-        return true;
+        // Validate the error code in +CHTTPSOPSE: <conn_id>,<err>.
+        // A non-zero <err> means the TLS handshake failed (e.g. cert error).
+        // Without this check open() returned HTTP_CONNECTED even on failure,
+        // causing every subsequent AT+CHTTPSSEND to return ERROR immediately.
+        // If no comma is present (old firmware without error code), assume success.
+        char *p = strstr(m_buffer, "+CHTTPSOPSE:");
+        if (p) {
+          p = strchr(p, ',');
+          if (!p || atoi(p + 1) == 0) {
+            m_state = HTTP_CONNECTED;
+            m_host = host;
+            return true;
+          }
+          Serial.print("[CELL] TLS error:");
+          Serial.println(atoi(p + 1));
+        }
       }
     }
   }
