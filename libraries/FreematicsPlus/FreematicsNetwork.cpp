@@ -888,9 +888,12 @@ bool CellHTTP::open(const char* host, uint16_t port)
           char *comma = strchr(p, ',');
           int err = comma ? atoi(comma + 1) : -1;
           if (err == 0) {
-            m_state = HTTP_CONNECTED;
             m_host = host;
-            sendCommand(0, 100);  // drain UART; inbound() watches for +CCHCLOSE
+            // Preserve HTTP_DISCONNECTED if inbound() already detected
+            // a +CCH_PEER_CLOSED that arrived in the same buffer as +CCHOPEN:
+            // (server closed the connection before we sent the first request).
+            if (m_state != HTTP_DISCONNECTED) m_state = HTTP_CONNECTED;
+            sendCommand(0, 100);  // drain UART; inbound() watches for +CCHCLOSE/+CCH_PEER_CLOSED
             if (m_state != HTTP_CONNECTED) {
               Serial.println("[CELL] Session closed immediately after TLS");
               return false;
@@ -959,12 +962,15 @@ void CellHTTP::inbound()
   // Handle base-class URCs (incoming data, GPS position updates, etc.).
   CellSIMCOM::inbound();
   // Detect unsolicited close URCs: +CHTTPSCLSE/+CHTTPS_PEER_CLOSED (SIM5360
-  // legacy HTTPS stack) or +CCHCLOSE (SIM7600 raw SSL socket interface).
-  // These arrive while the firmware is busy with an unrelated AT command
-  // (e.g. AT+CSQ for RSSI); marking state DISCONNECTED here ensures that
-  // transmit()'s guard triggers a proper reconnect before the next send.
+  // legacy HTTPS stack), +CCHCLOSE (SIM7600 session closed locally or via
+  // AT+CCHCLOSE), or +CCH_PEER_CLOSED (SIM7600 server-initiated close).
+  // +CCH_PEER_CLOSED is distinct from +CCHCLOSE: it fires when the remote peer
+  // sends a TCP/TLS FIN (e.g. nabu.casa closes after sending the HTTP 200).
+  // All must set m_state = HTTP_DISCONNECTED so that transmit()'s guard
+  // triggers a proper reconnect (or a direct AT+CCHRECV read) before the
+  // next send attempt.
   if (m_buffer && (strstr(m_buffer, "+CHTTPSCLSE") || strstr(m_buffer, "+CHTTPS_PEER_CLOSED") ||
-                   strstr(m_buffer, "+CCHCLOSE:"))) {
+                   strstr(m_buffer, "+CCHCLOSE:") || strstr(m_buffer, "+CCH_PEER_CLOSED:"))) {
     m_state = HTTP_DISCONNECTED;
   }
 }
@@ -1032,9 +1038,25 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     m_device->xbWrite(header.c_str());
     // send POST payload if any
     if (payload) m_device->xbWrite(payload, payloadSize);
-    if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CCHSEND:")) {
-      m_state = HTTP_SENT;
-      return true;
+    // Some SIM7600E-H firmware versions return only OK on a successful send
+    // without generating a +CCHSEND: 0,0 completion URC.  Use the default
+    // OK/ERROR termination and treat absence of a non-zero +CCHSEND: error
+    // code as success.  +CCHSEND: 0,N with N > 0 always indicates failure.
+    // If the remote peer closed the connection simultaneously (e.g. nabu.casa
+    // sends HTTP 200 then TCP FIN), inbound() will have set m_state to
+    // HTTP_DISCONNECTED; we preserve that so receive() can try a direct
+    // AT+CCHRECV read instead of waiting for a +CCHRECV URC that won't come.
+    if (sendCommand(0, HTTP_CONN_TIMEOUT)) {
+      bool sendErr = false;
+      char *cs = strstr(m_buffer, "+CCHSEND:");
+      if (cs) {
+        char *comma = strchr(cs, ',');
+        sendErr = !comma || atoi(comma + 1) != 0;
+      }
+      if (!sendErr) {
+        if (m_state != HTTP_DISCONNECTED) m_state = HTTP_SENT;
+        return true;
+      }
     }
   } else {
     // SIM5360 (legacy, no connection ID prefix)
@@ -1103,9 +1125,15 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     char* payload = 0;
     bool keepalive;
 
-    // Wait for +CCHRECV: <session>,<len> URC (data available on session 0)
-    if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
-    if (!m_incoming) return 0;
+    // Wait for +CCHRECV: <session>,<len> URC (data available on session 0).
+    // Skip the wait when the peer already closed the connection (m_state ==
+    // HTTP_DISCONNECTED, set by inbound() on +CCH_PEER_CLOSED:): in that case
+    // the server response is buffered in the modem and readable via a direct
+    // AT+CCHRECV without waiting for a URC that will never arrive separately.
+    if (m_state != HTTP_DISCONNECTED) {
+      if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
+      if (!m_incoming) return 0;
+    }
     m_incoming = 0;
 
     // Read the data: +CCHRECV: DATA,<session>,<len>\r\n<data>\r\n+CCHRECV: 0\r\nOK
