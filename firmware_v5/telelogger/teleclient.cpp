@@ -598,6 +598,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 #endif
   {
     Serial.print("[CELL] ");
+    Serial.print(SERVER_HOST);
     Serial.println(path);
     success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, packetBuffer, packetSize);
   }

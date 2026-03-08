@@ -525,9 +525,17 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
             server_port = 80
     except Exception:  # noqa: BLE001
         # get_url() can raise NoURLAvailableError or other network-related
-        # errors when no external URL is configured; silently skip server
-        # settings — the device will use compile-time defaults.
-        pass
+        # errors when no external URL is configured.  Cellular connections
+        # require an externally reachable Home Assistant URL (Nabu Casa or
+        # port-forward).  Log a warning so the user understands why the device
+        # cannot reach Home Assistant.
+        _LOGGER.warning(
+            "Freematics: no external Home Assistant URL configured. "
+            "Cellular (SIM) connections require Nabu Casa cloud access or a "
+            "publicly reachable URL. The firmware will fall back to the "
+            "compile-time default server (hub.freematics.com), which will NOT "
+            "deliver webhooks to this Home Assistant instance."
+        )
 
     # In datalogger mode (HTTPD enabled) the device serves a local HTTP API and
     # must NOT send webhooks to HA – leave webhook_path empty so the firmware

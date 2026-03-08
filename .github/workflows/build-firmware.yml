@@ -2,6 +2,8 @@ name: Build Firmware
 
 on:
   push:
+    branches:
+      - '**'
     paths:
       - 'firmware_v5/telelogger/**'
       - 'libraries/**'
