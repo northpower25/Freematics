@@ -335,6 +335,9 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
     } while(0);
   } else {
     do {
+      // Flush any stale UART data (leftover OK, URCs from checkSIM, etc.) so that
+      // the first AT+CPSI? response is not mixed with unrelated earlier traffic.
+      m_device->xbPurge();
       do {
         m_device->xbWrite("AT+CPSI?\r");
         m_buffer[0] = 0;
@@ -344,7 +347,11 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
           success = true;
           break;
         }
-        if (ret == -1 || ret == 4) break;
+        // ret == 4 → ",Low Power Mode": modem cannot register in this state.
+        // ret == -1 → unexpected data (e.g. registration URCs that don't match any
+        //             expected pattern): do NOT break – just retry on the next poll
+        //             cycle so those stray bytes do not abort the search prematurely.
+        if (ret == 4) break;
         delay(500);
       } while (millis() - t < timeout);
       if (!success) break;
@@ -354,7 +361,9 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
         delay(100);
         if (sendCommand("AT+CREG?\r", 1000, "+CREG: 0,")) {
           char *p = strstr(m_buffer, "+CREG: 0,");
-          success = (p && (*(p + 9) == '1' || *(p + 9) == '5') || *(p + 9) == '6');
+          // Fix operator-precedence: ensure all three registration states (home=1,
+          // roaming=5, SMS-only=6) are guarded by the null-check on p.
+          success = p && (*(p + 9) == '1' || *(p + 9) == '5' || *(p + 9) == '6');
         }
       } while (!success && millis() - t < timeout);
       if (!success) break;
