@@ -904,7 +904,11 @@ bool CellHTTP::open(const char* host, uint16_t port)
             // closed the session in the same URC burst (happens when the
             // server sends a TLS close_notify or TCP RST immediately after
             // the handshake — e.g. due to idle-timeout or protocol mismatch).
-            if (strstr(m_buffer, "+CHTTPSCLSE")) {
+            // +CHTTPSCLSE is the orderly close; +CHTTPS_PEER_CLOSED is the
+            // abrupt peer-initiated close.  Both must be detected here so
+            // that open() returns false rather than a spurious HTTP_CONNECTED
+            // state that would make the next AT+CHTTPSSEND fail with ERROR.
+            if (strstr(m_buffer, "+CHTTPSCLSE") || strstr(m_buffer, "+CHTTPS_PEER_CLOSED")) {
               Serial.println("[CELL] Session closed immediately after TLS");
               m_state = HTTP_DISCONNECTED;
               return false;
@@ -943,14 +947,17 @@ void CellHTTP::inbound()
 {
   // Handle base-class URCs (incoming data, GPS position updates, etc.).
   CellSIMCOM::inbound();
-  // Detect unsolicited +CHTTPSCLSE: that the modem emits when the remote
-  // server closes the TLS session (TCP FIN / TLS close_notify / RST).
-  // This URC often arrives while the firmware is busy processing an unrelated
-  // AT command (e.g. AT+CSQ for RSSI), which means inbound() is the only
-  // place where it is reliably seen.  Marking the state as DISCONNECTED here
-  // ensures that transmit()'s guard `cell.state() != HTTP_CONNECTED` triggers
-  // a proper reconnect instead of calling AT+CHTTPSSEND on a dead session.
-  if (m_buffer && strstr(m_buffer, "+CHTTPSCLSE")) {
+  // Detect unsolicited +CHTTPSCLSE: or +CHTTPS_PEER_CLOSED that the modem
+  // emits when the remote server closes the TLS session (TCP FIN / TLS
+  // close_notify / RST) or when the modem itself detects the connection is
+  // dead.  These URCs often arrive while the firmware is busy processing an
+  // unrelated AT command (e.g. AT+CSQ for RSSI), which means inbound() is
+  // the only place where they are reliably seen.  Marking the state as
+  // DISCONNECTED here ensures that transmit()'s guard
+  // `cell.state() != HTTP_CONNECTED` triggers a proper reconnect — calling
+  // connect(true) which re-runs the TLS handshake — immediately before the
+  // next AT+CHTTPSSEND, rather than sending on an already-dead session.
+  if (m_buffer && (strstr(m_buffer, "+CHTTPSCLSE") || strstr(m_buffer, "+CHTTPS_PEER_CLOSED"))) {
     m_state = HTTP_DISCONNECTED;
   }
 }
