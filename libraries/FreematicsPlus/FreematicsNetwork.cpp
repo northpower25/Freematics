@@ -825,6 +825,10 @@ void CellHTTP::init()
     // TLS close_notify (+CHTTPS_PEER_CLOSED) before AT+CHTTPSSEND can succeed.
     // If the modem firmware does not support AT+CSSLCFG="alpnprotocol" it
     // returns ERROR which is harmless (sendCommand just returns false).
+    // alpnprotocol is applied both before and after AT+CHTTPSSTART because on
+    // some SIM7600E-H firmware versions AT+CHTTPSSTART re-reads the SSL context
+    // and may reset runtime ALPN settings; re-applying afterwards ensures the
+    // restriction is always in effect regardless of firmware behaviour.
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
@@ -834,6 +838,9 @@ void CellHTTP::init()
       Serial.print("[CELL] CHTTPSSTART failed:");
       Serial.println(m_buffer);
     }
+    // Re-apply after service start: some firmware re-initialises the SSL
+    // context when AT+CHTTPSSTART runs, clearing the alpnprotocol setting.
+    sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
