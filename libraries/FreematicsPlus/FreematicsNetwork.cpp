@@ -896,6 +896,16 @@ bool CellHTTP::open(const char* host, uint16_t port)
     // URCs can end up in the +CCHOPEN: receive window and trigger inbound()
     // to set m_state=HTTP_DISCONNECTED before we can inspect the TLS result.
     m_device->xbPurge();
+    // Set SNI (Server Name Indication) for the SSL context before connecting.
+    // Unlike AT+CHTTPSOPSE (which derives SNI from the URL parameter),
+    // AT+CCHOPEN is a raw SSL socket and does NOT automatically set SNI from
+    // its hostname argument on all SIM7600E-H firmware revisions.  Without
+    // SNI, Cloudflare / nabu.casa cannot route the TLS connection to the
+    // correct origin server and closes it immediately after the handshake —
+    // the +CCH_PEER_CLOSED: URC then arrives before send() can transmit.
+    // (SIM7070 already sets SNI explicitly; see its open() branch above.)
+    sprintf(m_buffer, "AT+CSSLCFG=\"sni\",0,\"%s\"\r", host);
+    sendCommand(m_buffer);
     sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
     if (sendCommand(m_buffer, 1000)) {
       // Reset m_state AFTER consuming the CCHOPEN OK response (which may have
@@ -914,9 +924,10 @@ bool CellHTTP::open(const char* host, uint16_t port)
             // m_state was set to HTTP_CONNECTED above; inbound() will have
             // changed it to HTTP_DISCONNECTED if +CCH_PEER_CLOSED: or
             // +CCHCLOSE: arrived in the same buffer as +CCHOPEN:0,0.
-            // The 100 ms drain below catches any close URC that arrives
-            // slightly after the handshake completes.
-            sendCommand(0, 100);  // drain UART; inbound() watches for +CCHCLOSE/+CCH_PEER_CLOSED
+            // The 500 ms drain below catches any close URC that arrives
+            // shortly after the handshake completes (e.g. if ALPN is
+            // unexpectedly negotiated as h2 and the peer sends GOAWAY).
+            sendCommand(0, 500);  // drain UART; inbound() watches for +CCHCLOSE/+CCH_PEER_CLOSED
             if (m_state != HTTP_CONNECTED) {
               Serial.println("[CELL] Session closed immediately after TLS");
               return false;
