@@ -684,7 +684,11 @@ bool TeleClientHTTP::connect(bool quick)
     for (byte attempts = 0; !success && attempts < 3; attempts++) {
       success = cell.open(SERVER_HOST, SERVER_PORT);
       if (!success) {
-        if (!cell.check()) break;
+        // After a TLS failure the modem may be sending cleanup URCs
+        // (+CHTTPSCLSE etc.) for up to a second.  Give it 2 s to settle
+        // before testing with AT so all three retries actually execute
+        // instead of breaking out on the first failed check().
+        if (!cell.check(2000)) break;
         cell.close();
         cell.init();
       }

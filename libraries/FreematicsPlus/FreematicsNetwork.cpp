@@ -339,6 +339,10 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
       // the first AT+CPSI? response is not mixed with unrelated earlier traffic.
       m_device->xbPurge();
       do {
+        // Flush any URCs that arrived during the previous poll interval
+        // (e.g. +CREG, +CEREG registration URCs) so they do not compete
+        // with the AT+CPSI? response inside the 500 ms xbReceive window.
+        m_device->xbPurge();
         m_device->xbWrite("AT+CPSI?\r");
         m_buffer[0] = 0;
         const char* answers[] = {"NO SERVICE", ",Online", ",Offline", ",Low Power Mode"};
@@ -801,9 +805,15 @@ void CellHTTP::init()
     // The SIM7600's built-in CA store may not include the Let's Encrypt / Nabu
     // Casa issuer, so authmode=0 (no cert check) is required — identical to
     // WiFiClientSecure::setInsecure() used on the Wi-Fi path.
+    // sslversion=3 (TLS 1.2) is used instead of 4 ("all"): on SIM7600E-H some
+    // firmware versions map 4 to TLS 1.3 or to an "all" mode that attempts
+    // TLS 1.3 first; the SIM7600 TLS 1.3 stack is incomplete on several
+    // firmware revisions and causes +CHTTPSOPSE error 14 even with authmode=0.
+    // Forcing TLS 1.2 avoids the broken TLS 1.3 path while remaining
+    // compatible with all servers that accept TLS 1.2.
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
-    sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
+    sendCommand("AT+CSSLCFG=\"sslversion\",0,3\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
     sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
   } else if (m_type != CELL_SIM7070) {
