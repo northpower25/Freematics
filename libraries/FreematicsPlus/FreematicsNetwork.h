@@ -21,6 +21,9 @@
 
 #define XBEE_BAUDRATE 115200
 #define HTTP_CONN_TIMEOUT 5000
+// TLS handshake over cellular can take longer than a data exchange; allow
+// up to 15 seconds before declaring the connection attempt failed.
+#define HTTP_TLS_HANDSHAKE_TIMEOUT 15000
 
 #define RECV_BUF_SIZE 512
 

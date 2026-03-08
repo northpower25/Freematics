@@ -801,19 +801,21 @@ void CellHTTP::init()
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
   } else if (m_type == CELL_SIM7600) {
-    // Configure SSL context 0 to skip certificate verification and use TLS 1.2.
+    // Configure SSL context 0 to skip certificate verification.
     // The SIM7600's built-in CA store may not include the Let's Encrypt / Nabu
     // Casa issuer, so authmode=0 (no cert check) is required — identical to
     // WiFiClientSecure::setInsecure() used on the Wi-Fi path.
-    // sslversion=3 (TLS 1.2) is used instead of 4 ("all"): on SIM7600E-H some
-    // firmware versions map 4 to TLS 1.3 or to an "all" mode that attempts
-    // TLS 1.3 first; the SIM7600 TLS 1.3 stack is incomplete on several
-    // firmware revisions and causes +CHTTPSOPSE error 14 even with authmode=0.
-    // Forcing TLS 1.2 avoids the broken TLS 1.3 path while remaining
-    // compatible with all servers that accept TLS 1.2.
+    // sslversion=4 ("ALL") is the SIMCOM-recommended setting: it allows the
+    // modem to negotiate the best mutually supported TLS version with the server
+    // (typically TLS 1.2 in practice on SIM7600E-H).  Using sslversion=3
+    // (TLS 1.2 only) can cause error 15 because the modem's TLS 1.2-only mode
+    // may have cipher-suite or SNI conflicts with some servers.
+    // ignorertctime=1 is needed because the modem's RTC is usually wrong when
+    // the device first powers on; without this the HTTPS stack would reject
+    // valid server certificates whose notBefore/notAfter can't be verified.
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
-    sendCommand("AT+CSSLCFG=\"sslversion\",0,3\r");
+    sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
     sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
   } else if (m_type != CELL_SIM7070) {
@@ -863,15 +865,13 @@ bool CellHTTP::open(const char* host, uint16_t port)
     return true;
   } else {
     memset(m_buffer, 0, RECV_BUF_SIZE);
-    if (m_type == CELL_SIM7600 && host) {
-      // Set SNI so servers that host multiple certificates (e.g. Nabu Casa
-      // *.ui.nabu.casa) send the correct leaf certificate during TLS handshake.
-      sprintf(m_buffer, "AT+CSSLCFG=\"sni\",0,\"%s\"\r", host);
-      sendCommand(m_buffer);
-    }
+    // Note: AT+CHTTPSOPSE automatically sets the TLS SNI from the host
+    // parameter, so no explicit AT+CSSLCFG="sni" call is needed here.
+    // Adding an explicit SNI command for SIM7600 can conflict with the
+    // automatic SNI set by the HTTPS service and cause +CHTTPSOPSE error 15.
     sprintf(m_buffer, "AT+CHTTPSOPSE=\"%s\",%u,%u\r", host, port, port == 443 ? 2: 1);
     if (sendCommand(m_buffer, 1000)) {
-      if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CHTTPSOPSE:")) {
+      if (sendCommand(0, HTTP_TLS_HANDSHAKE_TIMEOUT, "+CHTTPSOPSE:")) {
         // Validate the error code in the +CHTTPSOPSE URC.  Two formats exist:
         //   "+CHTTPSOPSE: <conn_id>,<err>"  – most SIM7600 firmware versions
         //   "+CHTTPSOPSE: <err>"            – some variants (no connection ID)
