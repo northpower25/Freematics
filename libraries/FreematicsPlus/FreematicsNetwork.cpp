@@ -687,10 +687,16 @@ void CellSIMCOM::inbound()
 
     // SIM5360 / old SIM7600 firmware: "+CHTTPSRECV EVENT,<conid>"  → contains "RECV EVENT"
     // Newer SIM7600 firmware:          "+CHTTPSRECV: EVENT,<conid>" → contains "+CHTTPSRECV: EVENT"
-    // Both must set m_incoming so that CellHTTP::receive() proceeds without a
+    // SIM7600 CCH (raw SSL socket):    "+CCHRECV: <session>,<len>"  → e.g. "+CCHRECV: 0,148"
+    //   or "+CCHRECV:<session>,<len>" (no-space firmware variant).
+    //   We always use session 0 (AT+CCHOPEN=0 / AT+CCHRECV=0), so matching
+    //   "+CCHRECV: 0," / "+CCHRECV:0," is unambiguous and does not conflict
+    //   with "+CCHRECV: DATA,0,<len>" responses (which start with "DATA").
+    // All must set m_incoming so that CellHTTP::receive() proceeds without a
     // full timeout waiting for a URC that was already buffered.
     if (strstr(m_buffer, "+IPD") || strstr(m_buffer, "RECV EVENT") ||
-        strstr(m_buffer, "+CHTTPSRECV: EVENT")) {
+        strstr(m_buffer, "+CHTTPSRECV: EVENT") ||
+        strstr(m_buffer, "+CCHRECV: 0,") || strstr(m_buffer, "+CCHRECV:0,")) {
       Serial.println("[CELL] Incoming data");
       m_incoming = 1;
     }
@@ -801,46 +807,27 @@ void CellHTTP::init()
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
   } else if (m_type == CELL_SIM7600) {
-    // Configure SSL context 0 to skip certificate verification.
-    // The SIM7600's built-in CA store may not include the Let's Encrypt / Nabu
-    // Casa issuer, so authmode=0 (no cert check) is required — identical to
-    // WiFiClientSecure::setInsecure() used on the Wi-Fi path.
-    // sslversion=4 ("ALL") is the SIMCOM-recommended setting: it allows the
-    // modem to negotiate the best mutually supported TLS version with the server
-    // (typically TLS 1.2 in practice on SIM7600E-H).
-    // ignorertctime=1 is needed because the modem's RTC is usually wrong when
-    // the device first powers on; without this the HTTPS stack would reject
-    // valid server certificates whose notBefore/notAfter can't be verified.
-    // NOTE: AT+CSSLCFG must be sent BEFORE AT+CHTTPSSTART so the settings are
-    // in place when the HTTPS service initialises its internal SSL context.
-    // AT+CHTTPSOPSE uses ssltype=1 (use SSL context 0) rather than ssltype=2
-    // ("hardcoded no-cert-check") because ssltype=2 bypasses AT+CSSLCFG
-    // settings entirely (sslversion, ignorertctime) and uses modem-firmware
-    // defaults that can cause +CHTTPSOPSE error 15 on SIM7600E-H.
-    // alpnprotocol restricts TLS ALPN negotiation to http/1.1 only.
-    // Without this, the SIM7600 CHTTPS stack may advertise h2 (HTTP/2) in the
-    // TLS ClientHello.  If the server (e.g. Cloudflare / nabu.casa) agrees to
-    // h2 it will expect an HTTP/2 Connection Preface after the handshake; the
-    // firmware sends HTTP/1.1 instead, causing the server to close with RST /
-    // TLS close_notify (+CHTTPS_PEER_CLOSED) before AT+CHTTPSSEND can succeed.
-    // If the modem firmware does not support AT+CSSLCFG="alpnprotocol" it
-    // returns ERROR which is harmless (sendCommand just returns false).
-    // alpnprotocol is applied both before and after AT+CHTTPSSTART because on
-    // some SIM7600E-H firmware versions AT+CHTTPSSTART re-reads the SSL context
-    // and may reset runtime ALPN settings; re-applying afterwards ensures the
-    // restriction is always in effect regardless of firmware behaviour.
-    sendCommand("AT+CHTTPSSTOP\r");
+    // Use AT+CCH (raw SSL client socket) instead of the AT+CHTTPS HTTPS stack.
+    // Root cause of +CHTTPS_PEER_CLOSED on Cloudflare / nabu.casa:
+    //   The SIM7600E-H CHTTPS stack unconditionally advertises h2 (HTTP/2) in
+    //   the TLS ClientHello ALPN extension, regardless of AT+CSSLCFG settings.
+    //   When Cloudflare selects h2 it immediately sends an HTTP/2 Connection
+    //   Preface (SETTINGS frame).  The CHTTPS stack cannot process HTTP/2 and
+    //   closes the session (+CHTTPS_PEER_CLOSED) before AT+CHTTPSSEND can run.
+    //   AT+CCHOPEN uses SSL context 0 (configured by AT+CSSLCFG below) which
+    //   correctly honours the alpnprotocol restriction to "http/1.1", so
+    //   Cloudflare negotiates HTTP/1.1 and the connection stays open for
+    //   AT+CCHSEND.  All other AT+CSSLCFG settings (sslversion, authmode,
+    //   ignorertctime) apply to the CCH interface in the same way as before.
+    sendCommand("AT+CCHSTOP\r");
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
     sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
     sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
-    if (!sendCommand("AT+CHTTPSSTART\r")) {
-      Serial.print("[CELL] CHTTPSSTART failed:");
+    if (!sendCommand("AT+CCHSTART\r")) {
+      Serial.print("[CELL] CCHSTART failed:");
       Serial.println(m_buffer);
     }
-    // Re-apply after service start: some firmware re-initialises the SSL
-    // context when AT+CHTTPSSTART runs, clearing the alpnprotocol setting.
-    sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
@@ -886,44 +873,52 @@ bool CellHTTP::open(const char* host, uint16_t port)
     sendCommand("AT+HTTPINIT\r");
     sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r");
     return true;
-  } else {
+  } else if (m_type == CELL_SIM7600) {
+    // AT+CCHOPEN uses SSL context 0 configured by init() (authmode=0,
+    // sslversion=4, ignorertctime=1, alpnprotocol="http/1.1").
+    // client_type=1 → SSL; session ID 0 is used throughout.
     memset(m_buffer, 0, RECV_BUF_SIZE);
-    // Use ssltype=1 so that AT+CHTTPSOPSE uses SSL context 0, which has been
-    // configured by init() with authmode=0 (no cert check), sslversion=4 (ALL),
-    // and ignorertctime=1.  ssltype=2 ("hardcoded no-cert-check") bypasses
-    // AT+CSSLCFG settings entirely and uses modem-firmware defaults, which can
-    // cause TLS handshake failure (error 15) on SIM7600E-H.
-    // SNI is set automatically by AT+CHTTPSOPSE from the host parameter;
-    // no explicit AT+CSSLCFG="sni" call is needed (and it would conflict).
+    Serial.printf("[CELL] Connecting to %s:%u\n", host, port);
+    sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
+    if (sendCommand(m_buffer, 1000)) {
+      if (sendCommand(0, HTTP_TLS_HANDSHAKE_TIMEOUT, "+CCHOPEN:")) {
+        // +CCHOPEN: <sessionid>,<error>  (error=0 → success)
+        char *p = strstr(m_buffer, "+CCHOPEN:");
+        if (p) {
+          char *comma = strchr(p, ',');
+          int err = comma ? atoi(comma + 1) : -1;
+          if (err == 0) {
+            m_state = HTTP_CONNECTED;
+            m_host = host;
+            sendCommand(0, 100);  // drain UART; inbound() watches for +CCHCLOSE
+            if (m_state != HTTP_CONNECTED) {
+              Serial.println("[CELL] Session closed immediately after TLS");
+              return false;
+            }
+            return true;
+          }
+          Serial.print("[CELL] TLS error:");
+          Serial.println(err);
+        }
+      }
+    }
+  } else {
+    // SIM5360 legacy: use AT+CHTTPS* HTTPS stack
+    memset(m_buffer, 0, RECV_BUF_SIZE);
     Serial.printf("[CELL] Connecting to %s:%u\n", host, port);
     sprintf(m_buffer, "AT+CHTTPSOPSE=\"%s\",%u,%u\r", host, port, port == 443 ? 1 : 0);
     if (sendCommand(m_buffer, 1000)) {
       if (sendCommand(0, HTTP_TLS_HANDSHAKE_TIMEOUT, "+CHTTPSOPSE:")) {
-        // Validate the error code in the +CHTTPSOPSE URC.  Two formats exist:
-        //   "+CHTTPSOPSE: <conn_id>,<err>"  – most SIM7600 firmware versions
-        //   "+CHTTPSOPSE: <err>"            – some variants (no connection ID)
-        // A non-zero <err> means the TLS handshake failed.
         char *p = strstr(m_buffer, "+CHTTPSOPSE:");
         if (p) {
           char *comma = strchr(p, ',');
           int err;
           if (comma) {
-            // Format: "+CHTTPSOPSE: <conn_id>,<err>"  (standard)
             err = atoi(comma + 1);
           } else {
-            // Format: "+CHTTPSOPSE: <err>"  (no connection ID)
-            // p points to "+CHTTPSOPSE:", advance past the colon to the number.
             err = atoi(p + strlen("+CHTTPSOPSE:"));
           }
           if (err == 0) {
-            // TLS handshake succeeded; tentatively mark as connected then
-            // allow up to 100 ms for any close URC (+CHTTPS_PEER_CLOSED /
-            // +CHTTPSCLSE) that the server may send immediately after the
-            // handshake to arrive.  xbReceive returns in fewer than 100 ms
-            // whenever actual UART bytes are available, so this settle window
-            // adds minimal latency on healthy connections.
-            // inbound() (called inside sendCommand) resets m_state to
-            // HTTP_DISCONNECTED the moment a close URC is detected.
             m_state = HTTP_CONNECTED;
             m_host = host;
             sendCommand(0, 100);  // drain UART; inbound() watches for close
@@ -954,8 +949,8 @@ bool CellHTTP::close()
   } else if (m_type == CELL_SIM7670) {
     return sendCommand("AT+HTTPTERM\r");
   } else {
-    // SIM7600: HTTPS session close requires connection ID 0
-    return sendCommand("AT+CHTTPSCLSE=0\r", 1000, "+CHTTPSCLSE:");
+    // SIM7600: close raw SSL session
+    return sendCommand("AT+CCHCLOSE=0\r", 1000, "+CCHCLOSE:");
   }
 }
 
@@ -963,17 +958,13 @@ void CellHTTP::inbound()
 {
   // Handle base-class URCs (incoming data, GPS position updates, etc.).
   CellSIMCOM::inbound();
-  // Detect unsolicited +CHTTPSCLSE: or +CHTTPS_PEER_CLOSED that the modem
-  // emits when the remote server closes the TLS session (TCP FIN / TLS
-  // close_notify / RST) or when the modem itself detects the connection is
-  // dead.  These URCs often arrive while the firmware is busy processing an
-  // unrelated AT command (e.g. AT+CSQ for RSSI), which means inbound() is
-  // the only place where they are reliably seen.  Marking the state as
-  // DISCONNECTED here ensures that transmit()'s guard
-  // `cell.state() != HTTP_CONNECTED` triggers a proper reconnect — calling
-  // connect(true) which re-runs the TLS handshake — immediately before the
-  // next AT+CHTTPSSEND, rather than sending on an already-dead session.
-  if (m_buffer && (strstr(m_buffer, "+CHTTPSCLSE") || strstr(m_buffer, "+CHTTPS_PEER_CLOSED"))) {
+  // Detect unsolicited close URCs: +CHTTPSCLSE/+CHTTPS_PEER_CLOSED (SIM5360
+  // legacy HTTPS stack) or +CCHCLOSE (SIM7600 raw SSL socket interface).
+  // These arrive while the firmware is busy with an unrelated AT command
+  // (e.g. AT+CSQ for RSSI); marking state DISCONNECTED here ensures that
+  // transmit()'s guard triggers a proper reconnect before the next send.
+  if (m_buffer && (strstr(m_buffer, "+CHTTPSCLSE") || strstr(m_buffer, "+CHTTPS_PEER_CLOSED") ||
+                   strstr(m_buffer, "+CCHCLOSE:"))) {
     m_state = HTTP_DISCONNECTED;
   }
 }
@@ -1020,24 +1011,17 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     }
     return true;
   } else if (m_type == CELL_SIM7600) {
-    // Drain any pending URCs before issuing AT+CHTTPSSEND — catches a
-    // +CHTTPS_PEER_CLOSED that arrived in the UART buffer between the time
-    // open() returned and now.  Without this drain the pending URC would be
-    // read together with the ERROR response for AT+CHTTPSSEND, causing a
-    // 1000 ms timeout waiting for the '>' prompt and an obscure error
-    // message.  sendCommand(0, 50) returns as soon as UART bytes are
-    // available (sub-ms if the URC is already buffered) so it adds at most
-    // 50 ms to healthy sends.  inbound() (called inside sendCommand) resets
-    // m_state to HTTP_DISCONNECTED when a close URC is present.
+    // Drain any pending URCs before sending — catches a +CCHCLOSE that
+    // arrived in the UART buffer between open() and now.
     sendCommand(0, 50);
     if (m_state != HTTP_CONNECTED) {
       Serial.println("[CELL] Send aborted: connection closed");
       return false;
     }
-    // SIM7600 requires connection ID prefix (0) and longer timeouts for cellular RTT
+    // SIM7600 raw SSL socket: send via AT+CCHSEND
     String header = genHeader(method, path, payload, payloadSize);
     int len = header.length();
-    sprintf(m_buffer, "AT+CHTTPSSEND=0,%u\r", len + payloadSize);
+    sprintf(m_buffer, "AT+CCHSEND=0,%u\r", len + payloadSize);
     if (!sendCommand(m_buffer, 1000, ">")) {
       Serial.print("[CELL] Send failed:");
       Serial.println(m_buffer);
@@ -1048,7 +1032,7 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     m_device->xbWrite(header.c_str());
     // send POST payload if any
     if (payload) m_device->xbWrite(payload, payloadSize);
-    if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CHTTPSSEND:")) {
+    if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CCHSEND:")) {
       m_state = HTTP_SENT;
       return true;
     }
@@ -1113,8 +1097,55 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
         return p;
       }
     }
+  } else if (m_type == CELL_SIM7600) {
+    // SIM7600: use AT+CCH raw SSL socket receive
+    int received = 0;
+    char* payload = 0;
+    bool keepalive;
+
+    // Wait for +CCHRECV: <session>,<len> URC (data available on session 0)
+    if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
+    if (!m_incoming) return 0;
+    m_incoming = 0;
+
+    // Read the data: +CCHRECV: DATA,<session>,<len>\r\n<data>\r\n+CCHRECV: 0\r\nOK
+    // Use default OK/ERROR termination to tolerate firmware variants
+    // that may omit a space in the +CCHRECV: 0 end marker.
+    sprintf(m_buffer, "AT+CCHRECV=0,%u\r", RECV_BUF_SIZE - 32);
+    sendCommand(m_buffer, timeout);
+    char *p = strstr(m_buffer, "\r\n+CCHRECV: DATA");
+    if (!p) p = strstr(m_buffer, "\r\n+CCHRECV:DATA");  // no-space firmware variant
+    if (p) {
+      if ((p = strchr(p, ','))) {
+        // Format is always "+CCHRECV: DATA,<session>,<len>"; skip session ID
+        // and read length from the second comma only.
+        char *eol = strchr(p, '\n');
+        char *q = strchr(p + 1, ',');
+        if (q && eol && q < eol) {
+          received = atoi(q + 1);
+          payload = eol + 1;
+          if (m_buffer + RECV_BUF_SIZE - payload > received) {
+            payload[received] = 0;
+          }
+        }
+      }
+    }
+    if (received == 0) {
+      m_state = HTTP_ERROR;
+      return 0;
+    }
+
+    char *ps = strstr(payload, "/1.1 ");
+    if (!ps) ps = strstr(payload, "/1.0 ");
+    if (ps) m_code = atoi(ps + 5);
+    keepalive = strstr(m_buffer, ": close\r\n") == 0;
+
+    m_state = HTTP_CONNECTED;
+    if (!keepalive) close();
+    if (pbytes) *pbytes = received;
+    return payload;
   } else {
-    // start receiving
+    // SIM5360 legacy: use AT+CHTTPSRECV
     int received = 0;
     char* payload = 0;
     bool keepalive;
@@ -1123,7 +1154,7 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     if (!m_incoming) return 0;
     m_incoming = 0;
 
-    // to be compatible with SIM5360 
+    // to be compatible with SIM5360
     bool legacy = false;
     char *p = strstr(m_buffer, "RECV EVENT");
     if (p && *(p - 1) == ' ') legacy = true;
@@ -1135,24 +1166,15 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     */
     // TODO: implement for multiple chunks of data
     // only process first chunk now
-    // SIM7600 requires connection ID 0 prefix; SIM5360 does not
-    if (m_type == CELL_SIM7600)
-      sprintf(m_buffer, "AT+CHTTPSRECV=0,%u\r", RECV_BUF_SIZE - 32);
-    else
-      sprintf(m_buffer, "AT+CHTTPSRECV=%u\r", RECV_BUF_SIZE - 32);
+    sprintf(m_buffer, "AT+CHTTPSRECV=%u\r", RECV_BUF_SIZE - 32);
     if (sendCommand(m_buffer, timeout, legacy ? "\r\n+CHTTPSRECV: 0" : "\r\n+CHTTPSRECV:0")) {
       char *p = strstr(m_buffer, "\r\n+CHTTPSRECV: DATA");
       if (p) {
         if ((p = strchr(p, ','))) {
           received = atoi(p + 1);
-          // Handle "+CHTTPSRECV: DATA,<conid>,<len>" (SIM7600 with connection
-          // ID prefix) as well as "+CHTTPSRECV: DATA,<len>" (without conn ID).
-          // Search for a second comma ONLY on the same header line (before the
-          // first '\n') to avoid matching commas in the HTTP response body.
           char *eol = strchr(p, '\n');
           char *q = strchr(p + 1, ',');
           if (q && eol && q < eol) {
-            // Second comma before newline: format is DATA,<conid>,<len>
             received = atoi(q + 1);
           }
           payload = eol ? (eol + 1) : p;
@@ -1170,7 +1192,7 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     p = strstr(payload, "/1.1 ");
     if (!p) p = strstr(payload, "/1.0 ");
     if (p) {
-      if (p) m_code = atoi(p + 5);
+      m_code = atoi(p + 5);
     }
     keepalive = strstr(m_buffer, ": close\r\n") == 0;
 
