@@ -672,7 +672,12 @@ void CellSIMCOM::inbound()
       m_gps->ts = millis();
     } while (0);
 
-    if (strstr(m_buffer, "+IPD") || strstr(m_buffer, "RECV EVENT")) {
+    // SIM5360 / old SIM7600 firmware: "+CHTTPSRECV EVENT,<conid>"  → contains "RECV EVENT"
+    // Newer SIM7600 firmware:          "+CHTTPSRECV: EVENT,<conid>" → contains "+CHTTPSRECV: EVENT"
+    // Both must set m_incoming so that CellHTTP::receive() proceeds without a
+    // full timeout waiting for a URC that was already buffered.
+    if (strstr(m_buffer, "+IPD") || strstr(m_buffer, "RECV EVENT") ||
+        strstr(m_buffer, "+CHTTPSRECV: EVENT")) {
       Serial.println("[CELL] Incoming data");
       m_incoming = 1;
     }
@@ -848,15 +853,23 @@ bool CellHTTP::open(const char* host, uint16_t port)
     sprintf(m_buffer, "AT+CHTTPSOPSE=\"%s\",%u,%u\r", host, port, port == 443 ? 2: 1);
     if (sendCommand(m_buffer, 1000)) {
       if (sendCommand(0, HTTP_CONN_TIMEOUT, "+CHTTPSOPSE:")) {
-        // Validate the error code in +CHTTPSOPSE: <conn_id>,<err>.
-        // A non-zero <err> means the TLS handshake failed (e.g. cert error).
-        // Without this check open() returned HTTP_CONNECTED even on failure,
-        // causing every subsequent AT+CHTTPSSEND to return ERROR immediately.
-        // If no comma is present (old firmware without error code), assume success.
+        // Validate the error code in the +CHTTPSOPSE URC.  Two formats exist:
+        //   "+CHTTPSOPSE: <conn_id>,<err>"  – most SIM7600 firmware versions
+        //   "+CHTTPSOPSE: <err>"            – some variants (no connection ID)
+        // A non-zero <err> means the TLS handshake failed.
         char *p = strstr(m_buffer, "+CHTTPSOPSE:");
         if (p) {
-          p = strchr(p, ',');
-          if (!p || atoi(p + 1) == 0) {
+          char *comma = strchr(p, ',');
+          int err;
+          if (comma) {
+            // Format: "+CHTTPSOPSE: <conn_id>,<err>"  (standard)
+            err = atoi(comma + 1);
+          } else {
+            // Format: "+CHTTPSOPSE: <err>"  (no connection ID)
+            // p points to "+CHTTPSOPSE:", advance past the colon to the number.
+            err = atoi(p + strlen("+CHTTPSOPSE:"));
+          }
+          if (err == 0) {
             // TLS handshake succeeded; but check whether the server already
             // closed the session in the same URC burst (happens when the
             // server sends a TLS close_notify or TCP RST immediately after
@@ -871,7 +884,7 @@ bool CellHTTP::open(const char* host, uint16_t port)
             return true;
           }
           Serial.print("[CELL] TLS error:");
-          Serial.println(atoi(p + 1));
+          Serial.println(err);
         }
       }
     }
@@ -959,6 +972,8 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     int len = header.length();
     sprintf(m_buffer, "AT+CHTTPSSEND=0,%u\r", len + payloadSize);
     if (!sendCommand(m_buffer, 1000, ">")) {
+      Serial.print("[CELL] Send failed:");
+      Serial.println(m_buffer);
       m_state = HTTP_DISCONNECTED;
       return false;
     }
@@ -1063,8 +1078,17 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
       if (p) {
         if ((p = strchr(p, ','))) {
           received = atoi(p + 1);
-          char *q = strchr(p, '\n');
-          payload = q ? (q + 1) : p;
+          // Handle "+CHTTPSRECV: DATA,<conid>,<len>" (SIM7600 with connection
+          // ID prefix) as well as "+CHTTPSRECV: DATA,<len>" (without conn ID).
+          // Search for a second comma ONLY on the same header line (before the
+          // first '\n') to avoid matching commas in the HTTP response body.
+          char *eol = strchr(p, '\n');
+          char *q = strchr(p + 1, ',');
+          if (q && eol && q < eol) {
+            // Second comma before newline: format is DATA,<conid>,<len>
+            received = atoi(q + 1);
+          }
+          payload = eol ? (eol + 1) : p;
           if (m_buffer + RECV_BUF_SIZE - payload > received) {
             payload[received] = 0;
           }
