@@ -817,10 +817,19 @@ void CellHTTP::init()
     // ("hardcoded no-cert-check") because ssltype=2 bypasses AT+CSSLCFG
     // settings entirely (sslversion, ignorertctime) and uses modem-firmware
     // defaults that can cause +CHTTPSOPSE error 15 on SIM7600E-H.
+    // alpnprotocol restricts TLS ALPN negotiation to http/1.1 only.
+    // Without this, the SIM7600 CHTTPS stack may advertise h2 (HTTP/2) in the
+    // TLS ClientHello.  If the server (e.g. Cloudflare / nabu.casa) agrees to
+    // h2 it will expect an HTTP/2 Connection Preface after the handshake; the
+    // firmware sends HTTP/1.1 instead, causing the server to close with RST /
+    // TLS close_notify (+CHTTPS_PEER_CLOSED) before AT+CHTTPSSEND can succeed.
+    // If the modem firmware does not support AT+CSSLCFG="alpnprotocol" it
+    // returns ERROR which is harmless (sendCommand just returns false).
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
     sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
+    sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
     if (!sendCommand("AT+CHTTPSSTART\r")) {
       Serial.print("[CELL] CHTTPSSTART failed:");
       Serial.println(m_buffer);
@@ -900,21 +909,21 @@ bool CellHTTP::open(const char* host, uint16_t port)
             err = atoi(p + strlen("+CHTTPSOPSE:"));
           }
           if (err == 0) {
-            // TLS handshake succeeded; but check whether the server already
-            // closed the session in the same URC burst (happens when the
-            // server sends a TLS close_notify or TCP RST immediately after
-            // the handshake — e.g. due to idle-timeout or protocol mismatch).
-            // +CHTTPSCLSE is the orderly close; +CHTTPS_PEER_CLOSED is the
-            // abrupt peer-initiated close.  Both must be detected here so
-            // that open() returns false rather than a spurious HTTP_CONNECTED
-            // state that would make the next AT+CHTTPSSEND fail with ERROR.
-            if (strstr(m_buffer, "+CHTTPSCLSE") || strstr(m_buffer, "+CHTTPS_PEER_CLOSED")) {
-              Serial.println("[CELL] Session closed immediately after TLS");
-              m_state = HTTP_DISCONNECTED;
-              return false;
-            }
+            // TLS handshake succeeded; tentatively mark as connected then
+            // allow up to 100 ms for any close URC (+CHTTPS_PEER_CLOSED /
+            // +CHTTPSCLSE) that the server may send immediately after the
+            // handshake to arrive.  xbReceive returns in fewer than 100 ms
+            // whenever actual UART bytes are available, so this settle window
+            // adds minimal latency on healthy connections.
+            // inbound() (called inside sendCommand) resets m_state to
+            // HTTP_DISCONNECTED the moment a close URC is detected.
             m_state = HTTP_CONNECTED;
             m_host = host;
+            sendCommand(0, 100);  // drain UART; inbound() watches for close
+            if (m_state != HTTP_CONNECTED) {
+              Serial.println("[CELL] Session closed immediately after TLS");
+              return false;
+            }
             return true;
           }
           Serial.print("[CELL] TLS error:");
@@ -1004,6 +1013,20 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     }
     return true;
   } else if (m_type == CELL_SIM7600) {
+    // Drain any pending URCs before issuing AT+CHTTPSSEND — catches a
+    // +CHTTPS_PEER_CLOSED that arrived in the UART buffer between the time
+    // open() returned and now.  Without this drain the pending URC would be
+    // read together with the ERROR response for AT+CHTTPSSEND, causing a
+    // 1000 ms timeout waiting for the '>' prompt and an obscure error
+    // message.  sendCommand(0, 50) returns as soon as UART bytes are
+    // available (sub-ms if the URC is already buffered) so it adds at most
+    // 50 ms to healthy sends.  inbound() (called inside sendCommand) resets
+    // m_state to HTTP_DISCONNECTED when a close URC is present.
+    sendCommand(0, 50);
+    if (m_state != HTTP_CONNECTED) {
+      Serial.println("[CELL] Send aborted: connection closed");
+      return false;
+    }
     // SIM7600 requires connection ID prefix (0) and longer timeouts for cellular RTT
     String header = genHeader(method, path, payload, payloadSize);
     int len = header.length();
