@@ -12,7 +12,7 @@ Stored NVS keys (namespace "storage"):
   WIFI_PWD      – WiFi password
   CELL_APN      – Cellular APN (empty string = auto)
   SIM_PIN       – SIM card PIN (empty string = no PIN / unlocked)
-  SERVER_HOST   – HA hostname / Nabu Casa *.ui.nabu.casa (firmware v5.1+)
+  SERVER_HOST   – HA hostname / Nabu Casa hooks.nabu.casa (firmware v5.1+)
   SERVER_PORT   – HTTPS port, usually 443 (firmware v5.1+)
   WEBHOOK_PATH  – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
   ENABLE_HTTPD  – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)

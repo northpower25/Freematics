@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from urllib.parse import urlparse
 
@@ -9,6 +10,8 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.network import get_url
+
+_LOGGER = logging.getLogger(__name__)
 
 from .const import (
     CONF_CELL_APN,
@@ -143,16 +146,41 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data.update(user_input)
             return await self.async_step_device()
 
-        # Webhook ID is generated once in __init__; resolve HA base URL here
+        # Resolve the correct webhook URL.
+        # When HA Cloud (Nabu Casa) is active, the dedicated Cloud Webhook
+        # endpoint (hooks.nabu.casa) must be used instead of the Remote UI URL
+        # (*.ui.nabu.casa).  The Remote UI is a browser-only proxy; IoT devices
+        # cannot POST directly to it.  hooks.nabu.casa is the publicly-reachable
+        # HTTPS webhook endpoint intended for machine-to-machine requests.
+        webhook_url = None
         try:
-            self._base_url = get_url(self.hass, prefer_external=True)
-            parsed = urlparse(self._base_url)
-            self._ha_host = parsed.netloc or self._base_url
+            from homeassistant.components import cloud  # noqa: PLC0415
+            if cloud.async_is_logged_in(self.hass):
+                cloud_hook_url = await cloud.async_create_cloudhook(
+                    self.hass, self._webhook_id
+                )
+                webhook_url = cloud_hook_url
+                parsed = urlparse(cloud_hook_url)
+                self._ha_host = parsed.netloc or cloud_hook_url
+                self._base_url = f"{parsed.scheme}://{parsed.netloc}"
         except Exception:  # noqa: BLE001
-            self._base_url = "https://homeassistant.local:8123"
-            self._ha_host = "homeassistant.local:8123"
+            _LOGGER.debug(
+                "Freematics: could not create Nabu Casa cloud webhook "
+                "(cloud not connected or no active subscription); "
+                "falling back to the HA external URL",
+                exc_info=True,
+            )
 
-        webhook_url = f"{self._base_url}/api/webhook/{self._webhook_id}"
+        if webhook_url is None:
+            # No cloud or cloud check failed – use the HA external URL.
+            try:
+                self._base_url = get_url(self.hass, prefer_external=True)
+                parsed = urlparse(self._base_url)
+                self._ha_host = parsed.netloc or self._base_url
+            except Exception:  # noqa: BLE001
+                self._base_url = "https://homeassistant.local:8123"
+                self._ha_host = "homeassistant.local:8123"
+            webhook_url = f"{self._base_url}/api/webhook/{self._webhook_id}"
 
         return self.async_show_form(
             step_id="webhook",
