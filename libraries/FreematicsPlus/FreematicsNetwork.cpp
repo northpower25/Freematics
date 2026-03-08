@@ -820,14 +820,26 @@ void CellHTTP::init()
     //   AT+CCHSEND.  All other AT+CSSLCFG settings (sslversion, authmode,
     //   ignorertctime) apply to the CCH interface in the same way as before.
     sendCommand("AT+CCHSTOP\r");
-    sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
-    sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
-    sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
-    sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
+    // Helper to apply SSL context 0 settings.  Called both before and after
+    // AT+CCHSTART: some SIM7600E-H firmware versions re-initialise the SSL
+    // context at CCHSTART time, clearing any previously configured
+    // AT+CSSLCFG settings.  Re-applying afterwards guarantees they take
+    // effect regardless of firmware behaviour — the same approach used for
+    // AT+CHTTPSSTART.  Without alpnprotocol="http/1.1", the modem advertises
+    // h2 and Cloudflare / nabu.casa negotiate HTTP/2, then immediately close
+    // the connection (+CCH_PEER_CLOSED) because the modem has no HTTP/2 stack.
+    auto applySslCfg = [this]() {
+      sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
+      sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
+      sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
+      sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
+    };
+    applySslCfg();
     if (!sendCommand("AT+CCHSTART\r")) {
       Serial.print("[CELL] CCHSTART failed:");
       Serial.println(m_buffer);
     }
+    applySslCfg();
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
