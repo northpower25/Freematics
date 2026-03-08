@@ -807,17 +807,24 @@ void CellHTTP::init()
     // WiFiClientSecure::setInsecure() used on the Wi-Fi path.
     // sslversion=4 ("ALL") is the SIMCOM-recommended setting: it allows the
     // modem to negotiate the best mutually supported TLS version with the server
-    // (typically TLS 1.2 in practice on SIM7600E-H).  Using sslversion=3
-    // (TLS 1.2 only) can cause error 15 because the modem's TLS 1.2-only mode
-    // may have cipher-suite or SNI conflicts with some servers.
+    // (typically TLS 1.2 in practice on SIM7600E-H).
     // ignorertctime=1 is needed because the modem's RTC is usually wrong when
     // the device first powers on; without this the HTTPS stack would reject
     // valid server certificates whose notBefore/notAfter can't be verified.
+    // NOTE: AT+CSSLCFG must be sent BEFORE AT+CHTTPSSTART so the settings are
+    // in place when the HTTPS service initialises its internal SSL context.
+    // AT+CHTTPSOPSE uses ssltype=1 (use SSL context 0) rather than ssltype=2
+    // ("hardcoded no-cert-check") because ssltype=2 bypasses AT+CSSLCFG
+    // settings entirely (sslversion, ignorertctime) and uses modem-firmware
+    // defaults that can cause +CHTTPSOPSE error 15 on SIM7600E-H.
     sendCommand("AT+CHTTPSSTOP\r");
-    sendCommand("AT+CHTTPSSTART\r");
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
     sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
+    if (!sendCommand("AT+CHTTPSSTART\r")) {
+      Serial.print("[CELL] CHTTPSSTART failed:");
+      Serial.println(m_buffer);
+    }
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
@@ -865,11 +872,15 @@ bool CellHTTP::open(const char* host, uint16_t port)
     return true;
   } else {
     memset(m_buffer, 0, RECV_BUF_SIZE);
-    // Note: AT+CHTTPSOPSE automatically sets the TLS SNI from the host
-    // parameter, so no explicit AT+CSSLCFG="sni" call is needed here.
-    // Adding an explicit SNI command for SIM7600 can conflict with the
-    // automatic SNI set by the HTTPS service and cause +CHTTPSOPSE error 15.
-    sprintf(m_buffer, "AT+CHTTPSOPSE=\"%s\",%u,%u\r", host, port, port == 443 ? 2: 1);
+    // Use ssltype=1 so that AT+CHTTPSOPSE uses SSL context 0, which has been
+    // configured by init() with authmode=0 (no cert check), sslversion=4 (ALL),
+    // and ignorertctime=1.  ssltype=2 ("hardcoded no-cert-check") bypasses
+    // AT+CSSLCFG settings entirely and uses modem-firmware defaults, which can
+    // cause TLS handshake failure (error 15) on SIM7600E-H.
+    // SNI is set automatically by AT+CHTTPSOPSE from the host parameter;
+    // no explicit AT+CSSLCFG="sni" call is needed (and it would conflict).
+    Serial.printf("[CELL] Connecting to %s:%u\n", host, port);
+    sprintf(m_buffer, "AT+CHTTPSOPSE=\"%s\",%u,%u\r", host, port, port == 443 ? 1 : 0);
     if (sendCommand(m_buffer, 1000)) {
       if (sendCommand(0, HTTP_TLS_HANDSHAKE_TIMEOUT, "+CHTTPSOPSE:")) {
         // Validate the error code in the +CHTTPSOPSE URC.  Two formats exist:
