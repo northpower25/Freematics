@@ -743,6 +743,17 @@ bool TeleClientHTTP::connect(bool quick)
     // is absent (e.g. on devices provisioned before this feature was added).
     const char* cellHost = cellServerHost[0] ? cellServerHost : SERVER_HOST;
     uint16_t cellPort = cellServerHost[0] ? cellServerPort : SERVER_PORT;
+    // Guard: *.ui.nabu.casa is the Nabu Casa Remote UI proxy (browser-only).
+    // SIM7600 cellular devices cannot establish TLS to it directly – the proxy
+    // does not accept machine-to-machine connections and returns no HTTP response.
+    // CELL_HOST (hooks.nabu.casa) must be provisioned by the HA integration with
+    // Nabu Casa cloud active.  Abort early with a clear message instead of
+    // spamming TLS errors.
+    if (!cellServerHost[0] && strstr(cellHost, ".ui.nabu.casa")) {
+      Serial.println("[CELL] No cellular endpoint: SERVER_HOST is Remote UI proxy");
+      Serial.println("[CELL] Re-provision the device with Nabu Casa cloud active");
+      return false;
+    }
     for (byte attempts = 0; !success && attempts < 3; attempts++) {
       success = cell.open(cellHost, cellPort);
       if (!success) {

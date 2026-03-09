@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 
 from .const import (
     CONF_CELL_APN,
+    CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DATA_INTERVAL_MS,
     CONF_DEVICE_IP,
@@ -160,6 +161,9 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self.hass, self._webhook_id
                 )
                 webhook_url = cloud_hook_url
+                # Persist the cloud hook URL in entry.data so NVS provisioning
+                # can use it even when Nabu Casa cloud is temporarily offline.
+                self._data[CONF_CLOUD_HOOK_URL] = cloud_hook_url
                 parsed = urlparse(cloud_hook_url)
                 self._ha_host = parsed.netloc or cloud_hook_url
                 self._base_url = f"{parsed.scheme}://{parsed.netloc}"
