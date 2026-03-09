@@ -15,6 +15,16 @@ Stored NVS keys (namespace "storage"):
   SERVER_HOST   – HA hostname / Nabu Casa hooks.nabu.casa (firmware v5.1+)
   SERVER_PORT   – HTTPS port, usually 443 (firmware v5.1+)
   WEBHOOK_PATH  – Full path: /api/webhook/<webhook_id> (firmware v5.1+)
+  CELL_HOST     – Cellular-specific server host (overrides SERVER_HOST for
+                  cellular connections, firmware v5.1+).  Set to
+                  hooks.nabu.casa when Nabu Casa cloud is active so that
+                  SIM7600 devices use the cloud webhook endpoint directly
+                  rather than the Remote UI proxy (*.ui.nabu.casa).
+  CELL_PATH     – Cellular-specific webhook path (overrides WEBHOOK_PATH
+                  for cellular connections, firmware v5.1+).  Contains the
+                  opaque token path returned by async_create_cloudhook().
+  CELL_PORT     – Cellular-specific server port (overrides SERVER_PORT,
+                  firmware v5.1+).  Usually 443; stored alongside CELL_HOST.
   ENABLE_HTTPD  – 1 = start built-in HTTP server on boot (firmware with ENABLE_HTTPD=1)
   ENABLE_BLE    – 0 = disable BLE SPP server (frees ~100 KB heap for TLS webhook)
   DATA_INTERVAL – Telemetry post interval in ms (≥500; 0 = firmware default ≈1000 ms)
@@ -150,6 +160,9 @@ def generate_nvs_partition(
     data_interval_ms: int = 0,
     sync_interval_s: int = 0,
     sim_pin: str = "",
+    cell_server_host: str = "",
+    cell_server_port: int = 443,
+    cell_webhook_path: str = "",
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -158,6 +171,18 @@ def generate_nvs_partition(
 
     The returned bytes should be flashed to the NVS partition offset
     (NVS_PARTITION_OFFSET = 0x9000) alongside the application binary.
+
+    Args:
+        cell_server_host: Cellular-specific server hostname (CELL_HOST NVS key).
+            When set (typically ``hooks.nabu.casa`` from the Nabu Casa cloud
+            hook), the firmware uses this host for SIM7600/cellular connections
+            instead of ``server_host``.  This allows WiFi to use a local or
+            Remote-UI URL while cellular uses the publicly-reachable cloud
+            webhook endpoint.
+        cell_server_port: Cellular-specific port (CELL_PORT NVS key).
+        cell_webhook_path: Cellular-specific webhook path (CELL_PATH NVS key).
+            Contains the opaque token path returned by
+            ``async_create_cloudhook()``.
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -199,6 +224,17 @@ def generate_nvs_partition(
         _add_u16("SERVER_PORT", server_port)
     if webhook_path:
         _add_str("WEBHOOK_PATH", webhook_path)
+    # Cellular-specific server overrides (firmware v5.1+).
+    # CELL_HOST / CELL_PATH / CELL_PORT are used by the firmware when a
+    # cellular (SIM7600) connection is active, in preference to SERVER_HOST /
+    # WEBHOOK_PATH / SERVER_PORT.  This allows WiFi to use a local or Remote-UI
+    # URL while cellular uses hooks.nabu.casa (the Nabu Casa cloud webhook
+    # endpoint that SIM7600 devices can reach reliably).
+    if cell_server_host:
+        _add_str("CELL_HOST", cell_server_host)
+        _add_u16("CELL_PORT", cell_server_port)
+    if cell_webhook_path:
+        _add_str("CELL_PATH", cell_webhook_path)
     # Enable the built-in HTTP server (requires ENABLE_HTTPD=1 compiled into firmware).
     # Defaults to disabled to preserve RAM for the TLS webhook client.
     _add_u8("ENABLE_HTTPD", 1 if enable_httpd else 0)
@@ -256,11 +292,14 @@ def generate_nvs_partition(
                 data = f.read()
 
             _LOGGER.debug(
-                "NVS partition generated: %d bytes (wifi=%s, host=%s, path=%s, httpd=%s)",
+                "NVS partition generated: %d bytes (wifi=%s, host=%s, path=%s, "
+                "cell_host=%s, cell_path=%s, httpd=%s)",
                 len(data),
                 bool(wifi_ssid),
                 bool(server_host),
                 bool(webhook_path),
+                bool(cell_server_host),
+                bool(cell_webhook_path),
                 bool(enable_httpd),
             )
             return data

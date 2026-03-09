@@ -515,15 +515,23 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     server_host = ""
     server_port = 443
     webhook_path = ""
+    # Cellular-specific server overrides.  When Nabu Casa cloud is active the
+    # cloud webhook endpoint (hooks.nabu.casa) is stored here so that cellular
+    # connections use it directly.  The SIM7600 modem cannot connect to the
+    # Remote UI proxy (*.ui.nabu.casa) that get_url() may return; only
+    # hooks.nabu.casa is reachable and reliable for IoT cellular devices.
+    # WiFi connections use SERVER_HOST / WEBHOOK_PATH as before.
+    cell_server_host = ""
+    cell_server_port = 443
+    cell_webhook_path = ""
 
-    # Determine the server host and webhook path.
-    # Priority:
-    #   1. Nabu Casa Cloud Webhook endpoint (hooks.nabu.casa) when cloud is
-    #      active – the Remote UI URL (*.ui.nabu.casa) is a browser-only proxy
-    #      and IoT devices cannot POST directly to it.  hooks.nabu.casa is the
-    #      dedicated, publicly-reachable HTTPS webhook endpoint for machine-to-
-    #      machine calls.
-    #   2. HA external URL (self-hosted or port-forwarded installation)
+    # Step 1 – try to obtain the Nabu Casa Cloud Webhook URL (hooks.nabu.casa).
+    # This URL works from any network (WiFi or cellular) and is the only
+    # option that SIM7600-based cellular devices can reach reliably.
+    # The Remote UI URL (*.ui.nabu.casa) returned by get_url() is a browser-
+    # only proxy; IoT devices (SIM7600, etc.) fail with TLS peer-close errors
+    # because the Remote UI proxy does not accept direct machine-to-machine
+    # HTTPS connections.
     _cloud_used = False
     if webhook_id and not enable_httpd:
         try:
@@ -532,11 +540,26 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                 try:
                     cloud_hook_url = await _ha_cloud.async_create_cloudhook(hass, webhook_id)
                     _parsed = urlparse(cloud_hook_url)
-                    server_host = _parsed.hostname or ""
-                    server_port = (
+                    cell_server_host = _parsed.hostname or ""
+                    cell_server_port = (
                         _parsed.port or (443 if _parsed.scheme == "https" else 80)
                     )
-                    webhook_path = _parsed.path or ""
+                    cell_webhook_path = _parsed.path or ""
+                    # Only use the cloud hook URL when parsing produced a
+                    # non-empty hostname; an empty hostname would cause the
+                    # firmware to use the compile-time default server instead.
+                    if not cell_server_host:
+                        raise ValueError("cloud hook URL has no hostname")
+                    # Also use the cloud hook URL for WiFi so that both
+                    # interfaces use the same publicly-reachable endpoint when
+                    # cloud is active.  The SERVER_HOST / WEBHOOK_PATH NVS
+                    # keys are shared between WiFi and cellular; CELL_HOST /
+                    # CELL_PATH provide an explicit cellular override so
+                    # devices re-provisioned while offline still get the right
+                    # URL for cellular after cloud reconnects.
+                    server_host = cell_server_host
+                    server_port = cell_server_port
+                    webhook_path = cell_webhook_path
                     # Only mark cloud as used when the URL was successfully
                     # obtained.  The hooks.nabu.casa path format requires an
                     # opaque token returned by async_create_cloudhook – the
@@ -563,6 +586,8 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         except Exception:  # noqa: BLE001
             pass  # Cloud component not available – fall through to get_url()
 
+    # Step 2 – fall back to get_url() for the shared WiFi / general server
+    # settings when the cloud hook was not available.
     if not _cloud_used:
         try:
             from homeassistant.helpers.network import get_url  # noqa: PLC0415
@@ -594,6 +619,20 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         # only used in telelogger mode.
         if webhook_id and not enable_httpd:
             webhook_path = f"/api/webhook/{webhook_id}"
+        # Warn when the external URL is a Nabu Casa Remote UI address.  The
+        # Remote UI proxy (*.ui.nabu.casa) works for WiFi (ESP32 MBEDTLS) but
+        # SIM7600 cellular devices cannot complete TLS to it.  No CELL_HOST is
+        # set in this branch because without the cloud hook token there is no
+        # valid cellular endpoint to offer.
+        if server_host and ".ui.nabu.casa" in server_host:
+            _LOGGER.warning(
+                "Freematics: the external HA URL (%s) is a Nabu Casa Remote UI "
+                "address. WiFi provisioning will use this URL but cellular (SIM) "
+                "connections will fail. Re-provision the device once Nabu Casa "
+                "cloud is connected so that the correct hooks.nabu.casa URL can "
+                "be stored for cellular use.",
+                server_host,
+            )
 
     return {
         "wifi_ssid": wifi_ssid,
@@ -603,6 +642,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "server_host": server_host,
         "server_port": server_port,
         "webhook_path": webhook_path,
+        "cell_server_host": cell_server_host,
+        "cell_server_port": cell_server_port,
+        "cell_webhook_path": cell_webhook_path,
         "enable_httpd": enable_httpd,
         "enable_ble": enable_ble,
         "data_interval_ms": data_interval_ms,
@@ -664,6 +706,9 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs["data_interval_ms"],
             kwargs["sync_interval_s"],
             kwargs["sim_pin"],
+            kwargs["cell_server_host"],
+            kwargs["cell_server_port"],
+            kwargs["cell_webhook_path"],
         )
 
         if nvs_data is None:
@@ -750,6 +795,9 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs["data_interval_ms"],
             kwargs["sync_interval_s"],
             kwargs["sim_pin"],
+            kwargs["cell_server_host"],
+            kwargs["cell_server_port"],
+            kwargs["cell_webhook_path"],
         )
 
         if nvs_data is None:

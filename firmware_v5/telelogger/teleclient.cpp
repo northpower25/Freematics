@@ -32,6 +32,15 @@ extern char serverHost[];
 extern uint16_t serverPort;
 // WEBHOOK_PATH: when non-empty, replaces the legacy /hub/api/post/<devid> path.
 extern char webhookPath[];
+// Cellular-specific server overrides (NVS keys CELL_HOST, CELL_PORT, CELL_PATH).
+// When cellServerHost[0] is non-zero, cellular connections use cellServerHost /
+// cellServerPort / cellWebhookPath instead of serverHost / serverPort / webhookPath.
+// This lets the HA integration provision hooks.nabu.casa for SIM7600 while
+// keeping the shared SERVER_HOST for WiFi (which can use the Remote UI URL or a
+// local HA address that the SIM7600 TLS stack cannot reach).
+extern char cellServerHost[];
+extern uint16_t cellServerPort;
+extern char cellWebhookPath[];
 // Runtime HTTP-server flag: 1 when the built-in HTTPD is running (set by loadConfig()).
 // Used by TeleClientHTTP::shutdown() to avoid disconnecting WiFi while HTTPD is active.
 extern uint8_t enableHttpd;
@@ -581,10 +590,22 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   }
   success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, url);
 #else
-  // Use NVS-provisioned webhook path if available (e.g. /api/webhook/<id>),
-  // otherwise fall back to the legacy Freematics Hub path format.
-  if (webhookPath[0]) {
-    len = snprintf(path, sizeof(path), "%s", webhookPath);
+  // Determine whether we are using cellular or WiFi for this transmission.
+  // Cellular connections use CELL_HOST / CELL_PATH NVS overrides when set.
+  bool usingCellNow = false;
+#if ENABLE_WIFI
+  usingCellNow = !wifi.connected();
+#else
+  usingCellNow = true;
+#endif
+  // Select effective webhook path: CELL_PATH for cellular, WEBHOOK_PATH for WiFi.
+  const char* effectivePath =
+      (usingCellNow && cellWebhookPath[0]) ? cellWebhookPath : webhookPath;
+
+  // Use NVS-provisioned webhook path if available (e.g. /api/webhook/<id> or
+  // cloud-hook token path), otherwise fall back to legacy Freematics Hub format.
+  if (effectivePath[0]) {
+    len = snprintf(path, sizeof(path), "%s", effectivePath);
   } else {
     len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
   }
@@ -596,7 +617,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   char* jsonPayload = nullptr;
   const char* sendPayload = packetBuffer;
   int sendPayloadSize = (int)packetSize;
-  if (webhookPath[0]) {
+  if (effectivePath[0]) {
     // jsonSize = packetSize (content) + 10 (overhead of {"data":""})
     // malloc jsonSize + 1 to include the null terminator.
     int jsonSize = (int)packetSize + 10;
@@ -623,10 +644,13 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   else
 #endif
   {
+    // Use cellular-specific host/port when provisioned (CELL_HOST / CELL_PORT NVS keys).
+    const char* cellHost = cellServerHost[0] ? cellServerHost : SERVER_HOST;
+    uint16_t cellPort = cellServerHost[0] ? cellServerPort : SERVER_PORT;
     Serial.print("[CELL] ");
-    Serial.print(SERVER_HOST);
+    Serial.print(cellHost);
     Serial.println(path);
-    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, sendPayload, sendPayloadSize);
+    success = cell.send(METHOD_POST, cellHost, cellPort, path, sendPayload, sendPayloadSize);
   }
   if (jsonPayload) {
     free(jsonPayload);
@@ -711,8 +735,16 @@ bool TeleClientHTTP::connect(bool quick)
     success = wifi.open(SERVER_HOST, SERVER_PORT);
   } else {
 #endif
+    // Use cellular-specific host/port when provisioned (CELL_HOST / CELL_PORT
+    // NVS keys).  Provisioned by the HA integration with hooks.nabu.casa so
+    // that the SIM7600 connects to the Nabu Casa cloud webhook endpoint rather
+    // than the Remote UI proxy (*.ui.nabu.casa) which the SIM7600 TLS stack
+    // cannot handle.  Falls back to SERVER_HOST / SERVER_PORT when CELL_HOST
+    // is absent (e.g. on devices provisioned before this feature was added).
+    const char* cellHost = cellServerHost[0] ? cellServerHost : SERVER_HOST;
+    uint16_t cellPort = cellServerHost[0] ? cellServerPort : SERVER_PORT;
     for (byte attempts = 0; !success && attempts < 3; attempts++) {
-      success = cell.open(SERVER_HOST, SERVER_PORT);
+      success = cell.open(cellHost, cellPort);
       if (!success) {
         // After a TLS failure the modem may be sending cleanup URCs
         // (+CHTTPSCLSE etc.) for up to a second.  Give it 2 s to settle
@@ -732,7 +764,17 @@ bool TeleClientHTTP::connect(bool quick)
   }
   if (quick) return true;
   if (!login) {
-    if (webhookPath[0]) {
+    // Determine effective webhook path for the active connection.
+    // Cellular connections use cellWebhookPath when set; WiFi uses webhookPath.
+    bool usingCell = false;
+#if ENABLE_WIFI
+    usingCell = !wifi.connected();
+#else
+    usingCell = true;
+#endif
+    const char* effectiveWebhookPath =
+        (usingCell && cellWebhookPath[0]) ? cellWebhookPath : webhookPath;
+    if (effectiveWebhookPath[0]) {
       // Webhook mode: HA has no /notify endpoint, so skip the login handshake.
       // Mark as logged-in immediately so the transmit loop proceeds.
       login = true;
