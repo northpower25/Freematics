@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import secrets
 import time
 from pathlib import Path
@@ -68,6 +69,8 @@ from .const import (
     DOMAIN,
     OPERATING_MODE_DATALOGGER,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # Token time-to-live in seconds (5 minutes).  After expiry the token is
 # rejected so the window during which the unprotected NVS endpoint could
@@ -512,37 +515,71 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     server_host = ""
     server_port = 443
     webhook_path = ""
-    try:
-        from homeassistant.helpers.network import get_url  # noqa: PLC0415
-        base_url = get_url(hass, prefer_external=True)
-        parsed = urlparse(base_url)
-        server_host = parsed.hostname or ""
-        if parsed.port:
-            server_port = parsed.port
-        elif parsed.scheme == "https":
-            server_port = 443
-        else:
-            server_port = 80
-    except Exception:  # noqa: BLE001
-        # get_url() can raise NoURLAvailableError or other network-related
-        # errors when no external URL is configured.  Cellular connections
-        # require an externally reachable Home Assistant URL (Nabu Casa or
-        # port-forward).  Log a warning so the user understands why the device
-        # cannot reach Home Assistant.
-        _LOGGER.warning(
-            "Freematics: no external Home Assistant URL configured. "
-            "Cellular (SIM) connections require Nabu Casa cloud access or a "
-            "publicly reachable URL. The firmware will fall back to the "
-            "compile-time default server (hub.freematics.com), which will NOT "
-            "deliver webhooks to this Home Assistant instance."
-        )
 
-    # In datalogger mode (HTTPD enabled) the device serves a local HTTP API and
-    # must NOT send webhooks to HA – leave webhook_path empty so the firmware
-    # falls back to the legacy Freematics Hub path (or sends nothing when no
-    # hub host is set).  Webhooks are only used in telelogger mode.
+    # Determine the server host and webhook path.
+    # Priority:
+    #   1. Nabu Casa Cloud Webhook endpoint (hooks.nabu.casa) when cloud is
+    #      active – the Remote UI URL (*.ui.nabu.casa) is a browser-only proxy
+    #      and IoT devices cannot POST directly to it.  hooks.nabu.casa is the
+    #      dedicated, publicly-reachable HTTPS webhook endpoint for machine-to-
+    #      machine calls.
+    #   2. HA external URL (self-hosted or port-forwarded installation)
+    _cloud_used = False
     if webhook_id and not enable_httpd:
-        webhook_path = f"/api/webhook/{webhook_id}"
+        try:
+            from homeassistant.components import cloud as _ha_cloud  # noqa: PLC0415
+            if _ha_cloud.async_is_logged_in(hass):
+                try:
+                    cloud_hook_url = await _ha_cloud.async_create_cloudhook(hass, webhook_id)
+                    _parsed = urlparse(cloud_hook_url)
+                    server_host = _parsed.hostname or ""
+                    server_port = (
+                        _parsed.port or (443 if _parsed.scheme == "https" else 80)
+                    )
+                    webhook_path = _parsed.path or ""
+                except Exception:  # noqa: BLE001
+                    # Cloud call failed (e.g. temporary outage or no active
+                    # subscription).  Fall back to the known hooks.nabu.casa URL
+                    # format rather than using the Remote UI URL (*.ui.nabu.casa),
+                    # which cannot route direct HTTPS POST requests from devices.
+                    server_host = "hooks.nabu.casa"
+                    server_port = 443
+                    webhook_path = f"/{webhook_id}"
+                _cloud_used = True
+        except Exception:  # noqa: BLE001
+            pass  # Cloud component not available – fall through to get_url()
+
+    if not _cloud_used:
+        try:
+            from homeassistant.helpers.network import get_url  # noqa: PLC0415
+            base_url = get_url(hass, prefer_external=True)
+            parsed = urlparse(base_url)
+            server_host = parsed.hostname or ""
+            if parsed.port:
+                server_port = parsed.port
+            elif parsed.scheme == "https":
+                server_port = 443
+            else:
+                server_port = 80
+        except Exception:  # noqa: BLE001
+            # get_url() can raise NoURLAvailableError or other network-related
+            # errors when no external URL is configured.  Cellular connections
+            # require an externally reachable Home Assistant URL (Nabu Casa or
+            # port-forward).  Log a warning so the user understands why the device
+            # cannot reach Home Assistant.
+            _LOGGER.warning(
+                "Freematics: no external Home Assistant URL configured. "
+                "Cellular (SIM) connections require Nabu Casa cloud access or a "
+                "publicly reachable URL. The firmware will fall back to the "
+                "compile-time default server (hub.freematics.com), which will NOT "
+                "deliver webhooks to this Home Assistant instance."
+            )
+        # In datalogger mode (HTTPD enabled) the device serves a local HTTP API
+        # and must NOT send webhooks to HA – leave webhook_path empty so the
+        # firmware falls back to the legacy Freematics Hub path.  Webhooks are
+        # only used in telelogger mode.
+        if webhook_id and not enable_httpd:
+            webhook_path = f"/api/webhook/{webhook_id}"
 
     return {
         "wifi_ssid": wifi_ssid,

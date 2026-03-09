@@ -2,8 +2,8 @@
 
 This integration receives telemetry data pushed directly from the Freematics
 ONE+ device via HTTPS webhook.  It is compatible with both locally accessible
-Home Assistant instances and the Nabu Casa cloud remote UI
-(<id>.ui.nabu.casa) so end-users do not need VPN or port-forwarding.
+Home Assistant instances and the Nabu Casa cloud
+(hooks.nabu.casa) so end-users do not need VPN or port-forwarding.
 
 Firmware configuration (build flags in firmware_v5/telelogger/platformio.ini):
   ENABLE_WIFI      = 1
