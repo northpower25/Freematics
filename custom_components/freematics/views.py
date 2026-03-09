@@ -535,87 +535,104 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     # HTTPS connections.
     _cloud_used = False
     if webhook_id and not enable_httpd:
+        # Try to obtain the Nabu Casa cloud webhook URL.  _candidate_url is
+        # initialised here so the cached-URL fallback below can be reached even
+        # when async_is_logged_in() returns False (e.g. cloud session expired
+        # or cloud connection temporarily dropped since the config-flow ran).
+        _candidate_url = None
+        _cloud_logged_in = False
         try:
             from homeassistant.components import cloud as _ha_cloud  # noqa: PLC0415
-            if _ha_cloud.async_is_logged_in(hass):
-                # Try a fresh cloud hook URL first; fall back to the cached URL
-                # stored in entry.data (populated during config_flow setup or a
-                # previous successful provisioning request) so that re-provisioning
-                # works even when Nabu Casa cloud is temporarily offline.
-                _candidate_url = None
+            _cloud_logged_in = _ha_cloud.async_is_logged_in(hass)
+            if _cloud_logged_in:
+                # Try a fresh cloud hook URL.
                 try:
                     _candidate_url = await _ha_cloud.async_create_cloudhook(hass, webhook_id)
                 except Exception:  # noqa: BLE001
-                    _cached = cfg.get(CONF_CLOUD_HOOK_URL, "")
-                    if _cached:
-                        _candidate_url = _cached
-                        _LOGGER.warning(
-                            "Freematics: could not reach Nabu Casa cloud for webhook %s "
-                            "– using cached hooks.nabu.casa URL from a previous session.",
-                            webhook_id,
-                        )
-                    else:
-                        _LOGGER.warning(
-                            "Freematics: could not create Nabu Casa cloud webhook "
-                            "for %s – re-provision the device once Nabu Casa cloud "
-                            "is connected to receive the correct hooks.nabu.casa URL.",
-                            webhook_id,
-                        )
+                    _LOGGER.warning(
+                        "Freematics: could not reach Nabu Casa cloud for webhook %s "
+                        "– will try cached URL.",
+                        webhook_id,
+                    )
+        except Exception:  # noqa: BLE001
+            pass  # Cloud component not available – fall through to cached URL / get_url()
 
-                if _candidate_url:
+        # Fall back to the cached cloud hook URL stored in entry.data.  This is
+        # populated during config_flow setup or a previous successful provisioning
+        # request.  Using the cached URL here ensures that re-provisioning works
+        # even when Nabu Casa cloud is temporarily offline (async_is_logged_in()
+        # returned False) or async_create_cloudhook() raised an exception – as
+        # long as the URL was obtained during any prior session.
+        if not _candidate_url:
+            _cached = cfg.get(CONF_CLOUD_HOOK_URL, "")
+            if _cached:
+                _candidate_url = _cached
+                _LOGGER.warning(
+                    "Freematics: Nabu Casa cloud not available for webhook %s "
+                    "– using cached hooks.nabu.casa URL from a previous session.",
+                    webhook_id,
+                )
+            elif _cloud_logged_in:
+                # Logged in but hook creation failed and no cached URL available.
+                _LOGGER.warning(
+                    "Freematics: could not create Nabu Casa cloud webhook "
+                    "for %s – re-provision the device once Nabu Casa cloud "
+                    "is connected to receive the correct hooks.nabu.casa URL.",
+                    webhook_id,
+                )
+
+        if _candidate_url:
+            try:
+                _parsed = urlparse(_candidate_url)
+                cell_server_host = _parsed.hostname or ""
+                cell_server_port = (
+                    _parsed.port or (443 if _parsed.scheme == "https" else 80)
+                )
+                cell_webhook_path = _parsed.path or ""
+                # Only use the cloud hook URL when parsing produced a
+                # non-empty hostname; an empty hostname would cause the
+                # firmware to use the compile-time default server instead.
+                if not cell_server_host:
+                    raise ValueError("cloud hook URL has no hostname")
+                # Also use the cloud hook URL for WiFi so that both
+                # interfaces use the same publicly-reachable endpoint when
+                # cloud is active.  The SERVER_HOST / WEBHOOK_PATH NVS
+                # keys are shared between WiFi and cellular; CELL_HOST /
+                # CELL_PATH provide an explicit cellular override so
+                # devices re-provisioned while offline still get the right
+                # URL for cellular after cloud reconnects.
+                server_host = cell_server_host
+                server_port = cell_server_port
+                webhook_path = cell_webhook_path
+                # Mark cloud as used when the URL was successfully obtained
+                # (fresh or cached).  The hooks.nabu.casa path format requires
+                # an opaque token returned by async_create_cloudhook – the raw
+                # webhook_id is NOT a valid path on hooks.nabu.casa and will
+                # cause Cloudflare to close the connection without sending any
+                # HTTP response (firmware reports "[HTTP] No response").
+                # Fall through to get_url() on failure so the device is at
+                # least provisioned with a usable local URL.
+                _cloud_used = True
+                # Persist the URL in entry.data so that future provisioning
+                # requests can use it even when cloud is temporarily offline.
+                if _candidate_url != cfg.get(CONF_CLOUD_HOOK_URL, ""):
                     try:
-                        _parsed = urlparse(_candidate_url)
-                        cell_server_host = _parsed.hostname or ""
-                        cell_server_port = (
-                            _parsed.port or (443 if _parsed.scheme == "https" else 80)
+                        hass.config_entries.async_update_entry(
+                            entry,
+                            data={**entry.data, CONF_CLOUD_HOOK_URL: _candidate_url},
                         )
-                        cell_webhook_path = _parsed.path or ""
-                        # Only use the cloud hook URL when parsing produced a
-                        # non-empty hostname; an empty hostname would cause the
-                        # firmware to use the compile-time default server instead.
-                        if not cell_server_host:
-                            raise ValueError("cloud hook URL has no hostname")
-                        # Also use the cloud hook URL for WiFi so that both
-                        # interfaces use the same publicly-reachable endpoint when
-                        # cloud is active.  The SERVER_HOST / WEBHOOK_PATH NVS
-                        # keys are shared between WiFi and cellular; CELL_HOST /
-                        # CELL_PATH provide an explicit cellular override so
-                        # devices re-provisioned while offline still get the right
-                        # URL for cellular after cloud reconnects.
-                        server_host = cell_server_host
-                        server_port = cell_server_port
-                        webhook_path = cell_webhook_path
-                        # Only mark cloud as used when the URL was successfully
-                        # obtained.  The hooks.nabu.casa path format requires an
-                        # opaque token returned by async_create_cloudhook – the
-                        # raw webhook_id is NOT a valid path on hooks.nabu.casa
-                        # and will cause Cloudflare to close the connection without
-                        # sending any HTTP response (firmware reports "[HTTP] No
-                        # response").  Fall through to get_url() on failure so the
-                        # device is at least provisioned with a usable local URL.
-                        _cloud_used = True
-                        # Persist the URL in entry.data so that future provisioning
-                        # requests can use it even when cloud is temporarily offline.
-                        if _candidate_url != cfg.get(CONF_CLOUD_HOOK_URL, ""):
-                            try:
-                                hass.config_entries.async_update_entry(
-                                    entry,
-                                    data={**entry.data, CONF_CLOUD_HOOK_URL: _candidate_url},
-                                )
-                            except Exception as _exc:  # noqa: BLE001
-                                _LOGGER.warning(
-                                    "Freematics: failed to persist cloud hook URL to "
-                                    "config entry: %s",
-                                    _exc,
-                                )
                     except Exception as _exc:  # noqa: BLE001
                         _LOGGER.warning(
-                            "Freematics: failed to parse cloud hook URL %r: %s",
-                            _candidate_url,
+                            "Freematics: failed to persist cloud hook URL to "
+                            "config entry: %s",
                             _exc,
                         )
-        except Exception:  # noqa: BLE001
-            pass  # Cloud component not available – fall through to get_url()
+            except Exception as _exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: failed to parse cloud hook URL %r: %s",
+                    _candidate_url,
+                    _exc,
+                )
 
     # Step 2 – fall back to get_url() for the shared WiFi / general server
     # settings when the cloud hook was not available.
