@@ -588,11 +588,37 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   } else {
     len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
   }
+  // Cloud webhook gateways (e.g. hooks.nabu.casa) require a valid JSON body
+  // and reject plain-text POSTs with HTTP 400.  When a webhookPath is set,
+  // wrap the Freematics text payload in {"data":"..."}.  The Freematics
+  // format only uses ASCII digits, hex letters A-F, colons, semicolons,
+  // commas, asterisks and minus signs – none of which need JSON escaping.
+  char* jsonPayload = nullptr;
+  const char* sendPayload = packetBuffer;
+  int sendPayloadSize = (int)packetSize;
+  if (webhookPath[0]) {
+    // jsonSize = packetSize (content) + 10 (overhead of {"data":""})
+    // malloc jsonSize + 1 to include the null terminator.
+    int jsonSize = (int)packetSize + 10;
+    jsonPayload = (char*)malloc(jsonSize + 1);
+    if (jsonPayload) {
+      int written = snprintf(jsonPayload, jsonSize + 1,
+                             "{\"data\":\"%.*s\"}", (int)packetSize, packetBuffer);
+      if (written > 0 && written < jsonSize + 1) {
+        sendPayloadSize = written;
+        sendPayload = jsonPayload;
+      } else {
+        // snprintf failed or truncated; fall back to raw payload
+        free(jsonPayload);
+        jsonPayload = nullptr;
+      }
+    }
+  }
 #if ENABLE_WIFI
   if (wifi.connected()) {
     Serial.print("[WIFI] ");
     Serial.println(path);
-    success = wifi.send(METHOD_POST, path, packetBuffer, packetSize);
+    success = wifi.send(METHOD_POST, path, sendPayload, sendPayloadSize);
   }
   else
 #endif
@@ -600,9 +626,13 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     Serial.print("[CELL] ");
     Serial.print(SERVER_HOST);
     Serial.println(path);
-    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, packetBuffer, packetSize);
+    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, sendPayload, sendPayloadSize);
   }
-  len += packetSize;
+  if (jsonPayload) {
+    free(jsonPayload);
+    jsonPayload = nullptr;
+  }
+  len += sendPayloadSize;
 #endif
   if (!success) {
     Serial.println("[HTTP] Connection closed");
