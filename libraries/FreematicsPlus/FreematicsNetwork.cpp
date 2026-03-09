@@ -847,6 +847,16 @@ void CellHTTP::init()
       Serial.print("[CELL] CCHSTART failed:");
       Serial.println(m_buffer);
     }
+    // Enable proactive +CCHRECV: <session>,<len> URCs when data arrives on any
+    // session.  Without this (CCHRECVMODE=0, the modem default), the modem
+    // never sends the URC and receive() would have to rely solely on the
+    // +CCH_PEER_CLOSED: URC to know that data is available — a race-prone path.
+    // With CCHRECVMODE=1 the receive() URC wait resolves immediately when the
+    // server response arrives, regardless of whether the connection is kept
+    // alive or closed.  If this firmware revision does not support the command
+    // it returns ERROR, which is silently ignored; the race-condition fix in
+    // receive() below serves as belt-and-suspenders in that case.
+    sendCommand("AT+CCHRECVMODE=1\r");
     applySslCfg();
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
@@ -1176,9 +1186,16 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     // HTTP_DISCONNECTED, set by inbound() on +CCH_PEER_CLOSED:): in that case
     // the server response is buffered in the modem and readable via a direct
     // AT+CCHRECV without waiting for a URC that will never arrive separately.
+    //
+    // Race-condition fix: +CCH_PEER_CLOSED: can arrive DURING the wait below,
+    // causing inbound() to set m_state = HTTP_DISCONNECTED.  Without this fix
+    // the old "if (!m_incoming) return 0" would return null even though data is
+    // still buffered in the modem.  Re-checking m_state after the wait ensures
+    // we fall through to AT+CCHRECV whenever the peer closed (with or without a
+    // prior +CCHRECV: URC, i.e. regardless of AT+CCHRECVMODE setting).
     if (m_state != HTTP_DISCONNECTED) {
       if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
-      if (!m_incoming) return 0;
+      if (!m_incoming && m_state != HTTP_DISCONNECTED) return 0;
     }
     m_incoming = 0;
 
