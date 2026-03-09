@@ -311,15 +311,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_webhook(hass, webhook_id, request):
         """Handle incoming telemetry data from the Freematics device."""
-        # The firmware sends data in Freematics text format:
+        # The firmware sends telemetry in Freematics text format:
         #   "PID_HEX:value,PID_HEX:value,...*CHECKSUM"
-        # Try JSON first for forward compatibility, then fall back to the
-        # native Freematics text format.
+        # Cloud webhook gateways (e.g. hooks.nabu.casa) require a valid JSON
+        # body, so the firmware wraps the text in {"data":"<payload>"}.
+        # Handle all three variants:
+        #   1. JSON {"data": "<freematics_text>"} – firmware cloud-webhook mode
+        #   2. Any other JSON dict                – future native-JSON support
+        #   3. Plain text                         – direct HA / local delivery
         data: dict | None = None
         raw_body: str = ""
         try:
-            data = await request.json()
-            raw_body = str(data)
+            json_body = await request.json()
+            if (
+                isinstance(json_body, dict)
+                and "data" in json_body
+                and isinstance(json_body["data"], str)
+            ):
+                # Firmware wrapped the Freematics text in {"data": "..."}.
+                raw_body = json_body["data"]
+                data = _parse_freematics_payload(raw_body)
+            else:
+                data = json_body
+                raw_body = str(json_body)
         except Exception:  # noqa: BLE001
             pass
 
