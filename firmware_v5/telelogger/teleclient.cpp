@@ -618,9 +618,10 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   const char* sendPayload = packetBuffer;
   int sendPayloadSize = (int)packetSize;
   if (effectivePath[0]) {
-    // jsonSize = packetSize (content) + 10 (overhead of {"data":""})
+    // jsonSize = packetSize (content) + 11 (overhead of {"data":""}):
+    //   {"data":"  = 9 chars, "} = 2 chars → 9+2 = 11.
     // malloc jsonSize + 1 to include the null terminator.
-    int jsonSize = (int)packetSize + 10;
+    int jsonSize = (int)packetSize + 11;
     jsonPayload = (char*)malloc(jsonSize + 1);
     if (jsonPayload) {
       int written = snprintf(jsonPayload, jsonSize + 1,
