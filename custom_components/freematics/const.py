@@ -2,6 +2,9 @@
 
 DOMAIN = "freematics"
 CONF_WEBHOOK_ID = "webhook_id"
+# Nabu Casa Cloud Webhook URL (hooks.nabu.casa/<token>) stored in entry.data so
+# NVS re-provisioning can use it even when cloud is temporarily offline.
+CONF_CLOUD_HOOK_URL = "cloud_hook_url"
 
 # Device connectivity
 CONF_CONNECTION_TYPE = "connection_type"
