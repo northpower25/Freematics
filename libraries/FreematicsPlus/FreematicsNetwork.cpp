@@ -19,7 +19,7 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   header += " HTTP/1.1\r\nConnection: keep-alive\r\nHost: ";
   header += m_host;
   if (method != METHOD_GET) {
-    header += "\r\nContent-Type: text/plain\r\nContent-length: ";
+    header += "\r\nContent-Type: application/json\r\nContent-Length: ";
     header += String(payloadSize);
   }
   header += "\r\n\r\n";
@@ -820,19 +820,32 @@ void CellHTTP::init()
     //   AT+CCHSEND.  All other AT+CSSLCFG settings (sslversion, authmode,
     //   ignorertctime) apply to the CCH interface in the same way as before.
     sendCommand("AT+CCHSTOP\r");
-    // Helper to apply SSL context 0 settings.  Called both before and after
-    // AT+CCHSTART: some SIM7600E-H firmware versions re-initialise the SSL
-    // context at CCHSTART time, clearing any previously configured
+    // Helper to apply SSL context 0 and 1 settings.  Called both before and
+    // after AT+CCHSTART: some SIM7600E-H firmware versions re-initialise the
+    // SSL context at CCHSTART time, clearing any previously configured
     // AT+CSSLCFG settings.  Re-applying afterwards guarantees they take
     // effect regardless of firmware behaviour — the same approach used for
-    // AT+CHTTPSSTART.  Without alpnprotocol="http/1.1", the modem advertises
-    // h2 and Cloudflare / nabu.casa negotiate HTTP/2, then immediately close
-    // the connection (+CCH_PEER_CLOSED) because the modem has no HTTP/2 stack.
+    // AT+CHTTPSSTART.  Both SSL context 0 and 1 are configured because some
+    // SIM7600E-H firmware revisions map AT+CCHOPEN session 0 to SSL context 1
+    // instead of context 0.  Without alpnprotocol="http/1.1", the modem
+    // advertises h2 and Cloudflare / nabu.casa negotiate HTTP/2, then
+    // immediately close the connection (+CCH_PEER_CLOSED) because the modem
+    // has no HTTP/2 stack.
     auto applySslCfg = [this]() {
-      sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
-      sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
-      sendCommand("AT+CSSLCFG=\"ignorertctime\",0,1\r");
-      sendCommand("AT+CSSLCFG=\"alpnprotocol\",0,\"http/1.1\"\r");
+      // Apply SSL settings to both context 0 and context 1.
+      // Some SIM7600E-H firmware revisions map AT+CCHOPEN session 0 to
+      // SSL context 1 instead of context 0; configuring both guarantees
+      // the correct settings are in place regardless of firmware variant.
+      for (int ctx = 0; ctx <= 1; ctx++) {
+        sprintf(m_buffer, "AT+CSSLCFG=\"sslversion\",%d,4\r", ctx);
+        sendCommand(m_buffer);
+        sprintf(m_buffer, "AT+CSSLCFG=\"authmode\",%d,0\r", ctx);
+        sendCommand(m_buffer);
+        sprintf(m_buffer, "AT+CSSLCFG=\"ignorertctime\",%d,1\r", ctx);
+        sendCommand(m_buffer);
+        sprintf(m_buffer, "AT+CSSLCFG=\"alpnprotocol\",%d,\"http/1.1\"\r", ctx);
+        sendCommand(m_buffer);
+      }
     };
     applySslCfg();
     if (!sendCommand("AT+CCHSTART\r")) {
@@ -886,7 +899,7 @@ bool CellHTTP::open(const char* host, uint16_t port)
     sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r");
     return true;
   } else if (m_type == CELL_SIM7600) {
-    // AT+CCHOPEN uses SSL context 0 configured by init() (authmode=0,
+    // AT+CCHOPEN uses SSL context 0 or 1 configured by init() (authmode=0,
     // sslversion=4, ignorertctime=1, alpnprotocol="http/1.1").
     // client_type=1 → SSL; session ID 0 is used throughout.
     memset(m_buffer, 0, RECV_BUF_SIZE);
@@ -896,15 +909,19 @@ bool CellHTTP::open(const char* host, uint16_t port)
     // URCs can end up in the +CCHOPEN: receive window and trigger inbound()
     // to set m_state=HTTP_DISCONNECTED before we can inspect the TLS result.
     m_device->xbPurge();
-    // Set SNI (Server Name Indication) for the SSL context before connecting.
-    // Unlike AT+CHTTPSOPSE (which derives SNI from the URL parameter),
-    // AT+CCHOPEN is a raw SSL socket and does NOT automatically set SNI from
-    // its hostname argument on all SIM7600E-H firmware revisions.  Without
-    // SNI, Cloudflare / nabu.casa cannot route the TLS connection to the
-    // correct origin server and closes it immediately after the handshake —
+    // Set SNI (Server Name Indication) for SSL contexts 0 and 1 before
+    // connecting.  Unlike AT+CHTTPSOPSE (which derives SNI from the URL
+    // parameter), AT+CCHOPEN is a raw SSL socket and does NOT automatically
+    // set SNI from its hostname argument on all SIM7600E-H firmware revisions.
+    // Without SNI, Cloudflare / nabu.casa cannot route the TLS connection to
+    // the correct origin server and closes it immediately after the handshake —
     // the +CCH_PEER_CLOSED: URC then arrives before send() can transmit.
+    // Both SSL context 0 and 1 are configured because some SIM7600E-H firmware
+    // versions map AT+CCHOPEN session 0 to SSL context 1 instead of context 0.
     // (SIM7070 already sets SNI explicitly; see its open() branch above.)
     sprintf(m_buffer, "AT+CSSLCFG=\"sni\",0,\"%s\"\r", host);
+    sendCommand(m_buffer);
+    sprintf(m_buffer, "AT+CSSLCFG=\"sni\",1,\"%s\"\r", host);
     sendCommand(m_buffer);
     sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
     if (sendCommand(m_buffer, 1000)) {
