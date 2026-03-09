@@ -90,6 +90,16 @@ uint16_t serverPort = SERVER_PORT;
 // WEBHOOK_PATH overrides the legacy /hub/api/post/<devid> path when set.
 // Nabu Casa cloud hook paths are ~185 characters; 256 bytes ensures they fit.
 char webhookPath[256] = "";
+// Cellular-specific server overrides (NVS keys CELL_HOST, CELL_PORT, CELL_PATH).
+// When non-empty, these replace SERVER_HOST / SERVER_PORT / WEBHOOK_PATH for
+// cellular (SIM7600) connections.  Set to hooks.nabu.casa + the Nabu Casa
+// cloud-hook token path by the HA integration when Nabu Casa cloud is active,
+// so that cellular devices reach the cloud webhook endpoint directly rather than
+// the Remote UI proxy (*.ui.nabu.casa) which the SIM7600 TLS stack cannot use.
+// WiFi connections continue to use SERVER_HOST / WEBHOOK_PATH.
+char cellServerHost[128] = "";
+uint16_t cellServerPort = 443;
+char cellWebhookPath[256] = "";
 // Runtime HTTP server enable – set to 1 via NVS key ENABLE_HTTPD when
 // provisioned by the HA integration config_nvs.bin.  Only takes effect
 // when the firmware is compiled with ENABLE_HTTPD=1.
@@ -1360,6 +1370,22 @@ void loadConfig()
   len = sizeof(webhookPath);
   webhookPath[0] = 0;
   nvs_get_str(nvs, "WEBHOOK_PATH", webhookPath, &len);
+
+  // Cellular-specific server overrides (NVS keys CELL_HOST, CELL_PORT, CELL_PATH).
+  // When present, these are used instead of SERVER_HOST / SERVER_PORT /
+  // WEBHOOK_PATH for cellular (SIM7600) connections.  Provisioned by the HA
+  // integration with hooks.nabu.casa when Nabu Casa cloud is active, so that
+  // SIM7600 devices reach the cloud webhook endpoint rather than the Remote UI
+  // proxy (*.ui.nabu.casa) which the SIM7600 TLS stack cannot handle.
+  len = sizeof(cellServerHost);
+  cellServerHost[0] = 0;
+  nvs_get_str(nvs, "CELL_HOST", cellServerHost, &len);
+  uint16_t nvsCellPort = 0;
+  nvs_get_u16(nvs, "CELL_PORT", &nvsCellPort);
+  if (nvsCellPort) cellServerPort = nvsCellPort;
+  len = sizeof(cellWebhookPath);
+  cellWebhookPath[0] = 0;
+  nvs_get_str(nvs, "CELL_PATH", cellWebhookPath, &len);
 
   // Enable HTTP server at runtime when provisioned via config_nvs.bin.
   // Only has an effect when the firmware is compiled with ENABLE_HTTPD=1.
