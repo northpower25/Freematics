@@ -1181,31 +1181,63 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
     char* payload = 0;
     bool keepalive;
 
-    // Wait for +CCHRECV: <session>,<len> URC (data available on session 0).
-    // Skip the wait when the peer already closed the connection (m_state ==
-    // HTTP_DISCONNECTED, set by inbound() on +CCH_PEER_CLOSED:): in that case
-    // the server response is buffered in the modem and readable via a direct
-    // AT+CCHRECV without waiting for a URC that will never arrive separately.
-    //
-    // Race-condition fix: +CCH_PEER_CLOSED: can arrive DURING the wait below,
-    // causing inbound() to set m_state = HTTP_DISCONNECTED.  Without this fix
-    // the old "if (!m_incoming) return 0" would return null even though data is
-    // still buffered in the modem.  Re-checking m_state after the wait ensures
-    // we fall through to AT+CCHRECV whenever the peer closed (with or without a
-    // prior +CCHRECV: URC, i.e. regardless of AT+CCHRECVMODE setting).
-    if (m_state != HTTP_DISCONNECTED) {
-      if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
-      if (!m_incoming && m_state != HTTP_DISCONNECTED) return 0;
-    }
-    m_incoming = 0;
+    // In CCHRECVMODE=0 (the default when AT+CCHRECVMODE=1 is unsupported by the
+    // modem firmware), the modem autonomously pushes received data to the UART
+    // as "+CCHRECV: DATA,<session>,<len>\r\n<data>" without waiting for an
+    // explicit AT+CCHRECV command.  This push may already have been captured
+    // into m_buffer by send()'s AT+CCHSEND acknowledgement wait.  Check for it
+    // here — before the URC wait below resets m_buffer — so the data is not
+    // discarded.
+    char *p = strstr(m_buffer, "+CCHRECV: DATA,");
+    if (!p) p = strstr(m_buffer, "+CCHRECV:DATA,");
 
-    // Read the data: +CCHRECV: DATA,<session>,<len>\r\n<data>\r\n+CCHRECV: 0\r\nOK
-    // Use default OK/ERROR termination to tolerate firmware variants
-    // that may omit a space in the +CCHRECV: 0 end marker.
-    sprintf(m_buffer, "AT+CCHRECV=0,%u\r", RECV_BUF_SIZE - 32);
-    sendCommand(m_buffer, timeout);
-    char *p = strstr(m_buffer, "\r\n+CCHRECV: DATA");
-    if (!p) p = strstr(m_buffer, "\r\n+CCHRECV:DATA");  // no-space firmware variant
+    if (!p) {
+      // Data not yet in m_buffer; enter the URC / AT+CCHRECV read path.
+      //
+      // Wait for +CCHRECV: <session>,<len> URC (data available on session 0).
+      // Skip the wait when the peer already closed the connection (m_state ==
+      // HTTP_DISCONNECTED, set by inbound() on +CCH_PEER_CLOSED:): in that case
+      // the server response is buffered in the modem and readable via a direct
+      // AT+CCHRECV without waiting for a URC that will never arrive separately.
+      //
+      // Race-condition fix: +CCH_PEER_CLOSED: can arrive DURING the wait below,
+      // causing inbound() to set m_state = HTTP_DISCONNECTED.  Without this fix
+      // the old "if (!m_incoming) return 0" would return null even though data is
+      // still buffered in the modem.  Re-checking m_state after the wait ensures
+      // we fall through to AT+CCHRECV whenever the peer closed (with or without a
+      // prior +CCHRECV: URC, i.e. regardless of AT+CCHRECVMODE setting).
+      if (m_state != HTTP_DISCONNECTED) {
+        if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
+        if (!m_incoming && m_state != HTTP_DISCONNECTED) return 0;
+      }
+      m_incoming = 0;
+
+      // Re-check m_buffer after the URC wait: in CCHRECVMODE=0, the wait may
+      // have read the autonomous data push from the UART (e.g. the modem sent
+      // "+CCHRECV: DATA,0,N\r\n<data>\r\n+CCH_PEER_CLOSED: 0\r\n" in a single
+      // UART read).  inbound() sets m_state=HTTP_DISCONNECTED from the peer-
+      // closed URC but m_incoming stays 0 because "+CCHRECV: DATA,0," does not
+      // match the "+CCHRECV: 0," pattern that inbound() checks.  Once pushed,
+      // that data is gone from the modem — issuing AT+CCHRECV=0,N would return
+      // 0 bytes — so parse m_buffer directly when the pattern is found here.
+      p = strstr(m_buffer, "+CCHRECV: DATA,");
+      if (!p) p = strstr(m_buffer, "+CCHRECV:DATA,");
+      if (!p) {
+        // Data still not in m_buffer; issue AT+CCHRECV to drain it from the
+        // modem's internal buffer (normal path when CCHRECVMODE=1 is active:
+        // +CCHRECV: 0,N URC set m_incoming; or when only +CCH_PEER_CLOSED:
+        // arrived and response data is still in the modem's CCH session buffer).
+        // Read the data: +CCHRECV: DATA,<session>,<len>\r\n<data>\r\n+CCHRECV: 0\r\nOK
+        // Use default OK/ERROR termination to tolerate firmware variants
+        // that may omit a space in the +CCHRECV: 0 end marker.
+        sprintf(m_buffer, "AT+CCHRECV=0,%u\r", RECV_BUF_SIZE - 32);
+        sendCommand(m_buffer, timeout);
+        p = strstr(m_buffer, "\r\n+CCHRECV: DATA");
+        if (!p) p = strstr(m_buffer, "\r\n+CCHRECV:DATA");  // no-space firmware variant
+      }
+    } else {
+      m_incoming = 0;
+    }
     if (p) {
       if ((p = strchr(p, ','))) {
         // Format is always "+CCHRECV: DATA,<session>,<len>"; skip session ID
