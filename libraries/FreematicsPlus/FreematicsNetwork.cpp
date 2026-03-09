@@ -132,18 +132,13 @@ void WifiUDP::close()
 bool WifiHTTP::open(const char* host, uint16_t port)
 {
   if (!host) return true;
+  // Ensure any previous (possibly failed) TLS session is fully torn down
+  // before starting a new handshake.  WiFiClientSecure::connect() does not
+  // always release the mbedTLS context on a partially-initialised connection,
+  // leading to memory leaks across retries and ultimately causing
+  // MBEDTLS_ERR_SSL_ALLOC_FAILED / RSA BIGNUM alloc failures.
+  client.stop();
   client.setInsecure(); // skip certificate verification for HTTPS
-  // Note: certificate verification is disabled because embedding a CA
-  // certificate bundle in constrained ESP32 firmware is non-trivial and the
-  // Nabu Casa / HA cloud certificates change periodically.  All telemetry
-  // data transmitted is non-sensitive sensor readings; credentials (WiFi
-  // password, webhook ID) are stored in NVS and never re-transmitted.
-  //
-  // TLS heap relief: the default 16 KB RX + 4 KB TX mbedTLS buffers require
-  // ~20 KB of contiguous heap.  When BLE is disabled via NVS ENABLE_BLE=0
-  // (written by the HA ConfigFlow), ~100 KB is freed which gives the TLS
-  // handshake ample room.  setBufferSizes() was removed from WiFiClientSecure
-  // in arduino-esp32 2.0.14+ so it cannot be used for buffer size reduction.
   if (client.connect(host, port)) {
     m_state = HTTP_CONNECTED;
     m_host = host;

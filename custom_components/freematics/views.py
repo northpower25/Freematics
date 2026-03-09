@@ -537,15 +537,29 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                         _parsed.port or (443 if _parsed.scheme == "https" else 80)
                     )
                     webhook_path = _parsed.path or ""
+                    # Only mark cloud as used when the URL was successfully
+                    # obtained.  The hooks.nabu.casa path format requires an
+                    # opaque token returned by async_create_cloudhook – the
+                    # raw webhook_id is NOT a valid path on hooks.nabu.casa
+                    # and will cause Cloudflare to close the connection without
+                    # sending any HTTP response (firmware reports "[HTTP] No
+                    # response").  Fall through to get_url() on failure so the
+                    # device is at least provisioned with a usable local URL.
+                    _cloud_used = True
                 except Exception:  # noqa: BLE001
-                    # Cloud call failed (e.g. temporary outage or no active
-                    # subscription).  Fall back to the known hooks.nabu.casa URL
-                    # format rather than using the Remote UI URL (*.ui.nabu.casa),
-                    # which cannot route direct HTTPS POST requests from devices.
-                    server_host = "hooks.nabu.casa"
-                    server_port = 443
-                    webhook_path = f"/{webhook_id}"
-                _cloud_used = True
+                    # Cloud hook creation failed (e.g. temporary cloud outage
+                    # or no active Nabu Casa subscription).  Do NOT provision
+                    # a hooks.nabu.casa URL here – the /{webhook_id} path
+                    # format is invalid on hooks.nabu.casa and the device
+                    # would always receive no HTTP response from the server.
+                    # Leave _cloud_used=False so we fall through to get_url()
+                    # and provision a working local/external HA URL instead.
+                    _LOGGER.warning(
+                        "Freematics: could not create Nabu Casa cloud webhook "
+                        "for %s – re-provision the device once Nabu Casa cloud "
+                        "is connected to receive the correct hooks.nabu.casa URL.",
+                        webhook_id,
+                    )
         except Exception:  # noqa: BLE001
             pass  # Cloud component not available – fall through to get_url()
 

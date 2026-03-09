@@ -88,7 +88,8 @@ char wifiPassword[32] = WIFI_PASSWORD;
 char serverHost[128] = SERVER_HOST;
 uint16_t serverPort = SERVER_PORT;
 // WEBHOOK_PATH overrides the legacy /hub/api/post/<devid> path when set.
-char webhookPath[128] = "";
+// Nabu Casa cloud hook paths are ~185 characters; 256 bytes ensures they fit.
+char webhookPath[256] = "";
 // Runtime HTTP server enable – set to 1 via NVS key ENABLE_HTTPD when
 // provisioned by the HA integration config_nvs.bin.  Only takes effect
 // when the firmware is compiled with ENABLE_HTTPD=1.
@@ -1376,6 +1377,12 @@ void loadConfig()
   uint8_t nvsBle = 1;
   if (nvs_get_u8(nvs, "ENABLE_BLE", &nvsBle) == ESP_OK) {
     enableBle = nvsBle;
+  } else if (webhookPath[0]) {
+    // ENABLE_BLE was not provisioned in NVS but webhook mode is active.
+    // Auto-disable BLE so the ~100 KB it occupies is available for the TLS
+    // handshake (prevents MBEDTLS_ERR_SSL_ALLOC_FAILED on hooks.nabu.casa).
+    // Users who want BLE alongside webhooks can set ENABLE_BLE=1 explicitly.
+    enableBle = 0;
   }
 #endif
 
