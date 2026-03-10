@@ -24,6 +24,13 @@
 // TLS handshake over cellular can take longer than a data exchange; allow
 // up to 15 seconds before declaring the connection attempt failed.
 #define HTTP_TLS_HANDSHAKE_TIMEOUT 15000
+// Minimum expected duration (ms) for a TLS 1.2 handshake over a cellular
+// link (TCP 3-way + TLS exchange with a remote server).  +CCHOPEN:0,0
+// arriving faster than this is suspicious and may indicate a plain TCP
+// connection that silently bypassed the SSL layer.  Used as a diagnostic
+// threshold in open() – a warning is logged but the connection is not
+// rejected (the HTTP 400 handler in transmit() catches the actual failure).
+#define MIN_TLS_HANDSHAKE_MS 150
 
 #define RECV_BUF_SIZE 512
 

@@ -826,6 +826,26 @@ void CellHTTP::init()
     // suspenders, but some SIM7600E-H firmware revisions do not honour it; CTZU
     // guarantees the RTC is correct regardless of firmware behaviour.
     sendCommand("AT+CTZU=1\r");
+    // Query and log the current modem RTC so that time-related TLS failures
+    // (certificate "not yet valid") are visible in the console output.
+    // NITZ sync happens asynchronously after cell registration; the year
+    // reported here must be >= 2024 for certificates to validate.
+    // AT+CSSLCFG="ignorertctime",n,1 provides a belt-and-suspenders bypass,
+    // but some SIM7600E-H firmware revisions silently ignore it.
+    // Use default OK/ERROR termination so the full +CCLK: response line is
+    // guaranteed to be in the buffer before we search for it.
+    // Response format: +CCLK: "YY/MM/DD,HH:MM:SS±TZ"
+    // p+7 points past "+CCLK: " (6-char token + 1 space) to the quoted time.
+    if (sendCommand("AT+CCLK?\r", 1000)) {
+      char *p = strstr(m_buffer, "+CCLK:");
+      if (p) {
+        Serial.print("[CELL] RTC: ");
+        char *eol = strchr(p, '\r');
+        if (!eol) eol = strchr(p, '\n');
+        if (eol) *eol = 0;
+        Serial.println(p + 7);  // skip "+CCLK: " (6 chars + 1 space)
+      }
+    }
     sendCommand("AT+CCHSTOP\r");
     // Helper to apply SSL context 0 and 1 settings.  Called both before and
     // after AT+CCHSTART: some SIM7600E-H firmware versions re-initialise the
@@ -946,24 +966,37 @@ bool CellHTTP::open(const char* host, uint16_t port)
     sendCommand(m_buffer);
     sprintf(m_buffer, "AT+CSSLCFG=\"sni\",1,\"%s\"\r", host);
     sendCommand(m_buffer);
-    // Use AT+CCHOPEN with explicit ssl_ctx_id=0 to ensure the TLS connection
+    // Use AT+CCHOPEN with explicit ssl_ctx_id to ensure the TLS connection
     // uses the SSL context configured above by AT+CSSLCFG.  Some SIM7600E-H
     // firmware revisions do not apply the default ssl_ctx_id (0) automatically
     // when the parameter is omitted, resulting in a plain TCP connection despite
     // client_type=1 (SSL) — the server then receives unencrypted HTTP on port
     // 443 and responds with "400 The plain HTTP request was sent to HTTPS port".
-    // Specifying ssl_ctx_id=0 explicitly guarantees the configured SSL context
-    // is used.  The format is:
-    //   AT+CCHOPEN=<sessionID>,<host>,<port>,<client_type>,<ssl_ctx_id>
-    // Fall back to the 4-parameter form on firmware that returns ERROR for the
-    // 5th parameter (older firmware compatibility).
+    //
+    // Try order:
+    //   1. ssl_ctx_id=0 (preferred; prevents TCP fallback on known-buggy FW)
+    //   2. ssl_ctx_id=1 (some firmware revisions map session 0 to context 1)
+    //   3. 4-parameter form (for truly old FW without 5-param support; may
+    //      silently use plain TCP on buggy mid-range FW revisions — last resort)
+    uint32_t cchOpenStart = millis();
+    bool cchOpenOk = false;
+    // Attempt 1: 5-param with ssl_ctx_id=0.
     sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,0\r", host, port);
-    bool cchOpenOk = sendCommand(m_buffer, 1000);
+    cchOpenOk = sendCommand(m_buffer, 1000);
     if (!cchOpenOk) {
-      // Retry without explicit ssl_ctx_id for older firmware compatibility.
-      // On these firmware versions the SSL context binding relies on the modem
-      // default (context 0); the explicit form is preferred to avoid TLS being
-      // silently skipped on firmware revisions that require it.
+      // Attempt 2: 5-param with ssl_ctx_id=1.  Some SIM7600E-H firmware
+      // revisions internally map CCH session 0 to SSL context 1 rather than
+      // context 0; the explicit ctx_id=1 binding forces use of the correctly
+      // configured context on those revisions.
+      sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,1\r", host, port);
+      cchOpenOk = sendCommand(m_buffer, 1000);
+    }
+    if (!cchOpenOk) {
+      // Attempt 3: 4-parameter form (no explicit ssl_ctx_id).  Older firmware
+      // binds context 0 by default and honours client_type=1 (SSL).  On the
+      // specific firmware revisions that silently fall back to plain TCP with
+      // this form, the timing diagnostic below will log the anomaly.
+      Serial.println("[CELL] WARN: 5-param AT+CCHOPEN unsupported, trying 4-param (plain TCP fallback risk)");
       sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
       cchOpenOk = sendCommand(m_buffer, 1000);
     }
@@ -980,6 +1013,19 @@ bool CellHTTP::open(const char* host, uint16_t port)
           char *comma = strchr(p, ',');
           int err = comma ? atoi(comma + 1) : -1;
           if (err == 0) {
+            // Timing diagnostic: a TLS 1.2 handshake with a remote server
+            // (TCP 3-way + TLS exchange) takes at least a few hundred ms on
+            // cellular links.  If +CCHOPEN:0,0 arrives in < MIN_TLS_HANDSHAKE_MS
+            // it is suspicious — the modem may have opened a plain TCP connection
+            // instead of SSL.  Log the time so it is visible in console output;
+            // the HTTP 400 response handler in transmit() catches the actual
+            // plain-TCP symptom ("plain HTTP request sent to HTTPS port").
+            uint32_t handshakeMs = millis() - cchOpenStart;
+            if (handshakeMs < MIN_TLS_HANDSHAKE_MS) {
+              Serial.printf("[CELL] WARN: +CCHOPEN in %ums – may be plain TCP, not TLS\n", handshakeMs);
+            } else {
+              Serial.printf("[CELL] TLS handshake: %ums\n", handshakeMs);
+            }
             m_host = host;
             // m_state was set to HTTP_CONNECTED above; inbound() will have
             // changed it to HTTP_DISCONNECTED if +CCH_PEER_CLOSED: or

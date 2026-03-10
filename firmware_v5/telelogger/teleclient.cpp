@@ -693,15 +693,26 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   Serial.print("[HTTP] ");
   Serial.println(content);
 #if ENABLE_WIFI
-  if ((wifi.connected() && wifi.code() == 200) || cell.code() == 200) {
+  int httpCode = wifi.connected() ? wifi.code() : cell.code();
 #else
-  if (cell.code() == 200) {
+  int httpCode = cell.code();
 #endif
+  if (httpCode == 200 || httpCode == 204) {
     // successful
     lastSyncTime = millis();
     rxBytes += recvBytes;
+    return true;
   }
-  return true;
+  // Any non-success HTTP response is treated as a transmission failure so the
+  // caller increments error counters and triggers a reconnect.  This is
+  // particularly important for HTTP 400 "plain HTTP request was sent to HTTPS
+  // port", which indicates that the cellular TLS session is in a broken state
+  // (the modem established a plain TCP connection to port 443 instead of SSL).
+  // Returning false here causes connect(true) to be called, which restarts the
+  // CCH module and re-applies the SSL context configuration, giving the next
+  // attempt a chance to succeed with a real TLS handshake.
+  Serial.printf("[HTTP] Unexpected response code %d – treating as error\n", httpCode);
+  return false;
 }
 
 bool TeleClientHTTP::connect(bool quick)
