@@ -1203,6 +1203,14 @@ class FreematicsPanel extends HTMLElement {
       </esp-web-install-button>
     `;
 
+    // Enable the built-in ESP Web Tools log/console so the raw flash output
+    // is visible inside the dialog – useful for debugging failures.
+    const installBtn = container.querySelector("esp-web-install-button");
+    if (installBtn) {
+      installBtn.showLog = true;
+      installBtn.logConsole = true;
+    }
+
     // Reveal the progress section immediately so it is always visible once
     // the flash button is ready.  This is the most reliable way to ensure
     // the section appears: it does not depend on click-event bubbling through
