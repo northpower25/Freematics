@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.15.0";
+const PANEL_VERSION = "1.16.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -767,6 +767,15 @@ class FreematicsPanel extends HTMLElement {
             <div class="progress-bar-wrap">
               <div class="progress-bar-fill" id="progress-bar-fill"></div>
             </div>
+            <div id="flash-manual-btn-wrap" style="display:none;margin-bottom:10px">
+              <button id="flash-start-btn" style="
+                background:#4caf50;color:#fff;border:none;padding:10px 22px;
+                font-size:.9rem;border-radius:6px;cursor:pointer;width:100%;
+                font-family:inherit;
+              ">
+                &#128640; Start Flashing
+              </button>
+            </div>
             <div class="flash-log" id="flash-log"></div>
           </div>
           <ol style="font-size:.9rem;color:var(--secondary-text-color)">
@@ -1258,6 +1267,36 @@ class FreematicsPanel extends HTMLElement {
       });
     }
 
+    // Manual "Start Flashing" button — shown when device is connected (DASHBOARD
+    // or ASK_ERASE state) as a fallback if auto-advance fails to click the
+    // Install button inside the (potentially invisible) popup dialog.
+    const startBtn = shadow.querySelector("#flash-start-btn");
+    if (startBtn) {
+      startBtn.addEventListener("click", () => {
+        startBtn.disabled = true;
+        startBtn.textContent = "Starting…";
+        if (!this._currentDialog) {
+          // Dialog reference is missing — guide the user to reconnect.
+          startBtn.disabled = false;
+          startBtn.textContent = "🚀 Start Flashing";
+          this._appendFlashLog("warn",
+            "⚠ No active install dialog found. " +
+            "Please click Connect & Flash Firmware to reconnect the device.");
+          return;
+        }
+        const advanced = this._tryAutoAdvanceDialog(this._currentDialog);
+        if (!advanced) {
+          // Could not find/click the Install button — re-enable and inform user.
+          startBtn.disabled = false;
+          startBtn.textContent = "🚀 Start Flashing";
+          this._appendFlashLog("warn",
+            "⚠ Could not auto-click the Install button. " +
+            "The popup dialog may still be visible — please interact with it directly, " +
+            "or try reconnecting the device and clicking Connect & Flash Firmware again.");
+        }
+      });
+    }
+
     this._watchInstallDialog();
   }
 
@@ -1303,6 +1342,10 @@ class FreematicsPanel extends HTMLElement {
               clearInterval(this._progressPollTimer);
               this._progressPollTimer = null;
             }
+            // Clear dialog reference and hide the manual Start Flashing button
+            this._currentDialog = null;
+            const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
+            if (manualWrap) manualWrap.style.display = "none";
           }
         }
       }
@@ -1311,6 +1354,9 @@ class FreematicsPanel extends HTMLElement {
   }
 
   _onInstallDialogAdded(dialog) {
+    // Keep a reference so the manual Start Flashing button can call
+    // _tryAutoAdvanceDialog even outside the handleState closure.
+    this._currentDialog = dialog;
     const shadow = this.shadowRoot;
     const progressSection = shadow.querySelector("#flash-progress");
     const logEl = shadow.querySelector("#flash-log");
@@ -1562,6 +1608,21 @@ class FreematicsPanel extends HTMLElement {
     const info = MAP[state] || { pct: 10, label: `Status: ${state}`, cls: "info", color: "#2196f3" };
     this._updateFlashUI(info.label, info.cls !== "info" ? info.cls : "", info.color, info.pct);
     this._appendFlashLog(info.cls, info.label);
+
+    // Show the manual Start Flashing button when device is connected (DASHBOARD
+    // or ASK_ERASE) so the user has a visible fallback if auto-advance fails.
+    // Hide it as soon as actual flashing begins or the session ends.
+    const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
+    if (manualWrap) {
+      const showBtn = state === "DASHBOARD" || state === "ASK_ERASE";
+      manualWrap.style.display = showBtn ? "block" : "none";
+      // Re-enable the button text in case it was disabled by a previous click.
+      const btn = manualWrap.querySelector("#flash-start-btn");
+      if (btn && showBtn) {
+        btn.disabled = false;
+        btn.textContent = "🚀 Start Flashing";
+      }
+    }
   }
 
   /**
