@@ -15,9 +15,14 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   String header;
   // generate a simplest HTTP header
   header = method == METHOD_GET ? "GET " : "POST ";
+  // Ensure the path starts with '/' — an absolute-form URI in the request
+  // line (e.g. "https://host/path" or "host/path") is rejected by some HTTP
+  // servers including AWS ELB (hooks.nabu.casa) with a 400 Bad Request.
+  if (path[0] != '/') header += '/';
   header += path;
-  header += " HTTP/1.1\r\nConnection: keep-alive\r\nHost: ";
+  header += " HTTP/1.1\r\nHost: ";
   header += m_host;
+  header += "\r\nConnection: keep-alive";
   if (method != METHOD_GET) {
     header += "\r\nContent-Type: application/json\r\nContent-Length: ";
     header += String(payloadSize);
@@ -814,6 +819,13 @@ void CellHTTP::init()
     //   Cloudflare negotiates HTTP/1.1 and the connection stays open for
     //   AT+CCHSEND.  All other AT+CSSLCFG settings (sslversion, authmode,
     //   ignorertctime) apply to the CCH interface in the same way as before.
+    //
+    // Enable automatic time zone update from the network (NITZ). The modem RTC
+    // is updated when the network provides time, ensuring TLS certificate
+    // validity checks pass. AT+CSSLCFG="ignorertctime" provides belt-and-
+    // suspenders, but some SIM7600E-H firmware revisions do not honour it; CTZU
+    // guarantees the RTC is correct regardless of firmware behaviour.
+    sendCommand("AT+CTZU=1\r");
     sendCommand("AT+CCHSTOP\r");
     // Helper to apply SSL context 0 and 1 settings.  Called both before and
     // after AT+CCHSTART: some SIM7600E-H firmware versions re-initialise the
@@ -832,7 +844,13 @@ void CellHTTP::init()
       // SSL context 1 instead of context 0; configuring both guarantees
       // the correct settings are in place regardless of firmware variant.
       for (int ctx = 0; ctx <= 1; ctx++) {
-        sprintf(m_buffer, "AT+CSSLCFG=\"sslversion\",%d,4\r", ctx);
+        // Use TLS 1.2 (sslversion=3) rather than "TLS 1.2 or higher"
+        // (sslversion=4).  Some SIM7600E-H firmware revisions have a bug
+        // where TLS 1.3 negotiation fails silently and the modem falls back
+        // to a plain TCP connection instead of returning an error.  Restricting
+        // to TLS 1.2 avoids this regression; hooks.nabu.casa (AWS ALB) fully
+        // supports TLS 1.2.
+        sprintf(m_buffer, "AT+CSSLCFG=\"sslversion\",%d,3\r", ctx);
         sendCommand(m_buffer);
         sprintf(m_buffer, "AT+CSSLCFG=\"authmode\",%d,0\r", ctx);
         sendCommand(m_buffer);
@@ -905,7 +923,7 @@ bool CellHTTP::open(const char* host, uint16_t port)
     return true;
   } else if (m_type == CELL_SIM7600) {
     // AT+CCHOPEN uses SSL context 0 or 1 configured by init() (authmode=0,
-    // sslversion=4, ignorertctime=1, alpnprotocol="http/1.1").
+    // sslversion=3, ignorertctime=1, alpnprotocol="http/1.1").
     // client_type=1 → SSL; session ID 0 is used throughout.
     memset(m_buffer, 0, RECV_BUF_SIZE);
     Serial.printf("[CELL] Connecting to %s:%u\n", host, port);
@@ -928,8 +946,28 @@ bool CellHTTP::open(const char* host, uint16_t port)
     sendCommand(m_buffer);
     sprintf(m_buffer, "AT+CSSLCFG=\"sni\",1,\"%s\"\r", host);
     sendCommand(m_buffer);
-    sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
-    if (sendCommand(m_buffer, 1000)) {
+    // Use AT+CCHOPEN with explicit ssl_ctx_id=0 to ensure the TLS connection
+    // uses the SSL context configured above by AT+CSSLCFG.  Some SIM7600E-H
+    // firmware revisions do not apply the default ssl_ctx_id (0) automatically
+    // when the parameter is omitted, resulting in a plain TCP connection despite
+    // client_type=1 (SSL) — the server then receives unencrypted HTTP on port
+    // 443 and responds with "400 The plain HTTP request was sent to HTTPS port".
+    // Specifying ssl_ctx_id=0 explicitly guarantees the configured SSL context
+    // is used.  The format is:
+    //   AT+CCHOPEN=<sessionID>,<host>,<port>,<client_type>,<ssl_ctx_id>
+    // Fall back to the 4-parameter form on firmware that returns ERROR for the
+    // 5th parameter (older firmware compatibility).
+    sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,0\r", host, port);
+    bool cchOpenOk = sendCommand(m_buffer, 1000);
+    if (!cchOpenOk) {
+      // Retry without explicit ssl_ctx_id for older firmware compatibility.
+      // On these firmware versions the SSL context binding relies on the modem
+      // default (context 0); the explicit form is preferred to avoid TLS being
+      // silently skipped on firmware revisions that require it.
+      sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
+      cchOpenOk = sendCommand(m_buffer, 1000);
+    }
+    if (cchOpenOk) {
       // Reset m_state AFTER consuming the CCHOPEN OK response (which may have
       // carried late-arriving stale URCs into inbound()).  From this point on,
       // only URCs belonging to the new TLS session should influence the
