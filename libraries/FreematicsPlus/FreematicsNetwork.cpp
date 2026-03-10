@@ -978,10 +978,18 @@ bool CellHTTP::open(const char* host, uint16_t port)
     //   2. ssl_ctx_id=1 (some firmware revisions map session 0 to context 1)
     //   3. 4-parameter form (for truly old FW without 5-param support; may
     //      silently use plain TCP on buggy mid-range FW revisions — last resort)
-    uint32_t cchOpenStart = millis();
+    //
+    // IMPORTANT: cchOpenStart is reset just before each individual AT+CCHOPEN
+    // command so that handshakeMs measures only the time for THAT attempt.
+    // Recording it once before all three attempts caused a timing-mask bug:
+    // each failed attempt adds up to 1 second of delay, so even a near-instant
+    // plain-TCP response on the 4-param fallback appeared to take > 150 ms and
+    // the MIN_TLS_HANDSHAKE_MS warning was never triggered.
     bool cchOpenOk = false;
+    bool using4Param = false;
     // Attempt 1: 5-param with ssl_ctx_id=0.
     sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,0\r", host, port);
+    uint32_t cchOpenStart = millis();
     cchOpenOk = sendCommand(m_buffer, 1000);
     if (!cchOpenOk) {
       // Attempt 2: 5-param with ssl_ctx_id=1.  Some SIM7600E-H firmware
@@ -989,15 +997,19 @@ bool CellHTTP::open(const char* host, uint16_t port)
       // context 0; the explicit ctx_id=1 binding forces use of the correctly
       // configured context on those revisions.
       sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,1\r", host, port);
+      cchOpenStart = millis();
       cchOpenOk = sendCommand(m_buffer, 1000);
     }
     if (!cchOpenOk) {
       // Attempt 3: 4-parameter form (no explicit ssl_ctx_id).  Older firmware
       // binds context 0 by default and honours client_type=1 (SSL).  On the
       // specific firmware revisions that silently fall back to plain TCP with
-      // this form, the timing diagnostic below will log the anomaly.
+      // this form, the timing check below detects and rejects a plain TCP
+      // connection (< MIN_TLS_HANDSHAKE_MS) instead of proceeding with it.
+      using4Param = true;
       Serial.println("[CELL] WARN: 5-param AT+CCHOPEN unsupported, trying 4-param (plain TCP fallback risk)");
       sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1\r", host, port);
+      cchOpenStart = millis();
       cchOpenOk = sendCommand(m_buffer, 1000);
     }
     if (cchOpenOk) {
@@ -1015,16 +1027,29 @@ bool CellHTTP::open(const char* host, uint16_t port)
           if (err == 0) {
             // Timing diagnostic: a TLS 1.2 handshake with a remote server
             // (TCP 3-way + TLS exchange) takes at least a few hundred ms on
-            // cellular links.  If +CCHOPEN:0,0 arrives in < MIN_TLS_HANDSHAKE_MS
-            // it is suspicious — the modem may have opened a plain TCP connection
-            // instead of SSL.  Log the time so it is visible in console output;
-            // the HTTP 400 response handler in transmit() catches the actual
-            // plain-TCP symptom ("plain HTTP request sent to HTTPS port").
+            // cellular links.  cchOpenStart was reset to millis() immediately
+            // before the successful AT+CCHOPEN command, so handshakeMs reflects
+            // only that specific attempt (not the accumulated delay of earlier
+            // failed attempts which could mask a near-instant plain-TCP response).
+            // When the 5-param form succeeded, a fast response is logged as a
+            // warning.  When the 4-param fallback was used, a fast response means
+            // plain TCP is almost certain (known SIM7600E-H firmware bug): reject
+            // the session outright to prevent cleartext HTTP reaching port 443.
             uint32_t handshakeMs = millis() - cchOpenStart;
             if (handshakeMs < MIN_TLS_HANDSHAKE_MS) {
+              if (using4Param) {
+                // 4-param + instant response = plain TCP suspected.
+                // Close the session and abort; the caller's retry loop will
+                // call cell.init() + cell.open() again, giving the SSL context
+                // re-configuration a chance to fix the issue on the next attempt.
+                Serial.printf("[CELL] ERR: +CCHOPEN in %ums (4-param) – plain TCP suspected, rejecting\n", handshakeMs);
+                sendCommand("AT+CCHCLOSE=0\r", 1000, "+CCHCLOSE:");
+                m_state = HTTP_DISCONNECTED;
+                return false;
+              }
               Serial.printf("[CELL] WARN: +CCHOPEN in %ums – may be plain TCP, not TLS\n", handshakeMs);
             } else {
-              Serial.printf("[CELL] TLS handshake: %ums\n", handshakeMs);
+              Serial.printf("[CELL] TLS handshake: %ums%s\n", handshakeMs, using4Param ? " (4-param fallback)" : "");
             }
             m_host = host;
             // m_state was set to HTTP_CONNECTED above; inbound() will have
