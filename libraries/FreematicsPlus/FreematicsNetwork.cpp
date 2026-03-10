@@ -35,7 +35,10 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
     }
   }
   header += p;
-  header += " HTTP/1.1\r\nHost: ";
+  // Use HTTP/1.0 as a diagnostic experiment to eliminate any HTTP/1.1
+  // keep-alive / Transfer-Encoding edge cases.  Revert to HTTP/1.1 once a
+  // successful 200 response is confirmed.
+  header += " HTTP/1.0\r\nHost: ";
   header += m_host;
   // Use Connection: close to ensure the server closes the TCP session after
   // each response.  This avoids keep-alive edge cases (un-drained buffers,
@@ -1074,6 +1077,13 @@ bool CellHTTP::open(const char* host, uint16_t port)
             Serial.println("[CELL] Session closed immediately after TLS");
             return false;
           }
+          // Diagnostic: query CCH session status to verify the SSL context is
+          // active on the modem side.  Not all SIM7600E-H firmware revisions
+          // support AT+CCHSTATUS? — an ERROR response is harmless and logged.
+          if (sendCommand("AT+CCHSTATUS?\r", 500)) {
+            Serial.print("[CELL] CCHSTATUS: ");
+            Serial.println(m_buffer);
+          }
           return true;
         }
         Serial.print("[CELL] TLS error:");
@@ -1201,6 +1211,20 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     }
     // SIM7600 raw SSL socket: send via AT+CCHSEND
     String header = genHeader(method, path, payload, payloadSize);
+    // TX diagnostic: show the first 160 chars of the outgoing HTTP header and
+    // the first 64 bytes as hex so we can verify the request line and CRLF
+    // separators are correct before the bytes reach the modem.
+    {
+      const int previewLength = min(160, (int)header.length());
+      Serial.print("[CELL] TX-Preview: ");
+      Serial.write(header.c_str(), previewLength);
+      Serial.println();
+      Serial.print("[CELL] TX-First64(hex):");
+      for (int i = 0; i < min(64, (int)header.length()); i++) {
+        char hexBuf[4]; sprintf(hexBuf, " %02X", (unsigned char)header[i]); Serial.print(hexBuf);
+      }
+      Serial.println();
+    }
     int len = header.length();
     sprintf(m_buffer, "AT+CCHSEND=0,%u\r", len + payloadSize);
     if (!sendCommand(m_buffer, 1000, ">")) {
