@@ -27,9 +27,13 @@
 // Minimum expected duration (ms) for a TLS 1.2 handshake over a cellular
 // link (TCP 3-way + TLS exchange with a remote server).  +CCHOPEN:0,0
 // arriving faster than this is suspicious and may indicate a plain TCP
-// connection that silently bypassed the SSL layer.  Used as a diagnostic
-// threshold in open() – a warning is logged but the connection is not
-// rejected (the HTTP 400 handler in transmit() catches the actual failure).
+// connection that silently bypassed the SSL layer.  Used as a hard-reject
+// threshold in open(): any +CCHOPEN response arriving in less than this many
+// milliseconds causes the session to be closed and open() to return false,
+// regardless of which AT+CCHOPEN form (5-param or 4-param) was used.
+// Some SIM7600E-H firmware revisions silently fall back to plain TCP even
+// with the explicit 5-param ssl_ctx_id form; accepting such sessions leads to
+// repeated "400 The plain HTTP request was sent to HTTPS port" responses.
 #define MIN_TLS_HANDSHAKE_MS 150
 
 #define RECV_BUF_SIZE 512
