@@ -77,7 +77,7 @@ async def async_flash_serial(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
         output = stdout.decode(errors="replace")
         _LOGGER.debug("esptool output: %s", output)
 
@@ -86,7 +86,7 @@ async def async_flash_serial(
         return False, f"esptool returned exit code {proc.returncode}.\n{output}"
 
     except asyncio.TimeoutError:
-        return False, "Flash timed out after 120 seconds."
+        return False, "Flash timed out after 180 seconds."
     except Exception as exc:  # noqa: BLE001
         return False, f"Flash failed: {exc}"
 
@@ -161,7 +161,7 @@ async def async_flash_wifi(
                 content_type="application/octet-stream",
             )
             _log("info", "Uploading firmware (multipart POST)…")
-            async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=240)) as resp:
                 text = await resp.text()
                 elapsed = time.monotonic() - t_start
                 if resp.status == 200:
@@ -188,7 +188,7 @@ async def async_flash_wifi(
         return False, detail, log
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - t_start
-        msg = f"OTA flash timed out after {elapsed:.1f} s (limit 120 s)."
+        msg = f"OTA flash timed out after {elapsed:.1f} s (limit 240 s)."
         _log("error", msg)
         return False, msg, log
     except Exception as exc:  # noqa: BLE001

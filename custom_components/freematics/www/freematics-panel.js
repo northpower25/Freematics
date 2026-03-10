@@ -772,7 +772,7 @@ class FreematicsPanel extends HTMLElement {
           <ol style="font-size:.9rem;color:var(--secondary-text-color)">
             <li>Click <em>Connect &amp; Flash Firmware</em></li>
             <li>Select the Freematics ONE+ COM port from the browser dialog</li>
-            <li>Firmware + settings flash automatically (~45 s)</li>
+            <li>Firmware + settings flash automatically (may take ~2 min)</li>
             <li>Device restarts and connects to your WiFi / sends data to Home Assistant</li>
           </ol>
         </div>
@@ -1050,7 +1050,7 @@ class FreematicsPanel extends HTMLElement {
         if (otaLog) { otaLog.innerHTML = ""; otaLog.style.display = "block"; }
         wifiOtaBtn.disabled = true;
         wifiOtaBtn.textContent = "⏳ Uploading…";
-        showStatus("#2196f3", "&#9203; Uploading firmware… (may take ~30 s)");
+        showStatus("#2196f3", "&#9203; Uploading firmware… (may take ~2 min)");
         addLog("info", `Starting WiFi OTA flash to ${ip}:${port}…`);
 
         try {
@@ -1402,6 +1402,14 @@ class FreematicsPanel extends HTMLElement {
         const pct = Math.round(installState.details.percentage);
         if (pct !== lastPct) {
           lastPct = pct;
+          // Write progress confirms the device is alive and programming is
+          // under way.  Cancel the stall guard so it cannot produce a false
+          // "No response" error message while the (potentially long) flash
+          // write is in progress.
+          if (stallRef.timer) {
+            clearTimeout(stallRef.timer);
+            stallRef.timer = null;
+          }
           this._updateFlashUI(
             `Installing… ${pct}%`,
             "",
@@ -1416,15 +1424,27 @@ class FreematicsPanel extends HTMLElement {
     // before our observers were registered.
     handleState(readState());
 
-    // Stall guard: if no meaningful state change occurs within 60 s, show an
-    // actionable error so the user knows something went wrong.  The timer is
-    // cancelled as soon as the state advances.
-    const STALL_MS = 60000;
+    // Stall guard: if no meaningful state change occurs within STALL_MS, show
+    // an actionable error so the user knows something went wrong.  The timer is
+    // cancelled as soon as the state advances OR as soon as write progress is
+    // detected (see the progress-poll interval above).
+    // 3 min (180 s) gives enough headroom for the ~103 s flash write time at
+    // 115 200 baud plus device reset and erase overhead.
+    const STALL_MS = 180000;
+    // Minimum write-progress percentage that indicates the flash is genuinely
+    // under way.  5 % is well above the noise floor (0 % = no writes started)
+    // but low enough that the guard trips before the firmware write completes.
+    const STALL_MIN_PROGRESS_PCT = 5;
+    const stallMinStr = `${Math.round(STALL_MS / 60000)} min`;
     stallRef.timer = setTimeout(() => {
       this._dialogStallRef = null;
-      if (!lastState || lastState === "CONNECTING") {
+      // Only fire if no state was detected AND no byte-level write progress
+      // was observed.  This guards against readState() returning null
+      // throughout (API version mismatch) while the flash is actually running
+      // and being tracked via _installState.details.percentage.
+      if ((!lastState || lastState === "CONNECTING") && (lastPct === null || lastPct < STALL_MIN_PROGRESS_PCT)) {
         this._appendFlashLog("err",
-          "⏱ No response from device after 60 s. " +
+          `⏱ No response from device after ${stallMinStr}. ` +
           "The Web Serial API could not complete the programming handshake. " +
           "Check the USB cable and confirm the correct COM port was selected. " +
           "If the problem persists in the browser, use the esptool command-line method — " +
@@ -1470,7 +1490,7 @@ class FreematicsPanel extends HTMLElement {
     const MAP = {
       DASHBOARD: { pct: 20,  label: "Connected — follow the dialog to install…", cls: "info", color: "#2196f3" },
       ASK_ERASE: { pct: 30,  label: "Awaiting erase confirmation in dialog…",    cls: "info", color: "#ff9800" },
-      INSTALL:   { pct: 55,  label: "Installing firmware… (~30 s)",              cls: "info", color: "#2196f3" },
+      INSTALL:   { pct: 55,  label: "Installing firmware… (may take ~2 min)",      cls: "info", color: "#2196f3" },
       PROVISION: { pct: 90,  label: "Configuring Wi-Fi…",                        cls: "info", color: "#2196f3" },
       LOGS:      { pct: 100, label: "✓ Installation complete.",                  cls: "ok",   color: "#4caf50" },
       ERROR:     { pct: 0,   label: "✗ Error — see dialog for details.",         cls: "err",  color: "#f44336" },

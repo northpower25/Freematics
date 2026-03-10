@@ -193,7 +193,7 @@ _FLASHER_HTML = """\
         <small>Look for: <code>CP2102</code>, <code>CH340</code>, or a
         similar USB-Serial device name.</small>
       </li>
-      <li>The firmware flashes automatically (takes ~30-45 s)</li>
+      <li>The firmware flashes automatically (may take up to 2 min)</li>
       <li>The device restarts and begins sending data to Home Assistant</li>
     </ol>
   </div>
