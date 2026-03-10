@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.13.0";
+const PANEL_VERSION = "1.14.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -1353,8 +1353,13 @@ class FreematicsPanel extends HTMLElement {
     // root observer, and poll) update the same variable so we never emit a
     // duplicate log entry and always advance monotonically.
     if (this._progressPollTimer) clearInterval(this._progressPollTimer);
-    let lastState = null;
-    let lastPct   = null;
+    let lastState          = null;
+    let lastPct            = null;
+    // Track esp-web-tools v10 _installState messages for 1:1 log output.
+    // In v10 the flash function communicates progress via state events stored
+    // in dialog._installState rather than a logger interface, so we poll it.
+    let lastInstallMessage = null;
+    let lastInstallState   = null;
     const stallRef = { timer: null };  // wrapper object so handleState (declared first)
                                         // can cancel the timer (declared below)
 
@@ -1400,30 +1405,58 @@ class FreematicsPanel extends HTMLElement {
     this._progressPollTimer = setInterval(() => {
       handleState(readState());
 
-      // During the WRITING phase show real byte-level percentage
+      // Forward esp-web-tools v10 _installState messages to the log.
+      // In v10 the flash() function communicates progress via state events
+      // (stored in dialog._installState) rather than via a logger interface.
+      // Each state transition carries a human-readable .message string such
+      // as "Initializing...", "Initialized. Found ESP32", "Erasing device...",
+      // "Writing complete", "All done!", or an error description.  We mirror
+      // every *new* message to #flash-log so the user sees 1:1 raw output.
+      // Exception: skip repetitive mid-stream "Writing progress: X%"
+      // updates -- those are already visualised by the progress bar.
       const installState = dialog._installState;
-      if (
-        installState &&
-        installState.state === "writing" &&
-        installState.details
-      ) {
-        const pct = Math.round(installState.details.percentage);
-        if (pct !== lastPct) {
-          lastPct = pct;
-          // Write progress confirms the device is alive and programming is
-          // under way.  Cancel the stall guard so it cannot produce a false
-          // "No response" error message while the (potentially long) flash
-          // write is in progress.
-          if (stallRef.timer) {
-            clearTimeout(stallRef.timer);
-            stallRef.timer = null;
+      if (installState) {
+        const iMsg   = installState.message;
+        const iState = installState.state;
+
+        if (iMsg && iMsg !== lastInstallMessage) {
+          // Suppress repeated writing-progress lines; keep first entry and
+          // the final "Writing complete" / any non-"Writing progress:" msg.
+          const isRepeatWritingProgress =
+            iState === "writing" &&
+            lastInstallState === "writing" &&
+            typeof iMsg === "string" &&
+            iMsg.startsWith("Writing progress:");
+
+          if (!isRepeatWritingProgress) {
+            lastInstallMessage = iMsg;
+            const cls = iState === "error" ? "err"
+                      : iState === "finished" ? "ok"
+                      : "info";
+            this._appendFlashLog(cls, iMsg);
           }
-          this._updateFlashUI(
-            `Installing… ${pct}%`,
-            "",
-            "#2196f3",
-            pct,
-          );
+        }
+        lastInstallState = iState;
+
+        // Any flash state change means the device is alive – cancel the stall
+        // guard so it cannot fire a false "no response" error mid-flash.
+        if (iState && iState !== "error" && stallRef.timer) {
+          clearTimeout(stallRef.timer);
+          stallRef.timer = null;
+        }
+
+        // During the WRITING phase show real byte-level percentage
+        if (iState === "writing" && installState.details) {
+          const pct = Math.round(installState.details.percentage);
+          if (pct !== lastPct) {
+            lastPct = pct;
+            this._updateFlashUI(
+              `Installing… ${pct}%`,
+              "",
+              "#2196f3",
+              pct,
+            );
+          }
         }
       }
     }, 300);
@@ -1447,10 +1480,11 @@ class FreematicsPanel extends HTMLElement {
     stallRef.timer = setTimeout(() => {
       this._dialogStallRef = null;
       // Only fire if no state was detected AND no byte-level write progress
-      // was observed.  This guards against readState() returning null
-      // throughout (API version mismatch) while the flash is actually running
-      // and being tracked via _installState.details.percentage.
-      if ((!lastState || lastState === "CONNECTING") && (lastPct === null || lastPct < STALL_MIN_PROGRESS_PCT)) {
+      // was observed AND no _installState messages were received.
+      // This guards against readState() returning null throughout (API version
+      // mismatch) while the flash is actually running and being tracked via
+      // _installState (message forwarding or details.percentage).
+      if ((!lastState || lastState === "CONNECTING") && (lastPct === null || lastPct < STALL_MIN_PROGRESS_PCT) && !lastInstallMessage) {
         this._appendFlashLog("err",
           `⏱ No response from device after ${stallMinStr}. ` +
           "The Web Serial API could not complete the programming handshake. " +
