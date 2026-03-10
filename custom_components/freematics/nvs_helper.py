@@ -163,6 +163,7 @@ def generate_nvs_partition(
     cell_server_host: str = "",
     cell_server_port: int = 443,
     cell_webhook_path: str = "",
+    cell_debug: bool = False,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -183,6 +184,10 @@ def generate_nvs_partition(
         cell_webhook_path: Cellular-specific webhook path (CELL_PATH NVS key).
             Contains the opaque token path returned by
             ``async_create_cloudhook()``.
+        cell_debug: When True, writes CELL_DEBUG=1 to NVS so the firmware
+            enables verbose cellular diagnostic logging at runtime (TX-Preview,
+            hex-dump, AT+CCHSTATUS? and per-packet "Incoming data" lines).
+            Off by default; safe to toggle without reflashing the firmware.
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -243,6 +248,12 @@ def generate_nvs_partition(
     # The firmware defaults to BLE on for un-provisioned devices; this key
     # overrides that default.
     _add_u8("ENABLE_BLE", 1 if enable_ble else 0)
+    # Enable verbose cellular debug logging.  0 = off (default); 1 = on.
+    # When enabled the firmware prints TX-Preview, hex-dump, AT+CCHSTATUS? and
+    # per-packet "Incoming data" lines to the serial console.  Only takes effect
+    # when the firmware was built without -DNET_DEBUG (i.e. release builds where
+    # those log lines are behind the cellNetDebug runtime flag).
+    _add_u8("CELL_DEBUG", 1 if cell_debug else 0)
     # Optional data-interval override (ms).  0 = firmware compile-time default.
     if data_interval_ms and data_interval_ms >= 500:
         _add_u16("DATA_INTERVAL", data_interval_ms)

@@ -10,6 +10,11 @@ on
 #include "FreematicsBase.h"
 #include "FreematicsNetwork.h"
 
+// Runtime cellular debug flag – set to 1 via NVS key CELL_DEBUG (written by
+// the HA config/options flow).  Declared extern in FreematicsNetwork.h so
+// telelogger.ino can read it from NVS and assign it after loadConfig().
+uint8_t cellNetDebug = 0;
+
 String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* payload, int payloadSize)
 {
   String header;
@@ -35,10 +40,7 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
     }
   }
   header += p;
-  // Use HTTP/1.0 as a diagnostic experiment to eliminate any HTTP/1.1
-  // keep-alive / Transfer-Encoding edge cases.  Revert to HTTP/1.1 once a
-  // successful 200 response is confirmed.
-  header += " HTTP/1.0\r\nHost: ";
+  header += " HTTP/1.1\r\nHost: ";
   header += m_host;
   // Use Connection: close to ensure the server closes the TCP session after
   // each response.  This avoids keep-alive edge cases (un-drained buffers,
@@ -718,7 +720,7 @@ void CellSIMCOM::inbound()
     if (strstr(m_buffer, "+IPD") || strstr(m_buffer, "RECV EVENT") ||
         strstr(m_buffer, "+CHTTPSRECV: EVENT") ||
         strstr(m_buffer, "+CCHRECV: 0,") || strstr(m_buffer, "+CCHRECV:0,")) {
-      Serial.println("[CELL] Incoming data");
+      if (cellNetDebug) Serial.println("[CELL] Incoming data");
       m_incoming = 1;
     }
   }
@@ -967,7 +969,7 @@ bool CellHTTP::open(const char* host, uint16_t port)
   } else if (m_type == CELL_SIM7600) {
     // AT+CCHOPEN uses SSL context 0 or 1 configured by init() (authmode=0,
     // sslversion=3, ignorertctime=1, alpnprotocol="http/1.1").
-    // client_type=1 → SSL; session ID 0 is used throughout.
+    // client_type=2 → SSL client; session ID 0 is used throughout.
     memset(m_buffer, 0, RECV_BUF_SIZE);
     Serial.printf("[CELL] Connecting to %s:%u\n", host, port);
     // Flush stale UART bytes accumulated since init() — in particular async
@@ -1086,9 +1088,11 @@ bool CellHTTP::open(const char* host, uint16_t port)
           // Diagnostic: query CCH session status to verify the SSL context is
           // active on the modem side.  Not all SIM7600E-H firmware revisions
           // support AT+CCHSTATUS? — an ERROR response is harmless and logged.
-          if (sendCommand("AT+CCHSTATUS?\r", 500)) {
-            Serial.print("[CELL] CCHSTATUS: ");
-            Serial.println(m_buffer);
+          if (cellNetDebug) {
+            if (sendCommand("AT+CCHSTATUS?\r", 500)) {
+              Serial.print("[CELL] CCHSTATUS: ");
+              Serial.println(m_buffer);
+            }
           }
           return true;
         }
@@ -1221,7 +1225,7 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     // blank-line separator (\r\n\r\n) so we can verify the request line, Host:,
     // and all other headers before the bytes reach the modem.  Fall back to the
     // first 512 chars if the separator is not found.
-    {
+    if (cellNetDebug) {
       int headerEnd = header.indexOf("\r\n\r\n");
       const int previewLength = (headerEnd >= 0)
           ? min(headerEnd + 4, (int)header.length())

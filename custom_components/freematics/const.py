@@ -53,6 +53,11 @@ CONF_ENABLE_HTTPD = "enable_httpd"
 CONF_ENABLE_BLE = "enable_ble"
 CONF_DATA_INTERVAL_MS = "data_interval_ms"
 CONF_SYNC_INTERVAL_S = "sync_interval_s"
+# Enable verbose cellular debug logging (maps to NET_DEBUG / CELL_DEBUG NVS key).
+# When enabled, the firmware prints TX-Preview, TX hex-dump, AT+CCHSTATUS? and
+# per-packet "Incoming data" lines to the serial console.  Disabled by default
+# to keep production serial output clean.
+CONF_CELL_DEBUG = "cell_debug"
 
 # Device model identifiers (Freematics ONE+ variants)
 CONF_DEVICE_MODEL = "device_model"

@@ -35,6 +35,12 @@
 // repeated "400 The plain HTTP request was sent to HTTPS port" responses.
 #define MIN_TLS_HANDSHAKE_MS 300
 
+// Runtime cellular debug flag.  Set to 1 via NVS key CELL_DEBUG (written by
+// the HA config/options flow) to enable verbose cellular diagnostic logging:
+// TX-Preview, hex-dump, AT+CCHSTATUS? and per-packet "Incoming data" lines.
+// Controlled at runtime so no firmware recompile is needed.  Default is 0.
+extern uint8_t cellNetDebug;
+
 #define RECV_BUF_SIZE 512
 
 typedef enum {

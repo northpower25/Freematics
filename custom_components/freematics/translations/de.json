@@ -40,10 +40,11 @@
       },
       "advanced": {
         "title": "Freematics ONE+ – Betriebsmodus",
-        "description": "Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll. Dies bestimmt, welche Firmware-Funktionen aktiviert sind.\n\n**Telelogger** *(empfohlen für Home-Assistant-Nutzer)*: Sendet Telemetriedaten per Webhook an HA. HTTPD und BLE *deaktiviert* lassen, um ~104 KB Heap für die TLS-Verbindung freizugeben – das verhindert den `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)`-Fehler.\n\n**Datalogger**: Aktiviert den internen HTTP-Server (HTTPD) auf Port 80 mit den Endpunkten `/api/live`, `/api/info` usw. für den lokalen Netzwerkzugriff. Sinnvoll ohne Home Assistant oder zusammen mit einem lokalen Dashboard.\n\n**BLE** ist unabhängig von beiden Modi. Aktivieren Sie es nur, wenn Sie die Freematics Controller App über Bluetooth verwenden.\n\n**Intervalle**: Auf `0` lassen, um die Firmware-Standards beizubehalten (~1000 ms / 120 s).",
+        "description": "Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll. Dies bestimmt, welche Firmware-Funktionen aktiviert sind.\n\n**Telelogger** *(empfohlen für Home-Assistant-Nutzer)*: Sendet Telemetriedaten per Webhook an HA. HTTPD und BLE *deaktiviert* lassen, um ~104 KB Heap für die TLS-Verbindung freizugeben – das verhindert den `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)`-Fehler.\n\n**Datalogger**: Aktiviert den internen HTTP-Server (HTTPD) auf Port 80 mit den Endpunkten `/api/live`, `/api/info` usw. für den lokalen Netzwerkzugriff. Sinnvoll ohne Home Assistant oder zusammen mit einem lokalen Dashboard.\n\n**BLE** ist unabhängig von beiden Modi. Aktivieren Sie es nur, wenn Sie die Freematics Controller App über Bluetooth verwenden.\n\n**Mobilfunk-Debug-Protokollierung**: Aktivieren, um ausführliche Mobilfunk-Diagnosemeldungen (TX-Vorschau, Hex-Dump, AT+CCHSTATUS? und Eingangs-Benachrichtigungen) auf der seriellen Konsole auszugeben. Nur zur Fehlersuche verwenden; im Normalbetrieb deaktiviert lassen.\n\n**Intervalle**: Auf `0` lassen, um die Firmware-Standards beizubehalten (~1000 ms / 120 s).",
         "data": {
           "operating_mode": "Betriebsmodus",
           "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
+          "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard ~1000)",
           "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard 120)"
         }
@@ -76,6 +77,7 @@
           "device_model": "Gerätemodell",
           "operating_mode": "Betriebsmodus",
           "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
+          "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard)",
           "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard)",
           "device_ip": "Geräte-IP-Adresse",
