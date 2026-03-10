@@ -58,6 +58,7 @@ from .views import (
     FreematicsPersonalisedManifestView,
     FreematicsProvisioningTokenView,
     FreematicsProxyOTAView,
+    FreematicsSerialConsoleView,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -145,6 +146,7 @@ _PANEL_JS_URL = f"{_STATIC_PATH}/freematics-panel.js?v={_PANEL_JS_VERSION}"
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Register integration-wide HTTP views and sidebar panel (called once per HA startup)."""
     hass.http.register_view(FreematicsFlasherView())
+    hass.http.register_view(FreematicsSerialConsoleView())
     hass.http.register_view(FreematicsPersonalisedManifestView())
     hass.http.register_view(FreematicsFirmwareView())
     hass.http.register_view(FreematicsPartitionTableView())

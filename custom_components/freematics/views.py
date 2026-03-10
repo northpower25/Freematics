@@ -167,11 +167,18 @@ _FLASHER_HTML = """\
   </div>
 
   <div id="no-serial-warn" class="card warn" style="display:none">
-    &#9888; <strong>Web Serial API not available.</strong><br>
-    Please open this page in <strong>Google Chrome</strong> or
-    <strong>Microsoft Edge</strong> (version 89+).<br>
-    Alternatively, use the <strong>WiFi OTA</strong> flash button in the
-    Home Assistant integration.
+    <span id="serial-warn-msg">
+      &#9888; <strong>Web Serial API not available.</strong><br>
+      Please open this page in <strong>Google Chrome</strong> or
+      <strong>Microsoft Edge</strong> (version 89+).
+    </span>
+  </div>
+
+  <div class="card warn">
+    <strong>&#9888; Before clicking the flash button — put the device in download mode first (recommended):</strong><br>
+    Hold the <strong>BOOT</strong> button, press and release <strong>RST</strong>,
+    then release <strong>BOOT</strong>. This ensures the flash succeeds even if
+    automatic reset via DTR/RTS does not work in your browser.
   </div>
 
   <esp-web-install-button manifest="/api/freematics/manifest.json">
@@ -187,26 +194,22 @@ _FLASHER_HTML = """\
   <div class="card">
     <strong>Steps:</strong>
     <ol>
+      <li>(Recommended) Put device in download mode: hold BOOT, press RST, release BOOT</li>
       <li>Click <em>Connect &amp; Flash Firmware</em></li>
       <li>
         Select the serial port of the Freematics ONE+ from the browser dialog.<br>
         <small>Look for: <code>CP2102</code>, <code>CH340</code>, or a
         similar USB-Serial device name.</small>
       </li>
-      <li>The firmware flashes automatically (takes ~30 s)</li>
+      <li>The firmware flashes automatically (takes ~30-45 s)</li>
       <li>The device restarts and begins sending data to Home Assistant</li>
     </ol>
   </div>
 
-  <div class="card warn">
-    <strong>&#9888; If the flash stalls at &ldquo;Connecting&hellip;&rdquo;:</strong><br>
-    Put the device into download mode manually: hold the <strong>BOOT</strong> button,
-    press and release <strong>RST</strong>, then release <strong>BOOT</strong>.
-    Click the button again after the device resets into download mode.
-  </div>
-
   <p style="margin-top:2rem">
     <a href="javascript:history.back()">&#8592; Back to Home Assistant</a>
+    &nbsp;&nbsp;
+    <a href="/api/freematics/console" target="_blank" rel="noopener">&#128291; Serial Console</a>
     &nbsp;&nbsp;
     <a href="https://github.com/northpower25/Freematics/blob/master/docs/README.md"
        target="_blank" rel="noopener">Documentation</a>
@@ -214,8 +217,259 @@ _FLASHER_HTML = """\
 
   <script>
     if (!('serial' in navigator)) {
-      document.getElementById('no-serial-warn').style.display = 'block';
+      const warn = document.getElementById('no-serial-warn');
+      warn.style.display = 'block';
+      if (!window.isSecureContext) {
+        document.getElementById('serial-warn-msg').innerHTML =
+          '&#9888; <strong>Web Serial API not available &ndash; HTTPS required.</strong><br>' +
+          'The Web Serial API requires a <strong>secure HTTPS connection</strong>. ' +
+          'Open Home Assistant via <strong>Nabu Casa</strong> (*.ui.nabu.casa) or ' +
+          'via <code>http://localhost:8123</code> to enable browser flashing. ' +
+          'This is a browser security requirement and is unrelated to where your ' +
+          'USB device is plugged in.';
+      }
     }
+  </script>
+</body>
+</html>
+"""
+
+_CONSOLE_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freematics ONE+ Serial Console</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 900px; margin: 1.5rem auto; padding: 0 1rem; color: #333;
+      background: #fafafa;
+    }
+    h1 { color: #03a9f4; font-size: 1.4rem; margin-bottom: 0.4rem; }
+    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1rem; }
+    .card {
+      border-radius: 8px; padding: 0.8rem 1rem; margin: 0.8rem 0;
+      background: #f5f5f5;
+    }
+    .info { background: #e3f2fd; border-left: 4px solid #03a9f4; }
+    .warn { background: #fff8e1; border-left: 4px solid #ffc107; }
+    code { background: #e0e0e0; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.88em; }
+    a { color: #03a9f4; }
+    .toolbar {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .terminal {
+      background: #0d1117; color: #58d68d;
+      font-family: "Courier New", Courier, monospace; font-size: 0.82rem;
+      padding: 12px 14px; border-radius: 8px;
+      min-height: 380px; max-height: 600px;
+      overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+      box-shadow: inset 0 2px 8px rgba(0,0,0,.5);
+      margin-bottom: 10px;
+    }
+    .input-row { display: flex; gap: 8px; align-items: center; }
+    input[type=text] {
+      flex: 1; padding: 8px 10px;
+      border: 1px solid #ccc; border-radius: 6px;
+      font-family: "Courier New", Courier, monospace; font-size: 0.88rem;
+    }
+    button {
+      padding: 8px 14px; border: none; border-radius: 6px;
+      cursor: pointer; font-size: 0.88rem;
+    }
+    #connect-btn  { background: #4caf50; color: #fff; }
+    #connect-btn.disconnect { background: #f44336; }
+    #send-btn     { background: #03a9f4; color: #fff; }
+    #clear-btn    { background: #9e9e9e; color: #fff; }
+    select {
+      padding: 7px 10px; border: 1px solid #ccc; border-radius: 6px;
+      font-size: 0.88rem; background: #fff;
+    }
+    #status {
+      font-size: 0.82rem; padding: 3px 8px; border-radius: 4px;
+      background: #ffebee; color: #c62828;
+    }
+    #status.on { background: #e8f5e9; color: #2e7d32; }
+    #no-serial-warn { display: none; }
+  </style>
+</head>
+<body>
+  <h1>&#128291; Freematics ONE+ Serial Console</h1>
+  <p class="subtitle">
+    Like <code>python -m serial.tools.miniterm COM4 115200</code> — in your browser.
+  </p>
+
+  <div id="no-serial-warn" class="card warn">
+    &#9888; <strong>Web Serial API not available.</strong><br>
+    <span id="serial-warn-reason">
+      Please open this page in <strong>Google Chrome</strong> or
+      <strong>Microsoft Edge</strong> (version 89 or newer) over a
+      <strong>secure HTTPS connection</strong> or via
+      <code>http://localhost:8123</code>.
+    </span>
+  </div>
+
+  <div class="card info" style="font-size:0.88rem">
+    &#8505; The Serial Console opens a direct Web Serial connection to the USB port at
+    the selected baud rate. All output from the device is shown in the terminal below.
+    Type commands in the input field and press Enter or click Send.
+  </div>
+
+  <div class="toolbar">
+    <select id="baud-select">
+      <option value="9600">9600 baud</option>
+      <option value="115200" selected>115200 baud</option>
+      <option value="230400">230400 baud</option>
+      <option value="460800">460800 baud</option>
+      <option value="921600">921600 baud</option>
+    </select>
+    <select id="newline-select">
+      <option value="crlf">CR+LF (\\r\\n)</option>
+      <option value="lf">LF only (\\n)</option>
+      <option value="cr">CR only (\\r)</option>
+    </select>
+    <button id="connect-btn">&#128291; Connect</button>
+    <button id="clear-btn">&#128465; Clear</button>
+    <span id="status">&#9679; Disconnected</span>
+  </div>
+
+  <div id="terminal" class="terminal"><span style="color:#57606a">— Not connected —</span></div>
+
+  <div class="input-row">
+    <input id="cmd-input" type="text"
+           placeholder="Type a command and press Enter or click Send…"
+           disabled>
+    <button id="send-btn" disabled>&#9654; Send</button>
+  </div>
+
+  <p style="margin-top:1.5rem">
+    <a href="javascript:history.back()">&#8592; Back to Home Assistant</a>
+    &nbsp;&nbsp;
+    <a href="/api/freematics/flasher" target="_blank" rel="noopener">&#9889; Flasher Page</a>
+  </p>
+
+  <script>
+    (function () {
+      const connectBtn = document.getElementById('connect-btn');
+      const clearBtn   = document.getElementById('clear-btn');
+      const sendBtn    = document.getElementById('send-btn');
+      const cmdInput   = document.getElementById('cmd-input');
+      const terminal   = document.getElementById('terminal');
+      const statusEl   = document.getElementById('status');
+      const baudSel    = document.getElementById('baud-select');
+      const nlSel      = document.getElementById('newline-select');
+
+      let port = null;
+      let reader = null;
+      let writer = null;
+
+      function appendTerminal(text, color) {
+        const placeholder = terminal.querySelector('span[style]');
+        if (placeholder) terminal.innerHTML = '';
+        const span = document.createElement('span');
+        if (color) span.style.color = color;
+        span.textContent = text;
+        terminal.appendChild(span);
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+
+      function setConnected(connected) {
+        if (connected) {
+          connectBtn.textContent = '\\u23F9 Disconnect';
+          connectBtn.classList.add('disconnect');
+          statusEl.textContent = '\\u25CF Connected';
+          statusEl.classList.add('on');
+          cmdInput.disabled = false;
+          sendBtn.disabled = false;
+        } else {
+          connectBtn.textContent = '\\uD83D\\uDD0C Connect';
+          connectBtn.classList.remove('disconnect');
+          statusEl.textContent = '\\u25CF Disconnected';
+          statusEl.classList.remove('on');
+          cmdInput.disabled = true;
+          sendBtn.disabled = true;
+        }
+      }
+
+      async function cleanup() {
+        try { if (reader) await reader.cancel(); } catch (_) {}
+        try { if (writer) await writer.close(); }  catch (_) {}
+        try { if (port)   await port.close(); }    catch (_) {}
+        reader = null; writer = null; port = null;
+      }
+
+      connectBtn.addEventListener('click', async () => {
+        if (port) {
+          appendTerminal('\\n[Disconnected]\\n', '#57606a');
+          await cleanup();
+          setConnected(false);
+          return;
+        }
+        try {
+          const p = await navigator.serial.requestPort();
+          const baud = parseInt(baudSel.value) || 115200;
+          await p.open({ baudRate: baud });
+          port = p;
+          setConnected(true);
+          appendTerminal('\\n[Connected at ' + baud + ' baud]\\n', '#57606a');
+
+          const decoder = new TextDecoderStream();
+          p.readable.pipeTo(decoder.writable).catch(() => {});
+          reader = decoder.readable.getReader();
+
+          const encoder = new TextEncoderStream();
+          encoder.readable.pipeTo(p.writable).catch(() => {});
+          writer = encoder.writable.getWriter();
+
+          (async () => {
+            while (true) {
+              let result;
+              try { result = await reader.read(); } catch (_) { break; }
+              if (result.done) break;
+              appendTerminal(result.value);
+            }
+            appendTerminal('\\n[Connection closed]\\n', '#57606a');
+            await cleanup();
+            setConnected(false);
+          })();
+        } catch (err) {
+          if (err.name !== 'NotFoundError') {
+            appendTerminal('\\n[Error: ' + (err.message || err) + ']\\n', '#ff7675');
+          }
+        }
+      });
+
+      clearBtn.addEventListener('click', () => { terminal.innerHTML = ''; });
+
+      async function sendCommand() {
+        if (!writer || !cmdInput.value) return;
+        const nlMap = { crlf: '\\r\\n', lf: '\\n', cr: '\\r' };
+        const nl = nlMap[nlSel.value] || '\\r\\n';
+        try {
+          await writer.write(cmdInput.value + nl);
+          cmdInput.value = '';
+        } catch (err) {
+          appendTerminal('\\n[Send error: ' + (err.message || err) + ']\\n', '#ff7675');
+        }
+      }
+      sendBtn.addEventListener('click', sendCommand);
+      cmdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCommand(); });
+
+      if (!('serial' in navigator)) {
+        document.getElementById('no-serial-warn').style.display = 'block';
+        if (!window.isSecureContext) {
+          document.getElementById('serial-warn-reason').innerHTML =
+            'This page is loaded over <strong>HTTP</strong> (not HTTPS). ' +
+            'The Web Serial API requires a <strong>secure HTTPS connection</strong> ' +
+            'or access via <code>http://localhost:8123</code>. ' +
+            'This is a browser security requirement, not related to the USB port.';
+        }
+      }
+    })();
   </script>
 </body>
 </html>
@@ -241,6 +495,33 @@ class FreematicsFlasherView(HomeAssistantView):
         """Return the flasher HTML page."""
         return web.Response(
             body=_FLASHER_HTML.encode("utf-8"),
+            content_type="text/html",
+            charset="utf-8",
+        )
+
+
+class FreematicsSerialConsoleView(HomeAssistantView):
+    """Serve a standalone Web Serial terminal page.
+
+    Accessible at /api/freematics/console.
+
+    Opens in its own browser tab.  Provides a serial monitor at 115200 baud
+    (configurable) so the user can watch the device log and send commands,
+    equivalent to ``python -m serial.tools.miniterm <PORT> 115200``.
+
+    requires_auth is False: the page is static HTML and contains no device
+    credentials.  The user must explicitly select their own serial port through
+    the browser's native port-picker dialog.
+    """
+
+    url = "/api/freematics/console"
+    name = "api:freematics:console"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return the standalone serial console HTML page."""
+        return web.Response(
+            body=_CONSOLE_HTML.encode("utf-8"),
             content_type="text/html",
             charset="utf-8",
         )
