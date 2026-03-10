@@ -989,16 +989,17 @@ bool CellHTTP::open(const char* host, uint16_t port)
     sendCommand(m_buffer);
     sprintf(m_buffer, "AT+CSSLCFG=\"sni\",1,\"%s\"\r", host);
     sendCommand(m_buffer);
-    // Use AT+CCHOPEN with explicit ssl_ctx_id to ensure the TLS connection
-    // uses the SSL context configured above by AT+CSSLCFG.  Some SIM7600E-H
-    // firmware revisions do not apply the default ssl_ctx_id (0) automatically
-    // when the parameter is omitted, resulting in a plain TCP connection despite
-    // client_type=1 (SSL) — the server then receives unencrypted HTTP on port
-    // 443 and responds with "400 The plain HTTP request was sent to HTTPS port".
+    // Use AT+CCHOPEN with client_type=2 (SSL client) and explicit ssl_ctx_id to
+    // ensure a TLS connection that uses the SSL context configured above by
+    // AT+CSSLCFG.  client_type=1 is plain TCP: despite older comments calling it
+    // "SSL", the SIMCom AT-command manual (SIM7500/SIM7600/SIM7800 V3.00, ch.
+    // 10.2) and the SSL Application Note document that SSL client = type 2.
+    // Using type 1 caused every POST to arrive at the server as cleartext, which
+    // responded with "400 The plain HTTP request was sent to HTTPS port".
     //
     // Try order:
-    //   1. ssl_ctx_id=0 (preferred; prevents TCP fallback on known-buggy FW)
-    //   2. ssl_ctx_id=1 (some firmware revisions map session 0 to context 1)
+    //   1. client_type=2, ssl_ctx_id=0 (preferred; explicit SSL on context 0)
+    //   2. client_type=2, ssl_ctx_id=1 (some firmware map session 0 → context 1)
     // The 4-param form (no explicit ssl_ctx_id) has been removed because it
     // silently falls back to plain TCP on some SIM7600E-H firmware revisions
     // and was the primary cause of "400 plain HTTP to HTTPS port" errors.
@@ -1009,16 +1010,21 @@ bool CellHTTP::open(const char* host, uint16_t port)
     // each failed attempt adds up to 1 second of delay, so even a near-instant
     // plain-TCP response on the fallback appeared to take > MIN_TLS_HANDSHAKE_MS.
     bool cchOpenOk = false;
-    // Attempt 1: 5-param with ssl_ctx_id=0.
-    sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,0\r", host, port);
+    // Attempt 1: 5-param with client_type=2 (SSL client), ssl_ctx_id=0.
+    // client_type=2 is the SSL/TLS client mode on SIM7600.  Using client_type=1
+    // opens a plain-TCP connection, causing the server to see unencrypted HTTP
+    // on port 443 and respond with "400 The plain HTTP request was sent to HTTPS
+    // port".  The SIMCom AT-command manual (SIM7500/SIM7600/SIM7800, ch. 10.2)
+    // and the SSL Application Note confirm that SSL client = type 2.
+    sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,2,0\r", host, port);
     uint32_t cchOpenStart = millis();
     cchOpenOk = sendCommand(m_buffer, 1000);
     if (!cchOpenOk) {
-      // Attempt 2: 5-param with ssl_ctx_id=1.  Some SIM7600E-H firmware
-      // revisions internally map CCH session 0 to SSL context 1 rather than
-      // context 0; the explicit ctx_id=1 binding forces use of the correctly
-      // configured context on those revisions.
-      sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,1,1\r", host, port);
+      // Attempt 2: 5-param with client_type=2 (SSL client), ssl_ctx_id=1.
+      // Some SIM7600E-H firmware revisions internally map CCH session 0 to
+      // SSL context 1 rather than context 0; the explicit ctx_id=1 binding
+      // forces use of the correctly configured context on those revisions.
+      sprintf(m_buffer, "AT+CCHOPEN=0,\"%s\",%u,2,1\r", host, port);
       cchOpenStart = millis();
       cchOpenOk = sendCommand(m_buffer, 1000);
     }
@@ -1211,11 +1217,15 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     }
     // SIM7600 raw SSL socket: send via AT+CCHSEND
     String header = genHeader(method, path, payload, payloadSize);
-    // TX diagnostic: show the first 160 chars of the outgoing HTTP header and
-    // the first 64 bytes as hex so we can verify the request line and CRLF
-    // separators are correct before the bytes reach the modem.
+    // TX diagnostic: show the outgoing HTTP header up to (and including) the
+    // blank-line separator (\r\n\r\n) so we can verify the request line, Host:,
+    // and all other headers before the bytes reach the modem.  Fall back to the
+    // first 512 chars if the separator is not found.
     {
-      const int previewLength = min(160, (int)header.length());
+      int headerEnd = header.indexOf("\r\n\r\n");
+      const int previewLength = (headerEnd >= 0)
+          ? min(headerEnd + 4, (int)header.length())
+          : min(512, (int)header.length());
       Serial.print("[CELL] TX-Preview: ");
       Serial.write(header.c_str(), previewLength);
       Serial.println();
