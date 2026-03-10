@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.16.0";
+const PANEL_VERSION = "1.16.1";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -332,6 +332,7 @@ class FreematicsPanel extends HTMLElement {
     this._currentAttrObserver = null;
     this._shadowDialogObserver = null;
     this._progressPollTimer = null;
+    this._showBtnFallbackTimer = null;
     this._provisioningManifestUrl = null;
     this.attachShadow({ mode: "open" });
   }
@@ -369,6 +370,10 @@ class FreematicsPanel extends HTMLElement {
     if (this._dialogStallRef) {
       clearTimeout(this._dialogStallRef.timer);
       this._dialogStallRef = null;
+    }
+    if (this._showBtnFallbackTimer) {
+      clearTimeout(this._showBtnFallbackTimer);
+      this._showBtnFallbackTimer = null;
     }
     this._cleanupSerial();
   }
@@ -1342,6 +1347,11 @@ class FreematicsPanel extends HTMLElement {
               clearInterval(this._progressPollTimer);
               this._progressPollTimer = null;
             }
+            // Cancel the fallback button-reveal timer
+            if (this._showBtnFallbackTimer) {
+              clearTimeout(this._showBtnFallbackTimer);
+              this._showBtnFallbackTimer = null;
+            }
             // Clear dialog reference and hide the manual Start Flashing button
             this._currentDialog = null;
             const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
@@ -1376,6 +1386,35 @@ class FreematicsPanel extends HTMLElement {
     this._appendFlashLog("info", "Connecting to device…");
     this._appendFlashLog("info", "☝ A browser dialog appeared — select the COM port and follow its steps to install the firmware.");
 
+    // Fallback: reveal the "🚀 Start Flashing" button after a short delay if
+    // auto-advance hasn't already triggered the install.  This handles the case
+    // where readState() cannot detect the DASHBOARD/ASK_ERASE state (e.g. due
+    // to an esp-web-tools internal API change) so the user always has a visible
+    // manual trigger regardless of whether state detection is working.
+    // Guard that ensures the Install / Skip-Erase button is only auto-clicked
+    // once per dialog session even if the observers fire multiple times.
+    let _autoAdvanced = false;
+    if (this._showBtnFallbackTimer) {
+      clearTimeout(this._showBtnFallbackTimer);
+      this._showBtnFallbackTimer = null;
+    }
+    const SHOW_BTN_FALLBACK_MS = 5000;
+    this._showBtnFallbackTimer = setTimeout(() => {
+      this._showBtnFallbackTimer = null;
+      if (_autoAdvanced || this._currentDialog !== dialog) return;
+      const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
+      if (manualWrap && manualWrap.style.display !== "block") {
+        manualWrap.style.display = "block";
+        const btn = manualWrap.querySelector("#flash-start-btn");
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "🚀 Start Flashing";
+        }
+        this._appendFlashLog("info",
+          "👆 If flashing has not started automatically, click the Start Flashing button below.");
+      }
+    }, SHOW_BTN_FALLBACK_MS);
+
     // Redirect the dialog's internal logger so real flash messages appear in
     // our log console (e.g. "Connecting", "Erasing", chunk-write confirmations).
     // Guard with a property-existence check in case the API changed.
@@ -1409,10 +1448,6 @@ class FreematicsPanel extends HTMLElement {
     const stallRef = { timer: null };  // wrapper object so handleState (declared first)
                                         // can cancel the timer (declared below)
 
-    // Guard that ensures the Install / Skip-Erase button is only auto-clicked
-    // once per dialog session even if the observers fire multiple times.
-    let _autoAdvanced = false;
-
     const handleState = (state) => {
       if (!state || state === lastState) return;
       lastState = state;
@@ -1427,6 +1462,10 @@ class FreematicsPanel extends HTMLElement {
         setTimeout(() => {
           if (!_autoAdvanced) {
             _autoAdvanced = this._tryAutoAdvanceDialog(dialog);
+            if (_autoAdvanced && this._showBtnFallbackTimer) {
+              clearTimeout(this._showBtnFallbackTimer);
+              this._showBtnFallbackTimer = null;
+            }
           }
         }, DIALOG_AUTO_ADVANCE_DELAY_MS);
       }
@@ -1456,6 +1495,10 @@ class FreematicsPanel extends HTMLElement {
           handleState(readState());
           if (!_autoAdvanced) {
             _autoAdvanced = this._tryAutoAdvanceDialog(dialog);
+            if (_autoAdvanced && this._showBtnFallbackTimer) {
+              clearTimeout(this._showBtnFallbackTimer);
+              this._showBtnFallbackTimer = null;
+            }
           }
         });
         shadowObs.observe(dialog.shadowRoot, { childList: true, subtree: true });
@@ -1574,6 +1617,10 @@ class FreematicsPanel extends HTMLElement {
       clearTimeout(stallRef.timer);
       stallRef.timer = null;
       this._dialogStallRef = null;
+      if (this._showBtnFallbackTimer) {
+        clearTimeout(this._showBtnFallbackTimer);
+        this._showBtnFallbackTimer = null;
+      }
       attrObserver.disconnect();
       this._currentAttrObserver = null;
       if (this._shadowDialogObserver) {
