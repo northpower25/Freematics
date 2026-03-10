@@ -1294,10 +1294,25 @@ class FreematicsPanel extends HTMLElement {
           // Could not find/click the Install button — re-enable and inform user.
           startBtn.disabled = false;
           startBtn.textContent = "🚀 Start Flashing";
-          this._appendFlashLog("warn",
-            "⚠ Could not auto-click the Install button. " +
-            "The popup dialog may still be visible — please interact with it directly, " +
-            "or try reconnecting the device and clicking Connect & Flash Firmware again.");
+          // Give a state-aware message: if the dialog is still in CONNECTING
+          // state, the device hasn't connected yet and there is no Install
+          // button to click — guide the user accordingly.
+          const dialogState = this._currentDialog
+            ? (this._currentDialog._state
+                ? String(this._currentDialog._state).toUpperCase()
+                : this._currentDialog.getAttribute("state"))
+            : null;
+          if (!dialogState || dialogState === "CONNECTING") {
+            this._appendFlashLog("warn",
+              "⚠ The device is still connecting. " +
+              "Please wait for it to finish connecting, or check your USB cable and COM port selection. " +
+              "If needed, click Connect & Flash Firmware to try again.");
+          } else {
+            this._appendFlashLog("warn",
+              "⚠ Could not auto-click the Install button. " +
+              "Please interact with the flash dialog directly (click Install), " +
+              "or try reconnecting the device and clicking Connect & Flash Firmware again.");
+          }
         }
       });
     }
@@ -1384,7 +1399,7 @@ class FreematicsPanel extends HTMLElement {
     progressSection.style.display = "block";
     this._updateFlashUI("Connecting to device…", "", "#2196f3", 5);
     this._appendFlashLog("info", "Connecting to device…");
-    this._appendFlashLog("info", "☝ A browser dialog appeared — select the COM port and follow its steps to install the firmware.");
+    this._appendFlashLog("info", "☝ The flash dialog is now open — waiting for the device to connect. Installation will start automatically.");
 
     // Fallback: reveal the "🚀 Start Flashing" button after a short delay if
     // auto-advance hasn't already triggered the install.  This handles the case
@@ -1674,10 +1689,11 @@ class FreematicsPanel extends HTMLElement {
 
   /**
    * Scan the esp-web-tools dialog's shadow root for Install / Skip-Erase
-   * buttons and click the appropriate one automatically.  This handles the
-   * case where the dialog popup is not visible or not interactable inside
-   * the HA Dashboard (both the DASHBOARD and ASK_ERASE states require user
-   * interaction with the popup).
+   * buttons and click the appropriate one automatically.  This is needed
+   * because in some HA Dashboard environments the popup may not be
+   * interactable, and because esp-web-tools v10 changed the button element
+   * types from mwc-button / <button> to ew-list-item[type="button"] and
+   * ew-text-button.
    *
    * Returns true when a button was found and clicked, false otherwise.
    * The caller should set an "_autoAdvanced" guard so this is only invoked
@@ -1688,21 +1704,38 @@ class FreematicsPanel extends HTMLElement {
     if (!sr) return false;
 
     // Helper: return the human-visible text of a button element.
-    // mwc-button can store its label in a `label` attribute rather than as
-    // text content, so we check both.
-    const getBtnText = b =>
-      (b.textContent || b.getAttribute("label") || "").trim();
+    // mwc-button stores its label in a `label` attribute; ew-list-item (used
+    // in esp-web-tools v10) stores its visible text in a slotted child with
+    // slot="headline".  Fall back to full textContent (which includes light-DOM
+    // children) so we catch both patterns without a hard dependency on the
+    // internal structure of any particular esp-web-tools version.
+    const getBtnText = b => {
+      // ew-list-item: prefer the explicit headline slot to avoid matching SVG
+      // icon text that may be light-DOM siblings of the headline div.
+      if (b.localName === "ew-list-item") {
+        const headline = b.querySelector('[slot="headline"]');
+        if (headline) return headline.textContent.trim();
+      }
+      return (b.textContent || b.getAttribute("label") || "").trim();
+    };
 
+    // esp-web-tools v10 uses ew-list-item[type="button"] for clickable menu
+    // entries (Install, Update, Logs & Console…) and ew-text-button for
+    // dialog action buttons (Next, Back, Close).  Earlier versions used
+    // mwc-button or plain <button>.  Include all of them so this works across
+    // library versions.
     const allBtns = [...sr.querySelectorAll(
-      "mwc-button, ewt-button, button, [role='button']",
+      "mwc-button, ewt-button, button, [role='button'], " +
+      "ew-list-item[type='button'], ew-text-button",
     )];
 
     // --- ASK_ERASE state ---
-    // Both an "Erase device" button AND a "Skip"/"Continue without erasing"
-    // button are present.  We always skip erasing because the manifest already
-    // writes a full image (partition table + NVS + firmware) at explicit offsets.
-    // The skip/continue pattern is kept specific to erase-related phrasing to
-    // avoid accidentally clicking unrelated "Continue" buttons.
+    // esp-web-tools ≤ v9: "Erase device" + "Skip"/"Continue without erasing".
+    // esp-web-tools v10: "Next" button (checkbox defaults to unchecked = no
+    // erase) + "Back" button.  Handle both patterns.
+    // We always skip erasing because the manifest writes a full partition
+    // image (table + NVS + firmware) at explicit offsets that already
+    // overwrites all relevant sectors.
     const eraseBtn = allBtns.find(b => /\berase\b/i.test(getBtnText(b)));
     const skipBtn  = allBtns.find(b => /\bskip\b|\bwithout eras/i.test(getBtnText(b)));
     if (eraseBtn && skipBtn) {
@@ -1712,13 +1745,26 @@ class FreematicsPanel extends HTMLElement {
       skipBtn.click();
       return true;
     }
+    // v10 ASK_ERASE: "Next" button (proceed without erasing since checkbox is
+    // unchecked by default), only when there is also a "Back" button present
+    // so we do not accidentally click "Next" buttons in unrelated states.
+    const backBtn = allBtns.find(b => /\bback\b/i.test(getBtnText(b)));
+    const nextBtn = allBtns.find(b => /\bnext\b/i.test(getBtnText(b)));
+    if (backBtn && nextBtn) {
+      this._appendFlashLog("info",
+        "Confirming install (no erase) — proceeding automatically.");
+      this._updateFlashUI("Confirming install — starting flash…", "", "#2196f3", 35);
+      nextBtn.click();
+      return true;
+    }
 
     // --- DASHBOARD state ---
-    // An Install button is present and not disabled — device is connected and
-    // ready.  Click it to start the actual flash without requiring the user to
-    // interact with the (potentially invisible) popup dialog.
+    // An Install / Update button is present and not disabled — device is
+    // connected and ready.  Click it to start the actual flash without
+    // requiring the user to interact with the popup dialog.
+    // Match both "Install X" and "Update X" (re-flash same firmware).
     const installBtn = allBtns.find(b =>
-      /\binstall\b/i.test(getBtnText(b)) && !b.disabled);
+      /\binstall\b|\bupdate\b/i.test(getBtnText(b)) && !b.disabled);
     if (installBtn) {
       this._appendFlashLog("info",
         "Device detected — triggering installation automatically (no popup interaction required).");
