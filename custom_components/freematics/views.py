@@ -174,13 +174,6 @@ _FLASHER_HTML = """\
     </span>
   </div>
 
-  <div class="card warn">
-    <strong>&#9888; Before clicking the flash button — put the device in download mode first (recommended):</strong><br>
-    Hold the <strong>BOOT</strong> button, press and release <strong>RST</strong>,
-    then release <strong>BOOT</strong>. This ensures the flash succeeds even if
-    automatic reset via DTR/RTS does not work in your browser.
-  </div>
-
   <esp-web-install-button manifest="/api/freematics/manifest.json">
     <button slot="activate">&#9889; Connect &amp; Flash Firmware</button>
     <span slot="unsupported">
@@ -194,7 +187,6 @@ _FLASHER_HTML = """\
   <div class="card">
     <strong>Steps:</strong>
     <ol>
-      <li>(Recommended) Put device in download mode: hold BOOT, press RST, release BOOT</li>
       <li>Click <em>Connect &amp; Flash Firmware</em></li>
       <li>
         Select the serial port of the Freematics ONE+ from the browser dialog.<br>
@@ -204,6 +196,16 @@ _FLASHER_HTML = """\
       <li>The firmware flashes automatically (takes ~30-45 s)</li>
       <li>The device restarts and begins sending data to Home Assistant</li>
     </ol>
+  </div>
+
+  <div class="card warn">
+    <strong>&#9888; If the flash stalls at &ldquo;Connecting&hellip;&rdquo;:</strong><br>
+    The Web Serial API may not complete the automatic reset in some browsers. Use the
+    <strong>esptool command line</strong> instead — it handles device reset automatically
+    via DTR/RTS, just as it does when you run<br>
+    <code>python -m esptool write-flash 0x8000 flash_image.bin</code><br>
+    (add <code>--port COM3</code> if esptool does not detect the port automatically).
+    Download <code>flash_image.bin</code> from the Home Assistant panel.
   </div>
 
   <p style="margin-top:2rem">

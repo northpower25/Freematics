@@ -759,16 +759,6 @@ class FreematicsPanel extends HTMLElement {
             <code style="${cs}">CH340</code>, or a similar USB-Serial device.
           </p>
 
-          <!-- BOOT mode hint – shown BEFORE the flash button -->
-          <div style="background:#fff8e1;border-left:4px solid #ffc107;padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px;font-size:.88rem;color:#795548">
-            &#9888; <strong>If the flash gets stuck at "Connecting…" or times out:</strong><br>
-            Put the device into <strong>download mode manually</strong> before clicking the button:
-            hold the <strong>BOOT</strong> button, press and release <strong>RST</strong>,
-            then release <strong>BOOT</strong>. The device LEDs may change or blink.
-            Then click the flash button. This is sometimes necessary even if automatic
-            reset normally works with esptool.
-          </div>
-
           <div id="esp-container">
             <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
           </div>
@@ -780,7 +770,6 @@ class FreematicsPanel extends HTMLElement {
             <div class="flash-log" id="flash-log"></div>
           </div>
           <ol style="font-size:.9rem;color:var(--secondary-text-color)">
-            <li>(Optional) Put device in download mode: hold BOOT, press RST, release BOOT</li>
             <li>Click <em>Connect &amp; Flash Firmware</em></li>
             <li>Select the Freematics ONE+ COM port from the browser dialog</li>
             <li>Firmware + settings flash automatically (~45 s)</li>
@@ -1436,13 +1425,14 @@ class FreematicsPanel extends HTMLElement {
       if (!lastState || lastState === "CONNECTING") {
         this._appendFlashLog("err",
           "⏱ No response from device after 60 s. " +
-          "The device did not respond to the programming handshake. " +
-          "Try putting the device into download mode manually: hold the BOOT button, " +
-          "press and release RST, release BOOT — then click the flash button again. " +
-          "Also check the USB cable and confirm the correct COM port was selected. " +
-          "If the problem persists with Edge, try Google Chrome. " +
-          "See the Manual Flash section below for command-line alternatives.");
-        this._updateFlashUI("⏱ Timed out — try manual BOOT mode (hold BOOT + press RST) then retry.", "err", "#f44336", 0);
+          "The Web Serial API could not complete the programming handshake. " +
+          "Check the USB cable and confirm the correct COM port was selected. " +
+          "If the problem persists in the browser, use the esptool command-line method — " +
+          "it handles device reset automatically via DTR/RTS: " +
+          "python -m esptool write-flash 0x8000 flash_image.bin " +
+          "(add --port COM3 if esptool does not detect the port automatically). " +
+          "See the Manual Flash section below.");
+        this._updateFlashUI("⏱ Timed out — check USB cable/driver, or use esptool from the command line.", "err", "#f44336", 0);
       }
     }, STALL_MS);
     // Keep a reference on the instance so the body-observer removedNodes handler
