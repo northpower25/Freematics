@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.14.0";
+const PANEL_VERSION = "1.15.0";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -1363,11 +1363,27 @@ class FreematicsPanel extends HTMLElement {
     const stallRef = { timer: null };  // wrapper object so handleState (declared first)
                                         // can cancel the timer (declared below)
 
+    // Guard that ensures the Install / Skip-Erase button is only auto-clicked
+    // once per dialog session even if the observers fire multiple times.
+    let _autoAdvanced = false;
+
     const handleState = (state) => {
       if (!state || state === lastState) return;
       lastState = state;
       clearTimeout(stallRef.timer);  // state changed — no longer stalled
       this._onDialogStateChanged(state);
+      // Auto-advance past states that require interaction with the popup
+      // dialog, which may be invisible inside the HA Dashboard.
+      // A short delay lets the shadow DOM re-render and enable the button
+      // before we try to click it.
+      const DIALOG_AUTO_ADVANCE_DELAY_MS = 300;
+      if ((state === "DASHBOARD" || state === "ASK_ERASE") && !_autoAdvanced) {
+        setTimeout(() => {
+          if (!_autoAdvanced) {
+            _autoAdvanced = this._tryAutoAdvanceDialog(dialog);
+          }
+        }, DIALOG_AUTO_ADVANCE_DELAY_MS);
+      }
     };
 
     // Primary: watch ALL attributes on the dialog element.  Removing the
@@ -1385,10 +1401,16 @@ class FreematicsPanel extends HTMLElement {
     // and so never triggers the attribute observer alone).
     // Use subtree:true to catch nested DOM updates, and retry if the shadow
     // root is not yet available (element may be upgraded asynchronously).
+    // Also: scan for Install / Skip-Erase buttons on every re-render so that
+    // auto-advance works even when readState() cannot read the dialog state
+    // (e.g. when esp-web-tools changes its internal property names).
     const attachShadowObserver = () => {
       if (dialog.shadowRoot && !this._shadowDialogObserver) {
         const shadowObs = new MutationObserver(() => {
           handleState(readState());
+          if (!_autoAdvanced) {
+            _autoAdvanced = this._tryAutoAdvanceDialog(dialog);
+          }
         });
         shadowObs.observe(dialog.shadowRoot, { childList: true, subtree: true });
         this._shadowDialogObserver = shadowObs;
@@ -1530,8 +1552,8 @@ class FreematicsPanel extends HTMLElement {
     // State values are normalised to uppercase by readState() in
     // _onInstallDialogAdded, but keep the MAP in uppercase for clarity.
     const MAP = {
-      DASHBOARD: { pct: 20,  label: "Connected — follow the dialog to install…", cls: "info", color: "#2196f3" },
-      ASK_ERASE: { pct: 30,  label: "Awaiting erase confirmation in dialog…",    cls: "info", color: "#ff9800" },
+      DASHBOARD: { pct: 20,  label: "Device connected — starting installation…", cls: "info", color: "#4caf50" },
+      ASK_ERASE: { pct: 30,  label: "Checking flash state — skipping erase…",    cls: "info", color: "#2196f3" },
       INSTALL:   { pct: 55,  label: "Installing firmware… (may take ~2 min)",      cls: "info", color: "#2196f3" },
       PROVISION: { pct: 90,  label: "Configuring Wi-Fi…",                        cls: "info", color: "#2196f3" },
       LOGS:      { pct: 100, label: "✓ Installation complete.",                  cls: "ok",   color: "#4caf50" },
@@ -1540,6 +1562,64 @@ class FreematicsPanel extends HTMLElement {
     const info = MAP[state] || { pct: 10, label: `Status: ${state}`, cls: "info", color: "#2196f3" };
     this._updateFlashUI(info.label, info.cls !== "info" ? info.cls : "", info.color, info.pct);
     this._appendFlashLog(info.cls, info.label);
+  }
+
+  /**
+   * Scan the esp-web-tools dialog's shadow root for Install / Skip-Erase
+   * buttons and click the appropriate one automatically.  This handles the
+   * case where the dialog popup is not visible or not interactable inside
+   * the HA Dashboard (both the DASHBOARD and ASK_ERASE states require user
+   * interaction with the popup).
+   *
+   * Returns true when a button was found and clicked, false otherwise.
+   * The caller should set an "_autoAdvanced" guard so this is only invoked
+   * once per dialog session.
+   */
+  _tryAutoAdvanceDialog(dialog) {
+    const sr = dialog.shadowRoot;
+    if (!sr) return false;
+
+    // Helper: return the human-visible text of a button element.
+    // mwc-button can store its label in a `label` attribute rather than as
+    // text content, so we check both.
+    const getBtnText = b =>
+      (b.textContent || b.getAttribute("label") || "").trim();
+
+    const allBtns = [...sr.querySelectorAll(
+      "mwc-button, ewt-button, button, [role='button']",
+    )];
+
+    // --- ASK_ERASE state ---
+    // Both an "Erase device" button AND a "Skip"/"Continue without erasing"
+    // button are present.  We always skip erasing because the manifest already
+    // writes a full image (partition table + NVS + firmware) at explicit offsets.
+    // The skip/continue pattern is kept specific to erase-related phrasing to
+    // avoid accidentally clicking unrelated "Continue" buttons.
+    const eraseBtn = allBtns.find(b => /\berase\b/i.test(getBtnText(b)));
+    const skipBtn  = allBtns.find(b => /\bskip\b|\bwithout eras/i.test(getBtnText(b)));
+    if (eraseBtn && skipBtn) {
+      this._appendFlashLog("info",
+        "Skipping erase — the full partition image overwrites all sectors automatically.");
+      this._updateFlashUI("Skipping erase — starting flash…", "", "#2196f3", 35);
+      skipBtn.click();
+      return true;
+    }
+
+    // --- DASHBOARD state ---
+    // An Install button is present and not disabled — device is connected and
+    // ready.  Click it to start the actual flash without requiring the user to
+    // interact with the (potentially invisible) popup dialog.
+    const installBtn = allBtns.find(b =>
+      /\binstall\b/i.test(getBtnText(b)) && !b.disabled);
+    if (installBtn) {
+      this._appendFlashLog("info",
+        "Device detected — triggering installation automatically (no popup interaction required).");
+      this._updateFlashUI("Device connected — starting flash…", "", "#4caf50", 22);
+      installBtn.click();
+      return true;
+    }
+
+    return false;
   }
 
   _updateFlashUI(label, cls, barColor, pct) {
