@@ -111,4 +111,10 @@ public:
     WifiHTTP wifi;
 #endif
     CellHTTP cell;
+private:
+    // Exponential back-off state for repeated 4xx HTTP errors.
+    // Prevents rapid reconnect/retry loops when the server returns a client
+    // error (e.g. 404 wrong path, 405 wrong method) that a reconnect cannot
+    // fix.  Reset to 0 on any successful 2xx response.
+    uint32_t m_backoffMs = 0;
 };

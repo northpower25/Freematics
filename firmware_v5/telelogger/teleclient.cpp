@@ -49,6 +49,12 @@ extern uint8_t enableHttpd;
 #undef SERVER_PORT
 #define SERVER_PORT serverPort
 
+// Back-off policy for 4xx HTTP errors in transmit().
+// INITIAL_BACKOFF_MS: starting delay for non-400 4xx errors (404, 405, etc.).
+// MAX_BACKOFF_MS:     ceiling for the exponential progression (caps at ~64 s).
+#define HTTP_4XX_INITIAL_BACKOFF_MS 2000
+#define HTTP_4XX_MAX_BACKOFF_MS     64000
+
 CBuffer::CBuffer(uint8_t* mem)
 {
   m_data = mem;
@@ -560,6 +566,20 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
   }
 }
 
+// Print a webhook path with the token component masked to avoid leaking
+// bearer-like secrets to the serial console.  Shows up to 20 characters of
+// the path; longer paths are truncated with "..." to conceal the token.
+static void printMaskedPath(const char* path) {
+  const int MAX_LOG_LEN = 20;
+  int len = (int)strlen(path);
+  if (len <= MAX_LOG_LEN) {
+    Serial.print(path);
+  } else {
+    for (int i = 0; i < MAX_LOG_LEN; i++) Serial.print(path[i]);
+    Serial.print("...");
+  }
+}
+
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
 #if ENABLE_WIFI
@@ -639,7 +659,8 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 #if ENABLE_WIFI
   if (wifi.connected()) {
     Serial.print("[WIFI] ");
-    Serial.println(path);
+    printMaskedPath(path);
+    Serial.println();
     success = wifi.send(METHOD_POST, path, sendPayload, sendPayloadSize);
   }
   else
@@ -648,9 +669,13 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     // Use cellular-specific host/port when provisioned (CELL_HOST / CELL_PORT NVS keys).
     const char* cellHost = cellServerHost[0] ? cellServerHost : SERVER_HOST;
     uint16_t cellPort = cellServerHost[0] ? cellServerPort : SERVER_PORT;
+    // Log host and masked path separately so the format is unambiguous.
+    // The token portion of a cloud-hook path is treated like a bearer secret
+    // and must not appear in full in production logs.
     Serial.print("[CELL] ");
     Serial.print(cellHost);
-    Serial.println(path);
+    printMaskedPath(path);
+    Serial.println();
     success = cell.send(METHOD_POST, cellHost, cellPort, path, sendPayload, sendPayloadSize);
   }
   if (jsonPayload) {
@@ -701,6 +726,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     // successful
     lastSyncTime = millis();
     rxBytes += recvBytes;
+    m_backoffMs = 0;  // reset backoff state on success
     return true;
   }
   // Any non-success HTTP response is treated as a transmission failure so the
@@ -712,6 +738,28 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   // CCH module and re-applies the SSL context configuration, giving the next
   // attempt a chance to succeed with a real TLS handshake.
   Serial.printf("[HTTP] Unexpected response code %d – treating as error\n", httpCode);
+  // Exponential back-off for 4xx client errors to avoid a tight reconnect loop
+  // when the configuration is wrong (e.g. stale webhook token → 404, wrong
+  // method → 405).  HTTP 400 may indicate a TLS transport issue and benefits
+  // from a short fixed delay while the modem resets its SSL session; other 4xx
+  // codes get progressive backoff (2 s → 4 s → … → 64 s) because a reconnect
+  // cannot fix a server-side configuration problem.
+  if (httpCode >= 400 && httpCode < 500) {
+    uint32_t waitMs;
+    if (httpCode == 400) {
+      // Likely a TLS issue (plain HTTP sent to HTTPS port): fixed initial delay
+      // to let the modem fully reset before the next connect() attempt.
+      waitMs = HTTP_4XX_INITIAL_BACKOFF_MS;
+      m_backoffMs = 0;  // don't escalate for transport errors
+    } else {
+      // Configuration error (404/405/etc.): progressive delay, capped at maximum.
+      waitMs = (m_backoffMs == 0) ? HTTP_4XX_INITIAL_BACKOFF_MS
+                                   : min(m_backoffMs * 2, (uint32_t)HTTP_4XX_MAX_BACKOFF_MS);
+      m_backoffMs = waitMs;
+    }
+    Serial.printf("[HTTP] 4xx back-off: waiting %ums\n", waitMs);
+    delay(waitMs);
+  }
   return false;
 }
 
