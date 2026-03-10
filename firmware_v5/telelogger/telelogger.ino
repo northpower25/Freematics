@@ -1412,6 +1412,15 @@ void loadConfig()
   }
 #endif
 
+  // Enable verbose cellular debug logging at runtime.  NVS key CELL_DEBUG is
+  // written by the HA config/options flow (0 = off, 1 = on).  When enabled the
+  // firmware prints TX-Preview, hex-dump, AT+CCHSTATUS? and per-packet
+  // "Incoming data" diagnostics to the serial console.  Default is 0 (off).
+  uint8_t nvsCellDebug = 0;
+  if (nvs_get_u8(nvs, "CELL_DEBUG", &nvsCellDebug) == ESP_OK) {
+    cellNetDebug = nvsCellDebug;
+  }
+
   // Optional data-interval override (milliseconds). Minimum 500 ms to avoid
   // flooding the server or the SD card.  0 / missing = keep compile-time default.
   uint16_t nvsDataInterval = 0;

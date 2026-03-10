@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 
 from .const import (
     CONF_CELL_APN,
+    CONF_CELL_DEBUG,
     CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DATA_INTERVAL_MS,
@@ -246,6 +247,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         }
                     ),
                     vol.Optional(CONF_ENABLE_BLE, default=False): bool,
+                    vol.Optional(CONF_CELL_DEBUG, default=False): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -366,6 +368,10 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_ENABLE_BLE,
                         default=current.get(CONF_ENABLE_BLE, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_CELL_DEBUG,
+                        default=current.get(CONF_CELL_DEBUG, False),
                     ): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,

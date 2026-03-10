@@ -57,6 +57,7 @@ from homeassistant.components.http import HomeAssistantView
 
 from .const import (
     CONF_CELL_APN,
+    CONF_CELL_DEBUG,
     CONF_CLOUD_HOOK_URL,
     CONF_DATA_INTERVAL_MS,
     CONF_ENABLE_BLE,
@@ -502,6 +503,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     sim_pin = cfg.get(CONF_SIM_PIN, "")
     webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
     enable_ble = bool(cfg.get(CONF_ENABLE_BLE, False))
+    cell_debug = bool(cfg.get(CONF_CELL_DEBUG, False))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
 
@@ -695,6 +697,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "cell_webhook_path": cell_webhook_path,
         "enable_httpd": enable_httpd,
         "enable_ble": enable_ble,
+        "cell_debug": cell_debug,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
     }
@@ -757,6 +760,7 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs["cell_server_host"],
             kwargs["cell_server_port"],
             kwargs["cell_webhook_path"],
+            kwargs["cell_debug"],
         )
 
         if nvs_data is None:
@@ -846,6 +850,7 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs["cell_server_host"],
             kwargs["cell_server_port"],
             kwargs["cell_webhook_path"],
+            kwargs["cell_debug"],
         )
 
         if nvs_data is None:

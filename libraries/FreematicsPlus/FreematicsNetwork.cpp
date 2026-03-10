@@ -10,6 +10,11 @@ on
 #include "FreematicsBase.h"
 #include "FreematicsNetwork.h"
 
+// Runtime cellular debug flag – set to 1 via NVS key CELL_DEBUG (written by
+// the HA config/options flow).  Declared extern in FreematicsNetwork.h so
+// telelogger.ino can read it from NVS and assign it after loadConfig().
+uint8_t cellNetDebug = 0;
+
 String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* payload, int payloadSize)
 {
   String header;
@@ -715,9 +720,7 @@ void CellSIMCOM::inbound()
     if (strstr(m_buffer, "+IPD") || strstr(m_buffer, "RECV EVENT") ||
         strstr(m_buffer, "+CHTTPSRECV: EVENT") ||
         strstr(m_buffer, "+CCHRECV: 0,") || strstr(m_buffer, "+CCHRECV:0,")) {
-#ifdef NET_DEBUG
-      Serial.println("[CELL] Incoming data");
-#endif
+      if (cellNetDebug) Serial.println("[CELL] Incoming data");
       m_incoming = 1;
     }
   }
@@ -1085,12 +1088,12 @@ bool CellHTTP::open(const char* host, uint16_t port)
           // Diagnostic: query CCH session status to verify the SSL context is
           // active on the modem side.  Not all SIM7600E-H firmware revisions
           // support AT+CCHSTATUS? — an ERROR response is harmless and logged.
-#ifdef NET_DEBUG
-          if (sendCommand("AT+CCHSTATUS?\r", 500)) {
-            Serial.print("[CELL] CCHSTATUS: ");
-            Serial.println(m_buffer);
+          if (cellNetDebug) {
+            if (sendCommand("AT+CCHSTATUS?\r", 500)) {
+              Serial.print("[CELL] CCHSTATUS: ");
+              Serial.println(m_buffer);
+            }
           }
-#endif
           return true;
         }
         Serial.print("[CELL] TLS error:");
@@ -1222,8 +1225,7 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     // blank-line separator (\r\n\r\n) so we can verify the request line, Host:,
     // and all other headers before the bytes reach the modem.  Fall back to the
     // first 512 chars if the separator is not found.
-#ifdef NET_DEBUG
-    {
+    if (cellNetDebug) {
       int headerEnd = header.indexOf("\r\n\r\n");
       const int previewLength = (headerEnd >= 0)
           ? min(headerEnd + 4, (int)header.length())
@@ -1237,7 +1239,6 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
       }
       Serial.println();
     }
-#endif
     int len = header.length();
     sprintf(m_buffer, "AT+CCHSEND=0,%u\r", len + payloadSize);
     if (!sendCommand(m_buffer, 1000, ">")) {
