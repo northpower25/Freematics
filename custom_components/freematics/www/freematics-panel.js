@@ -767,6 +767,14 @@ class FreematicsPanel extends HTMLElement {
           <div id="esp-container">
             <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
           </div>
+          <p id="flash-newtab-note" style="font-size:.85rem;color:var(--secondary-text-color);margin:4px 0 10px;text-align:center">
+            Popup not responding? &nbsp;
+            <a id="flash-newtab-link" href="/api/freematics/flasher" target="_blank" rel="noopener"
+               style="color:#2196f3;white-space:nowrap"
+               aria-label="Open flasher in a new browser tab — use this if the popup dialog is not responding">
+              Open flasher in a new browser tab ↗
+            </a>
+          </p>
           <div class="progress-section" id="flash-progress" style="display:none">
             <div class="flash-status-text" id="flash-status-text"></div>
             <div class="progress-bar-wrap">
@@ -1147,6 +1155,13 @@ class FreematicsPanel extends HTMLElement {
         if (installBtn) {
           installBtn.setAttribute("manifest", this._provisioningManifestUrl);
         }
+        // Update the "Open in New Tab" link to include the provisioned manifest URL
+        // so NVS settings (WiFi, APN, HA server) are embedded when flashing from the new tab.
+        const newtabLink = this.shadowRoot.querySelector("#flash-newtab-link");
+        if (newtabLink && this._provisioningManifestUrl &&
+            /^\/api\/freematics\/manifest\.json(\?|$)/.test(this._provisioningManifestUrl)) {
+          newtabLink.href = `/api/freematics/flasher?manifest=${encodeURIComponent(this._provisioningManifestUrl)}`;
+        }
       }
     } catch (e) {
       if (nvsStatus) {
@@ -1311,7 +1326,8 @@ class FreematicsPanel extends HTMLElement {
             this._appendFlashLog("warn",
               "⚠ Could not auto-click the Install button. " +
               "Please interact with the flash dialog directly (click Install), " +
-              "or try reconnecting the device and clicking Connect & Flash Firmware again.");
+              "or use the 'Open flasher in a new browser tab ↗' link above to flash " +
+              "in a standalone page where the dialog is fully interactive.");
           }
         }
       });
