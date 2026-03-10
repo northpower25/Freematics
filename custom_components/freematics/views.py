@@ -174,7 +174,12 @@ _FLASHER_HTML = """\
     </span>
   </div>
 
-  <esp-web-install-button manifest="/api/freematics/manifest.json">
+  <div id="provisioned-note" class="card ok" style="display:none">
+    &#128274; <strong>Auto-Provisioning active</strong> &mdash; your WiFi, APN, and HA
+    server settings will be written to the device during this flash session.
+  </div>
+
+  <esp-web-install-button id="ewb" manifest="/api/freematics/manifest.json">
     <button slot="activate">&#9889; Connect &amp; Flash Firmware</button>
     <span slot="unsupported">
       <div class="card err">
@@ -218,6 +223,21 @@ _FLASHER_HTML = """\
   </p>
 
   <script>
+    // Apply a provisioned manifest URL when this page is opened from the HA
+    // panel via "Open Flasher in New Tab".  The URL contains a short-lived
+    // token so that WiFi, APN, and HA server settings are embedded in the
+    // flash image automatically — no manual configuration after flashing.
+    // Only accept paths that belong to the local HA API to prevent open-
+    // redirect or manifest-injection attacks.
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const m = params.get('manifest');
+      if (m && /^\/api\/freematics\/manifest\.json(\?|$)/.test(m)) {
+        document.getElementById('ewb').setAttribute('manifest', m);
+        document.getElementById('provisioned-note').style.display = 'block';
+      }
+    })();
+
     if (!('serial' in navigator)) {
       const warn = document.getElementById('no-serial-warn');
       warn.style.display = 'block';
