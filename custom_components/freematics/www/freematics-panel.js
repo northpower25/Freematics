@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.18.0";
+const PANEL_VERSION = "1.19.0";
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper
@@ -602,6 +602,7 @@ class FreematicsPanel extends HTMLElement {
     let manifestUrl = DEFAULT_MANIFEST_URL;
     let flashImageUrl = null;
     let nvsUrl = null;
+    let provisioningToken = "";
     try {
       const result = await Promise.race([
         this._hass.callApi("GET", "freematics/provisioning_token"),
@@ -612,12 +613,14 @@ class FreematicsPanel extends HTMLElement {
         this._provisioningManifestUrl = manifestUrl;
         flashImageUrl = result.flash_image_url || null;
         nvsUrl        = result.nvs_url || null;
+        provisioningToken = result.token || "";
       }
     } catch (_) {
       // Non-fatal: fall back to default manifest (firmware without NVS settings).
     }
 
-    const flasherUrl = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}&embedded=1`;
+    const flasherUrl    = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}&embedded=1`;
+    const otaFlasherUrl = `/api/freematics/ota_flasher?token=${encodeURIComponent(provisioningToken)}&embedded=1`;
 
     el.innerHTML = `
       <div class="flash-wrap">
@@ -634,18 +637,6 @@ class FreematicsPanel extends HTMLElement {
         <!-- ── Browser flasher via iframe (Web Serial) ───────────── -->
         <div class="flash-card" id="flash-action">
           <h3>&#9889; Flash Firmware (USB / Web Serial)</h3>
-          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
-            Connect the Freematics ONE+ via USB to <em>this computer</em>, then click
-            <strong>Connect &amp; Flash Firmware</strong> below.
-            A browser dialog will open to select the COM port.<br>
-            Look for: <code style="${cs}">CP2102</code>,
-            <code style="${cs}">CH340</code>, or a similar USB-Serial device.
-          </p>
-          <p style="font-size:.82rem;color:var(--secondary-text-color);margin:0 0 6px">
-            &#128268; Requires
-            <strong>Google Chrome or Microsoft Edge 89+</strong>
-            over HTTPS or <code style="${cs}">localhost</code>.
-          </p>
           <iframe
             id="flash-iframe"
             src="${flasherUrl}"
@@ -675,41 +666,29 @@ class FreematicsPanel extends HTMLElement {
           </ol>
         </div>
 
-        <!-- ── WiFi OTA (Local network) ──────────────────────────── -->
+        <!-- ── WiFi OTA (Local network via iframe) ───────────────── -->
         <div class="flash-card">
           <h3>&#128246; WiFi OTA (Local Network)</h3>
-          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
-            Flash when the Freematics ONE+ is already connected to your <strong>local WiFi
-            network</strong> and reachable from the Home Assistant server.
-            The device firmware is compiled with the built-in HTTP server enabled
-            (<code style="${cs}">ENABLE_HTTPD=1</code>) so no extra configuration is needed.
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
+            Flash when the Freematics ONE+ is already connected to your
+            <strong>local WiFi network</strong> and reachable from the Home Assistant
+            server. Requires firmware compiled with
+            <code style="${cs}">ENABLE_HTTPD=1</code>.
           </p>
-          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
-            <li>Ensure the device is online and the HA server can reach its IP</li>
-            <li>Enter the device's local IP address (and port if not 80)</li>
-            <li>Click <em>Flash via WiFi OTA</em> — takes ~30 s</li>
-          </ol>
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-            <input id="ota-ip-input" type="text" placeholder="192.168.x.x" style="
-              flex:1;min-width:120px;padding:8px 10px;
-              border:1px solid var(--divider-color);border-radius:6px;
-              background:var(--primary-background-color);
-              color:var(--primary-text-color);font-size:.9rem;font-family:inherit;
-            ">
-            <input id="ota-port-input" type="number" placeholder="80" value="80" min="1" max="65535" style="
-              width:72px;padding:8px 10px;
-              border:1px solid var(--divider-color);border-radius:6px;
-              background:var(--primary-background-color);
-              color:var(--primary-text-color);font-size:.9rem;font-family:inherit;
-            ">
-          </div>
-          <button id="wifi-ota-btn" style="
-            background:#2196f3;color:#fff;border:none;padding:10px 20px;
-            font-size:.95rem;border-radius:6px;cursor:pointer;
-            font-family:inherit;margin-bottom:8px;
-          ">&#128246; Flash via WiFi OTA</button>
-          <div id="wifi-ota-status" style="display:none;font-size:.88rem;margin-top:4px"></div>
-          <div class="ota-log" id="ota-log" style="display:none"></div>
+          <iframe
+            id="ota-iframe"
+            src="${otaFlasherUrl}"
+            style="width:100%;height:380px;border:1px solid var(--divider-color);border-radius:6px;"
+            title="Freematics ONE+ WiFi OTA Flash"
+          ></iframe>
+          <p style="font-size:.82rem;color:var(--secondary-text-color);margin:4px 0 0;text-align:center">
+            Iframe not working? &nbsp;
+            <a href="${otaFlasherUrl.replace('&embedded=1','')}"
+               target="_blank" rel="noopener"
+               style="color:#2196f3;white-space:nowrap">
+              Open OTA flasher in a new browser tab ↗
+            </a>
+          </p>
         </div>
 
         <!-- ── Manual flash (esptool / Freematics Builder) ─────────── -->
@@ -922,92 +901,8 @@ class FreematicsPanel extends HTMLElement {
         }
       }
     }
-
-    // Attach WiFi OTA button event listener
-    const wifiOtaBtn = el.querySelector("#wifi-ota-btn");
-    if (wifiOtaBtn) {
-      wifiOtaBtn.addEventListener("click", async () => {
-        const shadow = this.shadowRoot;
-        const ipInput  = shadow.getElementById("ota-ip-input");
-        const portInput = shadow.getElementById("ota-port-input");
-        const statusDiv = shadow.getElementById("wifi-ota-status");
-        const otaLog    = shadow.getElementById("ota-log");
-
-        const ip   = (ipInput  ? ipInput.value  : "").trim();
-        const port = portInput ? (parseInt(portInput.value) || 80) : 80;
-
-        const showStatus = (color, html) => {
-          if (!statusDiv) return;
-          statusDiv.style.display = "block";
-          statusDiv.innerHTML = `<span style="color:${color}">${html}</span>`;
-        };
-
-        const addLog = (cls, text) => this._appendOtaLog(cls, text);
-
-        if (!ip) {
-          showStatus("#ff9800", "&#9888; Please enter the device IP address.");
-          return;
-        }
-
-        // Reset log panel and show it
-        if (otaLog) { otaLog.innerHTML = ""; otaLog.style.display = "block"; }
-        wifiOtaBtn.disabled = true;
-        wifiOtaBtn.textContent = "⏳ Uploading…";
-        showStatus("#2196f3", "&#9203; Uploading firmware… (may take ~2 min)");
-        addLog("info", `Starting WiFi OTA flash to ${ip}:${port}…`);
-
-        try {
-          addLog("info", "Sending request to HA server…");
-          const result = await this._hass.callApi("POST", "freematics/wifi_ota", {
-            device_ip: ip,
-            device_port: port,
-          });
-
-          // Render server-side log lines first
-          if (result && Array.isArray(result.log)) {
-            for (const line of result.log) {
-              const cls = line.includes("[ERROR]") ? "err"
-                        : line.includes("[OK]")    ? "ok"
-                        : "info";
-              addLog(cls, line);
-            }
-          }
-
-          if (result && result.ok) {
-            const msg = result.message || "Flash successful!";
-            showStatus("#4caf50", `&#10003; ${msg}`);
-            addLog("ok", "✓ OTA flash completed successfully.");
-          } else {
-            const msg = (result && result.message) ? result.message : "OTA flash failed.";
-            showStatus("#f44336", `&#10007; OTA flash failed: ${msg}`);
-            addLog("err", `✗ ${msg}`);
-          }
-        } catch (err) {
-          const msg = (err && err.message) ? err.message : String(err);
-          showStatus("#f44336", `&#10007; OTA flash failed: ${msg}`);
-          addLog("err", `✗ ${msg}`);
-        } finally {
-          wifiOtaBtn.disabled = false;
-          wifiOtaBtn.textContent = "📶 Flash via WiFi OTA";
-        }
-      });
-    }
   }
 
-
-  _appendOtaLog(cls, text) {
-    const shadow = this.shadowRoot;
-    const logEl = shadow.querySelector("#ota-log");
-    if (!logEl) return;
-    const ts = new Date().toLocaleTimeString();
-    const entry = document.createElement("div");
-    entry.className   = `log-entry ${cls}`;
-    // If the text already contains a server-side timestamp like [HH:MM:SS] skip
-    // adding a second prefix; otherwise prepend the client-side time.
-    entry.textContent = /^\[\d{1,2}:\d{2}:\d{2}\]/.test(text) ? text : `[${ts}] ${text}`;
-    logEl.appendChild(entry);
-    logEl.scrollTop = logEl.scrollHeight;
-  }
 
   /* ── Serial Console tab ─────────────────────────────────────────── */
 

@@ -94,6 +94,7 @@ async def async_flash_serial(
 async def async_flash_wifi(
     device_ip: str,
     device_port: int = 80,
+    queue: asyncio.Queue | None = None,
 ) -> tuple[bool, str, list[str]]:
     """Upload firmware to the device via HTTP OTA.
 
@@ -112,6 +113,8 @@ async def async_flash_wifi(
             _LOGGER.error("WiFi OTA: %s", msg)
         else:
             _LOGGER.info("WiFi OTA: %s", msg)
+        if queue is not None:
+            queue.put_nowait({"type": "log", "level": level, "message": msg, "ts": ts})
 
     # Validate device_ip is a plain IP address (not a URL or hostname) to
     # prevent SSRF: ipaddress.ip_address rejects everything except IPv4/IPv6
