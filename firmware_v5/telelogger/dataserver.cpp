@@ -64,6 +64,10 @@ extern void loadConfig();
 // Set to true while an OTA flash is in progress so the telemetry task yields
 // the WiFi radio to the upload (defined in telelogger.ino).
 extern volatile bool s_ota_active;
+// Functions defined in telelogger.ino that allow handlerControl to pause and
+// resume the telemetry task safely from the httpd task context.
+extern void httpControlStandby(bool enter);
+extern bool httpIsStandby();
 
 uint16_t hex2uint16(const char *p);
 
@@ -345,6 +349,18 @@ int handlerControl(UrlHandlerParam* param)
         param->contentLength = n;
         param->contentType = HTTPFILETYPE_TEXT;
         ESP.restart();
+    } else if (!strcmp(cmd, "OFF")) {
+        // Pause telemetry: signal the net task to enter standby so WiFi
+        // connections are closed (frees SSL heap before an OTA upload).
+        httpControlStandby(true);
+        n = snprintf(buf, bufsize, "OK");
+    } else if (!strcmp(cmd, "ON")) {
+        // Resume telemetry: signal the net task to exit standby.
+        httpControlStandby(false);
+        n = snprintf(buf, bufsize, "OK");
+    } else if (!strcmp(cmd, "ON?")) {
+        // Query standby state: returns 0 when paused/standby, 1 when active.
+        n = snprintf(buf, bufsize, "%u", httpIsStandby() ? 0 : 1);
     } else {
         n = snprintf(buf, bufsize, "ERR");
     }

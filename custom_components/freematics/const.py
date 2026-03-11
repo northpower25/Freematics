@@ -171,3 +171,8 @@ CMD_APN = "APN={}"
 CMD_SIM_PIN = "PIN={}"
 CMD_RESET = "RESET"
 CMD_UPTIME = "UPTIME"
+# Pause / resume the telemetry task (stops SSL cloud-hook traffic so OTA has
+# exclusive access to the WiFi radio and available heap).
+CMD_STANDBY = "OFF"
+CMD_RESUME = "ON"
+CMD_STANDBY_QUERY = "ON?"
