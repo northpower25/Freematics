@@ -197,6 +197,15 @@ async def async_flash_wifi(
                         msg = f"OTA flash successful ({elapsed:.1f} s): device rebooted."
                         return True, msg, log
                     _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — response payload incomplete")
+                    if resp.status == 404:
+                        hint = (
+                            "The device HTTP server returned 404 — the OTA handler "
+                            "was not reached. This can happen when the telemetry task "
+                            "on the device causes a WiFi disruption mid-upload. "
+                            "Update the firmware to include the s_ota_active fix so "
+                            "telemetry is paused during the upload, then retry."
+                        )
+                        _log("error", hint)
                     msg = f"OTA failed, HTTP {resp.status}: response payload incomplete"
                     return False, msg, log
                 elapsed = time.monotonic() - t_start
