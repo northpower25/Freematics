@@ -197,8 +197,11 @@
 #define COOLING_DOWN_TEMP 75 /* celsius degrees */
 
 // enable(1)/disable(0) http server
+// Defaults to 1 (enabled) so that OTA firmware updates via WiFi work out of
+// the box.  The runtime value is overridden by the NVS key ENABLE_HTTPD when
+// the device has been provisioned by the HA integration (config_nvs.bin).
 #ifndef ENABLE_HTTPD
-#define ENABLE_HTTPD 0
+#define ENABLE_HTTPD 1
 #endif
 
 // Firmware version string – bumped manually on significant releases.

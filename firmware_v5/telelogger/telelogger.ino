@@ -100,10 +100,11 @@ char webhookPath[256] = "";
 char cellServerHost[128] = "";
 uint16_t cellServerPort = 443;
 char cellWebhookPath[256] = "";
-// Runtime HTTP server enable – set to 1 via NVS key ENABLE_HTTPD when
-// provisioned by the HA integration config_nvs.bin.  Only takes effect
-// when the firmware is compiled with ENABLE_HTTPD=1.
-uint8_t enableHttpd = 0;
+// Runtime HTTP server enable.  Defaults to the compile-time ENABLE_HTTPD value
+// (1 = on) so OTA firmware updates via WiFi work without requiring NVS
+// provisioning.  Can be overridden by NVS key ENABLE_HTTPD written by the HA
+// integration config_nvs.bin.  Only takes effect when compiled with ENABLE_HTTPD=1.
+uint8_t enableHttpd = ENABLE_HTTPD;
 // Runtime BLE enable – set to 0 via NVS key ENABLE_BLE to disable the BLE
 // SPP server and free ~100 KB heap for the TLS webhook client.  Defaults to
 // 1 (on) so devices that were never provisioned keep the previous behaviour.
