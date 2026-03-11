@@ -14,6 +14,7 @@ from homeassistant.helpers.network import get_url
 _LOGGER = logging.getLogger(__name__)
 
 from .const import (
+    CONF_BEEP_EN,
     CONF_CELL_APN,
     CONF_CELL_DEBUG,
     CONF_CLOUD_HOOK_URL,
@@ -24,6 +25,8 @@ from .const import (
     CONF_DEVICE_PORT,
     CONF_ENABLE_BLE,
     CONF_FLASH_METHOD,
+    CONF_LED_RED_EN,
+    CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
     CONF_SERIAL_PORT,
     CONF_SIM_PIN,
@@ -248,6 +251,9 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional(CONF_ENABLE_BLE, default=False): bool,
                     vol.Optional(CONF_CELL_DEBUG, default=False): bool,
+                    vol.Optional(CONF_LED_RED_EN, default=True): bool,
+                    vol.Optional(CONF_LED_WHITE_EN, default=True): bool,
+                    vol.Optional(CONF_BEEP_EN, default=True): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -372,6 +378,18 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_CELL_DEBUG,
                         default=current.get(CONF_CELL_DEBUG, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_LED_RED_EN,
+                        default=current.get(CONF_LED_RED_EN, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_LED_WHITE_EN,
+                        default=current.get(CONF_LED_WHITE_EN, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_BEEP_EN,
+                        default=current.get(CONF_BEEP_EN, True),
                     ): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,
