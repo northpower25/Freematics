@@ -414,13 +414,32 @@ int handlerOTA(UrlHandlerParam* param) {
     }
 
     // Stream the remaining bytes directly from the socket to flash.
-    // Use a local buffer (not static) so concurrent calls don't share state.
-    uint8_t recv_buf[512];
+    // The socket is set non-blocking by the httpd (O_NONBLOCK), so we must
+    // use select() before each recv() to wait for data without spinning.
+    // Use a larger buffer (4 KB instead of 512 B) for better throughput.
+    uint8_t recv_buf[4096];
     int sock = param->hs->socket;
     while (written < fw_size) {
         size_t remaining = fw_size - written;
         int to_read = (int)(remaining < sizeof(recv_buf)
                             ? remaining : sizeof(recv_buf));
+        // Wait up to 30 s for the next data chunk.  For a local-network WiFi
+        // connection this should be reached in milliseconds; the generous
+        // timeout guards against brief network pauses.
+        fd_set rfds;
+        struct timeval tv;
+        FD_ZERO(&rfds);
+        FD_SET(sock, &rfds);
+        tv.tv_sec  = 30;
+        tv.tv_usec = 0;
+        if (select(sock + 1, &rfds, NULL, NULL, &tv) <= 0) {
+            Update.abort();
+            param->contentLength = snprintf(buf, bufsize,
+                "ERR: recv timeout at offset %u (remaining %u)",
+                (unsigned)written, (unsigned)remaining);
+            param->contentType = HTTPFILETYPE_TEXT;
+            return FLAG_DATA_RAW;
+        }
         int n = recv(sock, recv_buf, to_read, 0);
         if (n <= 0) {
             Update.abort();
@@ -441,6 +460,28 @@ int handlerOTA(UrlHandlerParam* param) {
         written += (size_t)n;
     }
 
+    // -----------------------------------------------------------------------
+    // Phase 1 complete: all bytes received.  Verify the byte count before
+    // triggering the actual flash commit.
+    // -----------------------------------------------------------------------
+    Serial.printf("[OTA] Upload complete: %u/%u bytes received\n",
+                  (unsigned)written, (unsigned)fw_size);
+
+    if (written != fw_size) {
+        // Should never happen given the loop condition, but guard defensively.
+        Update.abort();
+        param->contentLength = snprintf(buf, bufsize,
+            "ERR: upload incomplete (%u/%u bytes)",
+            (unsigned)written, (unsigned)fw_size);
+        param->contentType = HTTPFILETYPE_TEXT;
+        return FLAG_DATA_RAW;
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2: commit the flash.  Update.end() validates the written image
+    // (MD5 checksum) and marks the OTA partition as the next boot target.
+    // -----------------------------------------------------------------------
+    Serial.println("[OTA] Validating and committing flash…");
     if (!Update.end()) {
         param->contentLength = snprintf(buf, bufsize,
             "ERR: Update.end failed: %s", Update.errorString());
