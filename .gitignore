@@ -18,6 +18,9 @@ _codeql_detected_source_root
 *.bin
 *.hex
 
+# Allow committed firmware binaries in the integration's firmware directory
+!custom_components/freematics/firmware/*.bin
+
 # Python
 __pycache__/
 *.pyc
