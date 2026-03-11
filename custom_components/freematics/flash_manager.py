@@ -16,6 +16,7 @@ import ipaddress
 import logging
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,9 @@ _STANDBY_SETTLE_S = 4
 # Report upload progress this often (seconds).
 _PROGRESS_INTERVAL_S = 20
 
+# NVS partition flash offset (must match the partition table used by the firmware)
+_NVS_PARTITION_OFFSET = "0x9000"
+
 
 def _firmware_exists() -> bool:
     """Return True if the bundled firmware binary is present."""
@@ -47,8 +51,18 @@ def _firmware_exists() -> bool:
 async def async_flash_serial(
     serial_port: str,
     baud: int = 921600,
+    nvs_data: bytes | None = None,
 ) -> tuple[bool, str]:
-    """Flash firmware via USB serial using esptool.
+    """Flash firmware (and optionally an NVS partition) via USB serial using esptool.
+
+    Args:
+        serial_port: Serial port path (e.g. '/dev/ttyUSB0' or 'COM4').
+        baud: Baud rate for flashing (default 921600).
+        nvs_data: If provided, the raw NVS partition binary (20 KB) is written
+            to the NVS partition offset (0x9000) alongside the firmware.  This
+            ensures LED/beep/server settings from the HA config entry are
+            applied after every serial flash, not just when a combined
+            flash_image.bin is used.
 
     Returns (success, message).
     Requires esptool to be installed and the serial port to be accessible.
@@ -65,50 +79,85 @@ async def async_flash_serial(
             f"write_flash 0x10000 {FIRMWARE_PATH}"
         )
 
-    cmd = [
-        esptool,
-        "--chip", "esp32",
-        "--port", serial_port,
-        "--baud", str(baud),
-        "write_flash",
+    # Build the write_flash argument list.  When NVS data is provided, write
+    # it at 0x9000 before the firmware at 0x10000 so both are applied in a
+    # single esptool invocation.
+    flash_args = [
         "--flash_mode", "dio",
         "--flash_size", "detect",
-        "0x10000",
-        str(FIRMWARE_PATH),
     ]
-
-    _LOGGER.info("Starting serial flash: %s", " ".join(cmd))
-
+    nvs_tmp: Any = None  # Will be a NamedTemporaryFile when NVS data is given
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
-        output = stdout.decode(errors="replace")
-        _LOGGER.debug("esptool output: %s", output)
+        if nvs_data:
+            # Write NVS to a temp file; esptool needs a path on disk.
+            nvs_tmp = tempfile.NamedTemporaryFile(
+                suffix=".bin", delete=False, prefix="freematics_nvs_"
+            )
+            nvs_tmp.write(nvs_data)
+            nvs_tmp.flush()
+            nvs_tmp.close()
+            flash_args += [_NVS_PARTITION_OFFSET, nvs_tmp.name]
 
-        if proc.returncode == 0:
-            return True, f"Flash successful.\n{output}"
-        return False, f"esptool returned exit code {proc.returncode}.\n{output}"
+        flash_args += ["0x10000", str(FIRMWARE_PATH)]
 
-    except asyncio.TimeoutError:
-        return False, "Flash timed out after 180 seconds."
-    except Exception as exc:  # noqa: BLE001
-        return False, f"Flash failed: {exc}"
+        cmd = [
+            esptool,
+            "--chip", "esp32",
+            "--port", serial_port,
+            "--baud", str(baud),
+            "write_flash",
+            *flash_args,
+        ]
+
+        _LOGGER.info("Starting serial flash: %s", " ".join(cmd))
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
+            output = stdout.decode(errors="replace")
+            _LOGGER.debug("esptool output: %s", output)
+
+            if proc.returncode == 0:
+                return True, f"Flash successful.\n{output}"
+            return False, f"esptool returned exit code {proc.returncode}.\n{output}"
+
+        except asyncio.TimeoutError:
+            return False, "Flash timed out after 180 seconds."
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Flash failed: {exc}"
+    finally:
+        # Clean up the temporary NVS file even if an exception occurred.
+        if nvs_tmp is not None:
+            try:
+                os.unlink(nvs_tmp.name)
+            except OSError:
+                pass
 
 
 async def async_flash_wifi(
     device_ip: str,
     device_port: int = 80,
     queue: asyncio.Queue | None = None,
+    led_red_en: bool | None = None,
+    led_white_en: bool | None = None,
+    beep_en: bool | None = None,
 ) -> tuple[bool, str, list[str]]:
     """Upload firmware to the device via HTTP OTA.
 
     The device must be running a firmware with ENABLE_HTTPD=1 and an OTA
     endpoint at /api/ota that accepts a raw binary POST
     (Content-Type: application/octet-stream).
+
+    Args:
+        led_red_en: When provided, applies the LED_RED= setting via
+            /api/control before the OTA so the setting is persisted in NVS
+            and survives the reboot that follows the firmware flash.
+        led_white_en: Same as led_red_en but for the white/network LED.
+        beep_en: Same as led_red_en but for the connection beep.
 
     Returns (success, message, log_lines) where log_lines is a list of
     timestamped log entries suitable for display in the UI log panel.
@@ -162,12 +211,17 @@ async def async_flash_wifi(
     _log("info", f"Firmware size: {firmware_kb:.1f} KB ({len(firmware_data)} bytes)")
 
     # -----------------------------------------------------------------------
-    # Pre-OTA step: ask the device to pause telemetry (cmd=OFF).
-    # This stops the SSL cloud-hook connections that compete for heap memory
-    # during the OTA upload.  Supported by firmware built with the
-    # httpControlStandby() handler; older firmware returns "ERR" which is
-    # silently ignored so the upload still proceeds (but may fail on devices
-    # with old firmware due to SSL memory pressure).
+    # Pre-OTA step: ask the device to pause telemetry (cmd=OFF) and apply
+    # any LED/beep settings so they are persisted in NVS before the firmware
+    # is flashed.  Both are done via /api/control.
+    #
+    # Sequence:
+    #   1. cmd=OFF  – pause telemetry / close SSL connections (frees heap)
+    #   2. LED_RED=, LED_WHITE=, BEEP=  – write settings to NVS while device
+    #      is paused; they survive the OTA reboot
+    #
+    # Firmware built without the cmd=OFF handler returns "ERR" or times out;
+    # the upload proceeds anyway (but may fail on very old firmware).
     # -----------------------------------------------------------------------
     _log("info", "Connecting to device…")
     off_url = f"http://{validated_ip}:{device_port}{CONTROL_PATH}?cmd=OFF"
@@ -200,6 +254,51 @@ async def async_flash_wifi(
             f"Could not reach device control endpoint before OTA ({exc}). "
             "Proceeding with upload anyway.",
         )
+
+    # Apply LED/beep settings via /api/control while the device is paused
+    # (or at least reachable).  These commands write the NVS keys (LED_RED_EN,
+    # LED_WHITE_EN, BEEP_EN) so the values persist after the firmware reboot.
+    # Firmware built without these cmd= handlers returns "ERR" which is silently
+    # ignored – the settings will be applied next time the NVS is provisioned.
+    # Each tuple is (human-readable NVS key name for logging, /api/control cmd= value).
+    _setting_cmds: list[tuple[str, str]] = []
+    if led_red_en is not None:
+        _setting_cmds.append(("LED_RED_EN", f"LED_RED={1 if led_red_en else 0}"))
+    if led_white_en is not None:
+        _setting_cmds.append(("LED_WHITE_EN", f"LED_WHITE={1 if led_white_en else 0}"))
+    if beep_en is not None:
+        _setting_cmds.append(("BEEP_EN", f"BEEP={1 if beep_en else 0}"))
+    if _setting_cmds:
+        try:
+            async with aiohttp.ClientSession() as cfg_session:
+                for nvs_key, cmd_str in _setting_cmds:
+                    cmd_url = (
+                        f"http://{validated_ip}:{device_port}"
+                        f"{CONTROL_PATH}?cmd={cmd_str}"
+                    )
+                    try:
+                        async with cfg_session.get(
+                            cmd_url,
+                            timeout=aiohttp.ClientTimeout(total=5),
+                        ) as r:
+                            body = (await r.text()).strip()
+                            if r.status == 200 and body == "OK":
+                                _log("info", f"Applied {nvs_key} setting to device NVS.")
+                            else:
+                                _log(
+                                    "info",
+                                    f"Could not apply {nvs_key} "
+                                    f"(HTTP {r.status}: {body!r}) — "
+                                    "firmware may not support this command yet.",
+                                )
+                    except Exception as exc:  # noqa: BLE001
+                        _log(
+                            "info",
+                            f"Could not apply {nvs_key} setting ({exc}) — "
+                            "device may not support this command yet.",
+                        )
+        except Exception as exc:  # noqa: BLE001
+            _log("info", f"Settings pre-provisioning skipped ({exc}).")
 
     t_start = time.monotonic()
     try:

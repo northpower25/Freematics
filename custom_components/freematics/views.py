@@ -826,11 +826,30 @@ class FreematicsWifiOtaSseView(HomeAssistantView):
 
         from .flash_manager import async_flash_wifi  # noqa: PLC0415
 
+        # Resolve LED/beep settings from the config entry identified by the
+        # provisioning token so they are applied to NVS before flashing.
+        _led_red_en: bool | None = None
+        _led_white_en: bool | None = None
+        _beep_en: bool | None = None
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is not None:
+            cfg = {**entry.data, **entry.options}
+            _led_red_en   = bool(cfg.get(CONF_LED_RED_EN,   True))
+            _led_white_en = bool(cfg.get(CONF_LED_WHITE_EN, True))
+            _beep_en      = bool(cfg.get(CONF_BEEP_EN,      True))
+
         # Start the flash in a background task so the SSE handler can still
         # send keep-alive pings and the flash continues even if the client
         # disconnects (preventing a half-flashed device).
         async def _run_flash() -> None:
-            ok, msg, _ = await async_flash_wifi(device_ip, device_port, queue=queue)
+            ok, msg, _ = await async_flash_wifi(
+                device_ip,
+                device_port,
+                queue=queue,
+                led_red_en=_led_red_en,
+                led_white_en=_led_white_en,
+                beep_en=_beep_en,
+            )
             queue.put_nowait({"type": "done", "ok": ok, "message": msg})
 
         flash_task = asyncio.ensure_future(_run_flash())
@@ -1099,7 +1118,27 @@ class FreematicsProxyOTAView(HomeAssistantView):
 
         from .flash_manager import async_flash_wifi  # noqa: PLC0415
 
-        ok, msg, log_lines = await async_flash_wifi(device_ip, device_port)
+        # Try to find LED/beep settings from a Freematics config entry.
+        # This view lacks a per-device token so we use the first active entry.
+        # If multiple entries exist, use the OTA flasher page instead.
+        hass = request.app["hass"]
+        _led_red_en: bool | None = None
+        _led_white_en: bool | None = None
+        _beep_en: bool | None = None
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if entries:
+            _cfg = {**entries[0].data, **entries[0].options}
+            _led_red_en   = bool(_cfg.get(CONF_LED_RED_EN,   True))
+            _led_white_en = bool(_cfg.get(CONF_LED_WHITE_EN, True))
+            _beep_en      = bool(_cfg.get(CONF_BEEP_EN,      True))
+
+        ok, msg, log_lines = await async_flash_wifi(
+            device_ip,
+            device_port,
+            led_red_en=_led_red_en,
+            led_white_en=_led_white_en,
+            beep_en=_beep_en,
+        )
         return web.Response(
             body=json.dumps({"ok": ok, "message": msg, "log": log_lines}).encode("utf-8"),
             content_type="application/json",

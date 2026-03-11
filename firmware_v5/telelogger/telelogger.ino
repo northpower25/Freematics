@@ -919,9 +919,19 @@ void process()
 #else
   dataInterval = dataIntervals[0];
 #endif
+  // Idle loop: wait out the rest of the data interval while servicing
+  // low-priority tasks.  Each iteration sleeps at most 100 ms so that the
+  // built-in HTTP server is polled regularly (every ~100 ms) even when BLE
+  // is disabled.  This ensures that /api/control?cmd=OFF requests (sent by
+  // the HA OTA flash manager to pause telemetry before uploading firmware)
+  // are received and acted upon during normal telemetry operation.
   do {
     long t = dataInterval - (millis() - startTime);
-    processBLE(t > 0 ? t : 0);
+    long slice = (t > 100) ? 100 : (t > 0 ? t : 0);
+    processBLE(slice);
+#if ENABLE_HTTPD
+    if (enableHttpd) serverProcess(0);
+#endif
   } while (millis() - startTime < dataInterval);
 }
 
