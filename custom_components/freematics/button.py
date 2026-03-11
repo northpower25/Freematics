@@ -150,7 +150,7 @@ class FlashWifiButton(_FreematicsButton):
             )
             return
         _LOGGER.info("Freematics: starting WiFi OTA flash to %s:%s", device_ip, device_port)
-        ok, msg = await async_flash_wifi(device_ip, device_port)
+        ok, msg, _log_lines = await async_flash_wifi(device_ip, device_port)
         if ok:
             _LOGGER.info("Freematics WiFi OTA flash: %s", msg)
         else:
