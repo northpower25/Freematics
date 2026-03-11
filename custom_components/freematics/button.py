@@ -18,10 +18,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    CONF_BEEP_EN,
     CONF_CELL_APN,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
     CONF_FLASH_METHOD,
+    CONF_LED_RED_EN,
+    CONF_LED_WHITE_EN,
     CONF_SERIAL_PORT,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
@@ -116,7 +119,40 @@ class FlashSerialButton(_FreematicsButton):
             "Freematics: starting serial flash on %s (running on HA server)",
             serial_port,
         )
-        ok, msg = await async_flash_serial(serial_port)
+
+        # Generate an NVS partition from the current config entry so that
+        # LED/beep/server settings are applied alongside the firmware flash.
+        # If NVS generation fails (e.g. esp_idf_nvs_partition_gen not installed),
+        # the flash proceeds with firmware-only (NVS settings must be applied
+        # separately via the browser flasher or /api/freematics/config_nvs.bin).
+        nvs_data: bytes | None = None
+        try:
+            from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
+            cfg = {**self._entry.data, **self._entry.options}
+            nvs_data = generate_nvs_partition(
+                wifi_ssid=cfg.get(CONF_WIFI_SSID, ""),
+                wifi_password=cfg.get(CONF_WIFI_PASSWORD, ""),
+                led_red_en=bool(cfg.get(CONF_LED_RED_EN, True)),
+                led_white_en=bool(cfg.get(CONF_LED_WHITE_EN, True)),
+                beep_en=bool(cfg.get(CONF_BEEP_EN, True)),
+                enable_httpd=True,
+            )
+            if nvs_data:
+                _LOGGER.info("Freematics: NVS partition generated (%d bytes)", len(nvs_data))
+            else:
+                _LOGGER.warning(
+                    "Freematics: NVS partition generation returned None "
+                    "(esp_idf_nvs_partition_gen not installed?). "
+                    "Flashing firmware only; apply NVS settings separately."
+                )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning(
+                "Freematics: could not generate NVS partition (%s). "
+                "Flashing firmware only.",
+                exc,
+            )
+
+        ok, msg = await async_flash_serial(serial_port, nvs_data=nvs_data)
         if ok:
             _LOGGER.info("Freematics serial flash: %s", msg)
         else:
@@ -150,7 +186,14 @@ class FlashWifiButton(_FreematicsButton):
             )
             return
         _LOGGER.info("Freematics: starting WiFi OTA flash to %s:%s", device_ip, device_port)
-        ok, msg, _log_lines = await async_flash_wifi(device_ip, device_port)
+        cfg = {**self._entry.data, **self._entry.options}
+        ok, msg, _log_lines = await async_flash_wifi(
+            device_ip,
+            device_port,
+            led_red_en=bool(cfg.get(CONF_LED_RED_EN, True)),
+            led_white_en=bool(cfg.get(CONF_LED_WHITE_EN, True)),
+            beep_en=bool(cfg.get(CONF_BEEP_EN, True)),
+        )
         if ok:
             _LOGGER.info("Freematics WiFi OTA flash: %s", msg)
         else:

@@ -361,6 +361,27 @@ int handlerControl(UrlHandlerParam* param)
     } else if (!strcmp(cmd, "ON?")) {
         // Query standby state: returns 0 when paused/standby, 1 when active.
         n = snprintf(buf, bufsize, "%u", httpIsStandby() ? 0 : 1);
+    } else if (!strncmp(cmd, "LED_RED=", 8)) {
+        // Set red/power LED enable (0=off, 1=on).  Written to NVS key LED_RED_EN.
+        uint8_t v = (uint8_t)atoi(cmd + 8);
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u8(nvs, "LED_RED_EN", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strncmp(cmd, "LED_WHITE=", 10)) {
+        // Set white/network LED enable (0=off, 1=on).  Written to NVS key LED_WHITE_EN.
+        uint8_t v = (uint8_t)atoi(cmd + 10);
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u8(nvs, "LED_WHITE_EN", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strncmp(cmd, "BEEP=", 5)) {
+        // Set connection beep enable (0=off, 1=on).  Written to NVS key BEEP_EN.
+        uint8_t v = (uint8_t)atoi(cmd + 5);
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u8(nvs, "BEEP_EN", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
     } else {
         n = snprintf(buf, bufsize, "ERR");
     }
@@ -412,9 +433,22 @@ int handlerOTA(UrlHandlerParam* param) {
         return FLAG_DATA_RAW;
     }
 
+    // Signal the telemetry task to pause WiFi I/O BEFORE beginning the OTA
+    // flash.  Setting s_ota_active early (before Update.begin) ensures that
+    // any in-progress TLS/SSL connections held by the telemetry task are torn
+    // down and their heap buffers freed BEFORE the Update library allocates
+    // its own flash-write buffers.  Without this, the telemetry task can hold
+    // ~40 KB of mbedTLS heap while Update.begin/write tries to allocate flash
+    // erase buffers, triggering an abort() due to heap exhaustion.
+    // The 1.5 s delay gives the telemetry task (polling at 500 ms intervals)
+    // time to notice the flag and reach its delay(500)/continue idle branch.
+    s_ota_active = true;
+    delay(1500);
+
     Serial.printf("[OTA] Starting update: %u bytes\n", (unsigned)fw_size);
 
     if (!Update.begin(fw_size)) {
+        s_ota_active = false;
         param->contentLength = snprintf(buf, bufsize,
             "ERR: Update.begin failed: %s", Update.errorString());
         param->contentType = HTTPFILETYPE_TEXT;
@@ -429,6 +463,7 @@ int handlerOTA(UrlHandlerParam* param) {
         size_t w = Update.write((uint8_t*)param->pucPayload, first_chunk);
         if (w != first_chunk) {
             Update.abort();
+            s_ota_active = false;
             param->contentLength = snprintf(buf, bufsize,
                 "ERR: write error at offset 0 (%u/%u written)",
                 (unsigned)w, (unsigned)first_chunk);
@@ -437,11 +472,6 @@ int handlerOTA(UrlHandlerParam* param) {
         }
         written = w;
     }
-
-    // Signal the telemetry task to pause WiFi I/O for the duration of the
-    // upload so it does not compete for bandwidth or trigger a WiFi reconnect
-    // that would reset the HTTP socket mid-transfer.
-    s_ota_active = true;
 
     // Stream the remaining bytes directly from the socket to flash.
     // The socket is set non-blocking by the httpd (O_NONBLOCK), so we must
