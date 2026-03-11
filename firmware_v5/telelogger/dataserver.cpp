@@ -21,6 +21,7 @@
 * /api/log/<file #> - raw CSV format log file
 * /api/delete/<file #> - delete file
 * /api/data/<file #>?pid=<PID in hex> - JSON array of PID data
+* /api/ota - OTA firmware update (raw binary POST, Content-Type: application/octet-stream)
 *************************************************************************/
 
 #include <SPI.h>
@@ -33,6 +34,8 @@
 #include <apps/sntp/sntp.h>
 #include <esp_spi_flash.h>
 #include <esp_err.h>
+#include <esp_timer.h>
+#include <Update.h>
 #include <httpd.h>
 #include "config.h"
 
@@ -348,10 +351,127 @@ int handlerControl(UrlHandlerParam* param)
     return FLAG_DATA_RAW;
 }
 
+// ---------------------------------------------------------------------------
+// OTA firmware update handler
+// Accepts a raw binary POST (Content-Type: application/octet-stream).
+// The HTTP server buffers only the first MAX_POST_PAYLOAD_SIZE (4 KB) bytes
+// before calling the handler; the rest of the firmware is streamed directly
+// from the socket using recv() so that large binaries (>1 MB) work without
+// exhausting the device heap.
+// After a successful flash the device reboots via a one-shot esp_timer so the
+// HTTP 200 response reaches the client before the reset.
+// ---------------------------------------------------------------------------
+static void ota_restart_cb(void*) {
+    esp_restart();
+}
+
+int handlerOTA(UrlHandlerParam* param) {
+    char* buf     = param->pucBuffer;
+    int   bufsize = param->bufSize;
+
+    // The httpd caps param->payloadSize at MAX_POST_PAYLOAD_SIZE (4 KB) before
+    // calling this handler.  Read the true Content-Length from the raw HTTP
+    // request headers so we know how many bytes to expect in total.
+    const char* cl = strstr(param->hs->buffer, "Content-Length:");
+    if (!cl) cl = strstr(param->hs->buffer, "content-length:");
+    size_t fw_size = 0;
+    if (cl) {
+        cl += 15;
+        while (*cl == ' ') cl++;
+        fw_size = (size_t)atol(cl);
+    }
+    if (fw_size == 0) {
+        param->contentLength = snprintf(buf, bufsize,
+            "ERR: missing Content-Length");
+        param->contentType = HTTPFILETYPE_TEXT;
+        return FLAG_DATA_RAW;
+    }
+
+    Serial.printf("[OTA] Starting update: %u bytes\n", (unsigned)fw_size);
+
+    if (!Update.begin(fw_size)) {
+        param->contentLength = snprintf(buf, bufsize,
+            "ERR: Update.begin failed: %s", Update.errorString());
+        param->contentType = HTTPFILETYPE_TEXT;
+        return FLAG_DATA_RAW;
+    }
+
+    // Write the first chunk that the httpd already buffered (up to 4 KB).
+    size_t written = 0;
+    if (param->pucPayload && param->payloadSize > 0) {
+        size_t first_chunk = (param->payloadSize < fw_size)
+                             ? (size_t)param->payloadSize : fw_size;
+        size_t w = Update.write((uint8_t*)param->pucPayload, first_chunk);
+        if (w != first_chunk) {
+            Update.abort();
+            param->contentLength = snprintf(buf, bufsize,
+                "ERR: write error at offset 0 (%u/%u written)",
+                (unsigned)w, (unsigned)first_chunk);
+            param->contentType = HTTPFILETYPE_TEXT;
+            return FLAG_DATA_RAW;
+        }
+        written = w;
+    }
+
+    // Stream the remaining bytes directly from the socket to flash.
+    static uint8_t recv_buf[512];
+    int sock = param->hs->socket;
+    while (written < fw_size) {
+        size_t remaining = fw_size - written;
+        int to_read = (int)(remaining < sizeof(recv_buf)
+                            ? remaining : sizeof(recv_buf));
+        int n = recv(sock, recv_buf, to_read, 0);
+        if (n <= 0) {
+            Update.abort();
+            param->contentLength = snprintf(buf, bufsize,
+                "ERR: recv failed at offset %u (remaining %u)",
+                (unsigned)written, (unsigned)remaining);
+            param->contentType = HTTPFILETYPE_TEXT;
+            return FLAG_DATA_RAW;
+        }
+        size_t w = Update.write(recv_buf, (size_t)n);
+        if (w != (size_t)n) {
+            Update.abort();
+            param->contentLength = snprintf(buf, bufsize,
+                "ERR: flash write error at offset %u", (unsigned)written);
+            param->contentType = HTTPFILETYPE_TEXT;
+            return FLAG_DATA_RAW;
+        }
+        written += (size_t)n;
+    }
+
+    if (!Update.end()) {
+        param->contentLength = snprintf(buf, bufsize,
+            "ERR: Update.end failed: %s", Update.errorString());
+        param->contentType = HTTPFILETYPE_TEXT;
+        return FLAG_DATA_RAW;
+    }
+
+    Serial.println("[OTA] Flash successful, rebooting in 1.5 s");
+
+    // Schedule a reboot 1.5 s from now so the HTTP 200 response is sent and
+    // acknowledged by the client before the TCP connection drops.
+    static esp_timer_handle_t s_ota_timer = NULL;
+    if (!s_ota_timer) {
+        esp_timer_create_args_t args = {};
+        args.callback         = ota_restart_cb;
+        args.dispatch_method  = ESP_TIMER_TASK;
+        args.name             = "ota_restart";
+        esp_timer_create(&args, &s_ota_timer);
+    }
+    esp_timer_start_once(s_ota_timer, 1500000); // 1.5 s in microseconds
+
+    strcpy(buf, "OK");
+    param->contentLength = 2;
+    param->contentType   = HTTPFILETYPE_TEXT;
+    return FLAG_DATA_RAW;
+}
+
 UrlHandler urlHandlerList[]={
     {"api/live", handlerLiveData},
     {"api/info", handlerInfo},
     {"api/control", handlerControl},
+    {"api/ota", handlerOTA},
 #if STORAGE != STORAGE_NONE
     {"api/list", handlerLogList},
     {"api/data", handlerLogData},
