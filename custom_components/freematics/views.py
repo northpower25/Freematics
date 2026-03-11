@@ -128,6 +128,14 @@ _FLASHER_HTML = """\
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       max-width: 640px; margin: 2rem auto; padding: 0 1.2rem; color: #333;
     }
+    /* Compact style when embedded in a dashboard iframe */
+    body.embedded {
+      margin: 0.6rem;
+      max-width: 100%;
+    }
+    body.embedded h1 { display: none; }
+    body.embedded .card { margin: 0.5rem 0; padding: 0.7rem 0.9rem; }
+    body.embedded .nav-links { display: none; }
     h1  { color: #03a9f4; font-size: 1.5rem; }
     .card {
       border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0;
@@ -221,7 +229,7 @@ _FLASHER_HTML = """\
     Download <code>flash_image.bin</code> from the Home Assistant panel.
   </div>
 
-  <p style="margin-top:2rem">
+  <p class="nav-links" style="margin-top:2rem">
     <a href="javascript:history.back()">&#8592; Back to Home Assistant</a>
     &nbsp;&nbsp;
     <a href="/api/freematics/console" target="_blank" rel="noopener">&#128291; Serial Console</a>
@@ -232,7 +240,7 @@ _FLASHER_HTML = """\
 
   <script>
     // Apply a provisioned manifest URL when this page is opened from the HA
-    // panel via "Open Flasher in New Tab".  The URL contains a short-lived
+    // panel (either directly or via iframe).  The URL contains a short-lived
     // token so that WiFi, APN, and HA server settings are embedded in the
     // flash image automatically — no manual configuration after flashing.
     // Only accept paths that belong to the local HA API to prevent open-
@@ -240,11 +248,30 @@ _FLASHER_HTML = """\
     (function () {
       const params = new URLSearchParams(window.location.search);
       const m = params.get('manifest');
-      if (m && /^\/api\/freematics\/manifest\.json(\?|$)/.test(m)) {
+      if (m && /^\\/api\\/freematics\\/manifest\\.json(\\?|$)/.test(m)) {
         document.getElementById('ewb').setAttribute('manifest', m);
         document.getElementById('provisioned-note').style.display = 'block';
       }
+      // Apply embedded (iframe) mode: compact layout, hide navigation links.
+      if (params.get('embedded') === '1') {
+        document.body.classList.add('embedded');
+      }
     })();
+
+    // Accept manifest URL updates from the parent frame (dashboard panel).
+    // The panel sends a postMessage when a fresh provisioning token is ready,
+    // allowing the iframe to update without a full page reload.
+    window.addEventListener('message', function (event) {
+      // Only accept messages from the same origin for security.
+      if (event.origin !== window.location.origin) return;
+      if (event.data && event.data.type === 'freematics:updateManifest') {
+        const m = event.data.manifest;
+        if (m && /^\\/api\\/freematics\\/manifest\\.json(\\?|$)/.test(m)) {
+          document.getElementById('ewb').setAttribute('manifest', m);
+          document.getElementById('provisioned-note').style.display = 'block';
+        }
+      }
+    });
 
     if (!('serial' in navigator)) {
       const warn = document.getElementById('no-serial-warn');
@@ -858,13 +885,24 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
 
-    # Derive enable_httpd from the operating_mode selector (new entries) or
-    # fall back to the legacy enable_httpd boolean for pre-existing entries.
+    # Determine the operating mode.  New entries use the operating_mode selector;
+    # legacy pre-existing entries fall back to the old enable_httpd boolean.
     operating_mode = cfg.get(CONF_OPERATING_MODE)
     if operating_mode is not None:
-        enable_httpd = (operating_mode == OPERATING_MODE_DATALOGGER)
+        is_datalogger = (operating_mode == OPERATING_MODE_DATALOGGER)
     else:
-        enable_httpd = bool(cfg.get(CONF_ENABLE_HTTPD, False))
+        is_datalogger = bool(cfg.get(CONF_ENABLE_HTTPD, False))
+
+    # HTTPD is always enabled in NVS so the device can receive OTA firmware
+    # updates via WiFi regardless of operating mode.  The built-in HTTP server
+    # (port 80) is required by the WiFi OTA flash mechanism.  In telelogger mode
+    # BLE is already disabled to free memory for the TLS webhook client, so the
+    # HTTP server and the TLS stack can coexist without memory pressure.
+    enable_httpd = True
+
+    # Webhook mode: the device sends telemetry to HA via HTTPS POST.  Only used
+    # in telelogger (non-datalogger) mode and only when a webhook ID is present.
+    is_webhook_mode = bool(webhook_id and not is_datalogger)
 
     server_host = ""
     server_port = 443
@@ -887,7 +925,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     # because the Remote UI proxy does not accept direct machine-to-machine
     # HTTPS connections.
     _cloud_used = False
-    if webhook_id and not enable_httpd:
+    if is_webhook_mode:
         # Try to obtain the Nabu Casa cloud webhook URL.  _candidate_url is
         # initialised here so the cached-URL fallback below can be reached even
         # when async_is_logged_in() returns False (e.g. cloud session expired
@@ -1014,11 +1052,11 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                 "compile-time default server (hub.freematics.com), which will NOT "
                 "deliver webhooks to this Home Assistant instance."
             )
-        # In datalogger mode (HTTPD enabled) the device serves a local HTTP API
-        # and must NOT send webhooks to HA – leave webhook_path empty so the
-        # firmware falls back to the legacy Freematics Hub path.  Webhooks are
-        # only used in telelogger mode.
-        if webhook_id and not enable_httpd:
+        # In datalogger mode the device serves a local HTTP API and must NOT
+        # send webhooks to HA – leave webhook_path empty so the firmware falls
+        # back to the legacy Freematics Hub path.  Webhooks are only used in
+        # telelogger mode.
+        if is_webhook_mode:
             webhook_path = f"/api/webhook/{webhook_id}"
         # Warn when the external URL is a Nabu Casa Remote UI address.  The
         # Remote UI proxy (*.ui.nabu.casa) works for WiFi (ESP32 MBEDTLS) but

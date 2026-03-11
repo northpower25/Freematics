@@ -44,7 +44,7 @@ DISPATCHER_PREFIX = DOMAIN
 
 # Operating mode – determines which firmware features are enabled
 CONF_OPERATING_MODE = "operating_mode"
-OPERATING_MODE_TELELOGGER = "telelogger"   # Webhook → HA; HTTPD=off, BLE=off
+OPERATING_MODE_TELELOGGER = "telelogger"   # Webhook → HA; HTTPD=on (for OTA), BLE=off
 OPERATING_MODE_DATALOGGER = "datalogger"   # local HTTP API; HTTPD=on
 DEFAULT_OPERATING_MODE = OPERATING_MODE_TELELOGGER
 

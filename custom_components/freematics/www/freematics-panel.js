@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.17.0";
+const PANEL_VERSION = "1.18.0";
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper
@@ -168,81 +168,6 @@ const STYLES = `
     color: #1565c0;
     margin-bottom: 16px;
   }
-  .warn-banner {
-    background: #fff8e1;
-    border-left: 4px solid #ffc107;
-    padding: 10px 14px;
-    border-radius: 0 6px 6px 0;
-    font-size: 0.9rem;
-    color: #795548;
-    margin-bottom: 16px;
-    display: none;
-  }
-  .warn-banner.visible { display: block; }
-  esp-web-install-button { display: block; margin: 14px 0; }
-  esp-web-install-button::part(button) {
-    background: #2196f3;
-    color: #fff;
-    border: none;
-    padding: 12px 24px;
-    font-size: 1rem;
-    border-radius: 6px;
-    cursor: pointer;
-    width: 100%;
-  }
-  esp-web-install-button::part(button):hover { background: #1976d2; }
-  .flash-fallback {
-    text-align: center;
-    padding: 16px;
-  }
-  .flash-fallback a {
-    display: inline-block;
-    padding: 12px 24px;
-    background: #2196f3;
-    color: #fff;
-    text-decoration: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    font-weight: 500;
-  }
-  .flash-fallback a:hover { background: #1976d2; }
-  /* --- flash progress --- */
-  .progress-section { margin-top: 16px; }
-  .flash-status-text {
-    font-size: 0.88rem;
-    color: var(--secondary-text-color);
-    min-height: 20px;
-    margin-bottom: 6px;
-  }
-  .flash-status-text.ok  { color: #4caf50; font-weight: 600; }
-  .flash-status-text.err { color: #f44336; font-weight: 600; }
-  .progress-bar-wrap {
-    height: 10px;
-    background: var(--divider-color);
-    border-radius: 5px;
-    overflow: hidden;
-    margin-bottom: 10px;
-  }
-  .progress-bar-fill {
-    height: 100%;
-    background: #2196f3;
-    border-radius: 5px;
-    width: 0%;
-    transition: width 0.35s ease;
-  }
-  .flash-log {
-    background: #1a1a2e;
-    color: #c8d6e5;
-    font-family: 'Roboto Mono', monospace;
-    font-size: 0.80rem;
-    padding: 10px 12px;
-    border-radius: 6px;
-    min-height: 72px;
-    max-height: 210px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
   .log-entry        { margin: 2px 0; }
   .log-entry.info   { color: #c8d6e5; }
   .log-entry.ok     { color: #55efc4; }
@@ -333,15 +258,6 @@ const STYLES = `
   }
 `;
 
-// Module-level guard: tracks whether the esp-web-tools <script> tag has
-// already been appended to the document.  Using customElements.get() alone
-// is not sufficient because HA's scoped-custom-element-registry polyfill can
-// make that call return undefined even when the element is already globally
-// registered, which would cause the script to be loaded a second time and
-// trigger a duplicate-definition error for Material Design sub-elements such
-// as `md-focus-ring`.
-let _espToolsLoaded = false;
-
 /* -------------------------------------------------------------------------
  * Panel element
  * ---------------------------------------------------------------------- */
@@ -353,58 +269,21 @@ class FreematicsPanel extends HTMLElement {
     this._activeTab = "dashboard";
     this._initialized = false;
     this._flashRendered = false;
+    this._flashRendering = false;
     this._consoleRendered = false;
     this._serialPort = null;
     this._serialReader = null;
     this._serialWriter = null;
     this._serialReadLoop = null;
-    this._dialogBodyObserver = null;
-    this._currentAttrObserver = null;
-    this._shadowDialogObserver = null;
-    this._progressPollTimer = null;
-    this._showBtnFallbackTimer = null;
     this._provisioningManifestUrl = null;
     this.attachShadow({ mode: "open" });
   }
 
   connectedCallback() {
-    // Re-attach the body observer if the Flash tab was already rendered and
-    // the observer was torn down by a previous disconnectedCallback (e.g.
-    // HA sidebar navigation away and back).
-    if (this._flashRendered) {
-      this._watchInstallDialog();
-    }
+    // Nothing to re-attach for the iframe-based flash tab.
   }
 
   disconnectedCallback() {
-    if (this._dialogBodyObserver) {
-      this._dialogBodyObserver.disconnect();
-      this._dialogBodyObserver = null;
-    }
-    if (this._currentAttrObserver) {
-      this._currentAttrObserver.disconnect();
-      this._currentAttrObserver = null;
-    }
-    if (this._shadowDialogObserver) {
-      this._shadowDialogObserver.disconnect();
-      this._shadowDialogObserver = null;
-    }
-    if (this._progressPollTimer) {
-      clearInterval(this._progressPollTimer);
-      this._progressPollTimer = null;
-    }
-    if (this._flashStallTimer) {
-      clearTimeout(this._flashStallTimer);
-      this._flashStallTimer = null;
-    }
-    if (this._dialogStallRef) {
-      clearTimeout(this._dialogStallRef.timer);
-      this._dialogStallRef = null;
-    }
-    if (this._showBtnFallbackTimer) {
-      clearTimeout(this._showBtnFallbackTimer);
-      this._showBtnFallbackTimer = null;
-    }
     this._cleanupSerial();
   }
 
@@ -707,52 +586,38 @@ class FreematicsPanel extends HTMLElement {
   }
 
   /* ── Flash Firmware tab ─────────────────────────────────────────── */
-  _renderFlash() {
+  async _renderFlash() {
     const el = this.shadowRoot.getElementById("content-flash");
     if (!el) return;
 
-    // Render only once: preserves the esp-web-install-button DOM node so
-    // the underlying Web Serial port is never orphaned between tab switches,
-    // which prevents the "The port is already open" error on re-click.
-    if (this._flashRendered) return;
-    this._flashRendered = true;
+    // Render only once: preserves the iframe so an in-progress flash is not
+    // interrupted when the user switches tabs and returns.
+    if (this._flashRendered || this._flashRendering) return;
+    this._flashRendering = true;
 
-    const hasSerial = "serial" in navigator;
-    const isSecure = window.isSecureContext;
     const cs = "background:var(--secondary-background-color);padding:1px 4px;border-radius:3px";
 
-    // Determine the reason Web Serial is unavailable (if it is)
-    let serialWarnHtml = "";
-    if (!hasSerial) {
-      if (!isSecure) {
-        // HTTP (non-secure) context — most common reason on local IP access
-        serialWarnHtml = `
-          &#9888; <strong>Web Serial API not available – HTTPS required.</strong><br>
-          The Web Serial API requires a <strong>secure HTTPS connection</strong>. This is a
-          browser security requirement that applies regardless of where the USB device is plugged in.
-          <strong>Your USB device does not need to be on the same machine as the HA server</strong>
-          — only the browser page must be loaded over HTTPS.<br><br>
-          <strong>Options to enable browser flashing:</strong>
-          <ul style="margin:6px 0 4px;padding-left:20px">
-            <li>Access Home Assistant via
-              <a href="https://www.nabucasa.com/" target="_blank" rel="noopener" style="color:#795548">Nabu Casa</a>
-              (e.g. <code style="${cs}">https://xxx.ui.nabu.casa</code>)</li>
-            <li>Access HA using <code style="${cs}">http://localhost:8123</code> instead of an IP address
-              (<code>localhost</code> is treated as secure by browsers)</li>
-            <li>Set up a trusted HTTPS certificate for your local HA instance</li>
-          </ul>
-          Or use the <em>Manual Flash</em> section below — it works without HTTPS.
-        `;
-      } else {
-        // Secure context but no navigator.serial → unsupported browser
-        serialWarnHtml = `
-          &#9888; <strong>Web Serial API not available.</strong><br>
-          Please open this page in <strong>Google Chrome</strong> or
-          <strong>Microsoft Edge</strong> (version 89 or newer).<br>
-          Other browsers (Firefox, Safari) do not support the Web Serial API.
-        `;
+    // Fetch provisioning token first so the iframe starts with the personalised
+    // manifest URL (includes WiFi, APN, and HA server settings).
+    let manifestUrl = DEFAULT_MANIFEST_URL;
+    let flashImageUrl = null;
+    let nvsUrl = null;
+    try {
+      const result = await Promise.race([
+        this._hass.callApi("GET", "freematics/provisioning_token"),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
+      ]);
+      if (result && result.manifest_url) {
+        manifestUrl = result.manifest_url;
+        this._provisioningManifestUrl = manifestUrl;
+        flashImageUrl = result.flash_image_url || null;
+        nvsUrl        = result.nvs_url || null;
       }
+    } catch (_) {
+      // Non-fatal: fall back to default manifest (firmware without NVS settings).
     }
+
+    const flasherUrl = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}&embedded=1`;
 
     el.innerHTML = `
       <div class="flash-wrap">
@@ -766,82 +631,38 @@ class FreematicsPanel extends HTMLElement {
           same flash operation — no manual configuration required after flashing.
         </div>
 
-        ${serialWarnHtml ? `<div class="warn-banner visible">${serialWarnHtml}</div>` : ""}
-
-        <!-- ── Requirements ───────────────────────────────────────── -->
-        <div class="flash-card">
-          <h3>&#128268; Requirements</h3>
-          <ul>
-            <li>Google Chrome or Microsoft Edge (version 89+) — over HTTPS or <code style="${cs}">localhost</code></li>
-            <li>Freematics ONE+ connected via USB to <em>this computer</em></li>
-            <li>USB–Serial driver installed:
-              <ul>
-                <li><a href="https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers" target="_blank" rel="noopener">CP210x driver (Silicon Labs)</a></li>
-                <li><a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener">CH340 driver (WCH)</a></li>
-              </ul>
-            </li>
-          </ul>
-        </div>
-
-        <!-- ── Browser flasher (Web Serial) ──────────────────────── -->
-        ${hasSerial ? `
+        <!-- ── Browser flasher via iframe (Web Serial) ───────────── -->
         <div class="flash-card" id="flash-action">
           <h3>&#9889; Flash Firmware (USB / Web Serial)</h3>
-          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
-            Click the button below. A browser dialog will open so you can
-            <strong>select the COM port</strong> of the Freematics ONE+.<br>
+          <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
+            Connect the Freematics ONE+ via USB to <em>this computer</em>, then click
+            <strong>Connect &amp; Flash Firmware</strong> below.
+            A browser dialog will open to select the COM port.<br>
             Look for: <code style="${cs}">CP2102</code>,
             <code style="${cs}">CH340</code>, or a similar USB-Serial device.
           </p>
-
-          <div id="esp-container">
-            <p style="color:var(--secondary-text-color);font-size:.9rem">Loading flash tool…</p>
-          </div>
-          <p id="flash-newtab-note" style="font-size:.85rem;color:var(--secondary-text-color);margin:4px 0 10px;text-align:center">
-            Popup not responding? &nbsp;
-            <a id="flash-newtab-link" href="/api/freematics/flasher" target="_blank" rel="noopener"
+          <p style="font-size:.82rem;color:var(--secondary-text-color);margin:0 0 6px">
+            &#128268; Requires
+            <strong>Google Chrome or Microsoft Edge 89+</strong>
+            over HTTPS or <code style="${cs}">localhost</code>.
+          </p>
+          <iframe
+            id="flash-iframe"
+            src="${flasherUrl}"
+            allow="serial"
+            style="width:100%;height:520px;border:1px solid var(--divider-color);border-radius:6px;"
+            title="Freematics ONE+ Browser Flasher"
+          ></iframe>
+          <p style="font-size:.82rem;color:var(--secondary-text-color);margin:4px 0 0;text-align:center">
+            Iframe not working? &nbsp;
+            <a id="flash-newtab-link" href="${flasherUrl.replace('&embedded=1','')}"
+               target="_blank" rel="noopener"
                style="color:#2196f3;white-space:nowrap"
-               aria-label="Open flasher in a new browser tab — use this if the popup dialog is not responding">
+               aria-label="Open flasher in a new browser tab">
               Open flasher in a new browser tab ↗
             </a>
           </p>
-          <div class="progress-section" id="flash-progress" style="display:none">
-            <div class="flash-status-text" id="flash-status-text"></div>
-            <div class="progress-bar-wrap">
-              <div class="progress-bar-fill" id="progress-bar-fill"></div>
-            </div>
-            <div id="flash-manual-btn-wrap" style="display:none;margin-bottom:10px">
-              <button id="flash-start-btn" style="
-                background:#4caf50;color:#fff;border:none;padding:10px 22px;
-                font-size:.9rem;border-radius:6px;cursor:pointer;width:100%;
-                font-family:inherit;
-              ">
-                &#128640; Start Flashing
-              </button>
-            </div>
-            <div class="flash-log" id="flash-log"></div>
-          </div>
-          <ol style="font-size:.9rem;color:var(--secondary-text-color)">
-            <li>Click <em>Connect &amp; Flash Firmware</em></li>
-            <li>Select the Freematics ONE+ COM port from the browser dialog</li>
-            <li>Firmware + settings flash automatically (may take ~2 min)</li>
-            <li>Device restarts and connects to your WiFi / sends data to Home Assistant</li>
-          </ol>
         </div>
-        ` : `
-        <div class="flash-card">
-          <h3>&#9889; Browser / Web Serial not available</h3>
-          <p style="font-size:.9rem;color:var(--secondary-text-color)">
-            Use the standalone flasher page in Chrome / Edge (over HTTPS or <code style="${cs}">localhost</code>),
-            or use one of the manual methods below.
-          </p>
-          <div class="flash-fallback">
-            <a href="/api/freematics/flasher" target="_blank" rel="noopener">
-              &#9889; Open Standalone Flasher Page
-            </a>
-          </div>
-        </div>
-        `}
 
         <!-- ── WiFi OTA (AP mode) ─────────────────────────────────── -->
         <div class="flash-card">
@@ -860,6 +681,8 @@ class FreematicsPanel extends HTMLElement {
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 10px">
             Flash when the Freematics ONE+ is already connected to your <strong>local WiFi
             network</strong> and reachable from the Home Assistant server.
+            The device firmware is compiled with the built-in HTTP server enabled
+            (<code style="${cs}">ENABLE_HTTPD=1</code>) so no extra configuration is needed.
           </p>
           <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
             <li>Ensure the device is online and the HA server can reach its IP</li>
@@ -1043,15 +866,15 @@ class FreematicsPanel extends HTMLElement {
 
         <!-- ── Datalogger / HTTPD info ────────────────────────────── -->
         <div class="flash-card">
-          <h3>&#128202; Built-in Data Viewer (Datalogger / HTTPD)</h3>
+          <h3>&#128202; Built-in Data Viewer &amp; OTA Update Server (HTTPD)</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
-            The firmware includes a built-in HTTP data server
-            (<code style="${cs}">ENABLE_HTTPD=1</code>) that lets you view live data
-            directly on the device via a web browser. This is useful for
-            diagnosing connection issues in the field.
+            The pre-compiled firmware has the built-in HTTP server
+            (<code style="${cs}">ENABLE_HTTPD=1</code>) <strong>enabled by default</strong>.
+            This allows WiFi OTA firmware updates and lets you view live data
+            directly on the device via a web browser.
           </p>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
-            <strong>Available endpoints when HTTPD is enabled:</strong>
+            <strong>Available endpoints when the device is reachable on the network:</strong>
           </p>
           <ul style="font-size:.88rem;color:var(--secondary-text-color);margin:0 0 8px">
             <li><code style="${cs}">/api/info</code> – device info (chip, firmware, uptime)</li>
@@ -1059,18 +882,46 @@ class FreematicsPanel extends HTMLElement {
             <li><code style="${cs}">/api/control?cmd=…</code> – send control commands</li>
             <li><code style="${cs}">/api/list</code> – list log files on SD card</li>
             <li><code style="${cs}">/api/log/&lt;n&gt;</code> – download raw CSV log file</li>
+            <li><code style="${cs}">/update</code> – OTA firmware upload endpoint (used by WiFi OTA above)</li>
           </ul>
-          <p style="font-size:.88rem;color:#ff9800;margin:0">
-            &#9888; The pre-compiled binary has HTTPD <strong>disabled</strong> by default.
-            To enable it, compile from source with
-            <code style="${cs}">ENABLE_HTTPD=1</code> in
-            <code style="${cs}">firmware_v5/telelogger/config.h</code>
-            and flash the resulting binary.
-          </p>
         </div>
 
       </div>
     `;
+
+    // Mark as rendered (guards against tab-switch re-renders).
+    this._flashRendered = true;
+    this._flashRendering = false;
+
+    // Update download links with provisioned URLs (if token was obtained above).
+    const flashImageLink = el.querySelector("#dl-flash-image");
+    const nvsLink        = el.querySelector("#dl-nvs");
+    const nvsStatus      = el.querySelector("#nvs-dl-status");
+    if (flashImageUrl && flashImageLink) {
+      flashImageLink.href = flashImageUrl;
+    }
+    if (nvsUrl && nvsLink) {
+      nvsLink.href = nvsUrl;
+    }
+    if (nvsStatus) {
+      if (flashImageUrl) {
+        nvsStatus.innerHTML =
+          "&#10003; File ready — download link active for 5 minutes. " +
+          "<em>Generated fresh from your current settings.</em>";
+        nvsStatus.style.color = "var(--success-color, #4caf50)";
+      } else {
+        nvsStatus.textContent = "⚠ Could not generate settings file — no integration configured.";
+        nvsStatus.style.color = "#ff9800";
+        if (flashImageLink) {
+          flashImageLink.style.opacity = "0.4";
+          flashImageLink.style.pointerEvents = "none";
+        }
+        if (nvsLink) {
+          nvsLink.style.opacity = "0.4";
+          nvsLink.style.pointerEvents = "none";
+        }
+      }
+    }
 
     // Attach WiFi OTA button event listener
     const wifiOtaBtn = el.querySelector("#wifi-ota-btn");
@@ -1141,744 +992,8 @@ class FreematicsPanel extends HTMLElement {
         }
       });
     }
-
-    // Fetch provisioning token and update NVS download link + esp-web-tools manifest
-    this._fetchProvisioningToken(el);
-
-    if (hasSerial) {
-      this._loadEspWebTools();
-    }
   }
 
-  async _fetchProvisioningToken(el) {
-    const nvsStatus      = el ? el.querySelector("#nvs-dl-status") : null;
-    const flashImageLink = el ? el.querySelector("#dl-flash-image") : null;
-    const nvsLink        = el ? el.querySelector("#dl-nvs") : null;
-
-    try {
-      const result = await this._hass.callApi("GET", "freematics/provisioning_token");
-      if (result && result.token) {
-        this._provisioningManifestUrl = result.manifest_url || DEFAULT_MANIFEST_URL;
-
-        // Combined single-file flash image (PT + NVS + firmware, offset 0x8000)
-        const flashImageUrl = result.flash_image_url ||
-          `/api/freematics/flash_image.bin?token=${result.token}`;
-        if (flashImageLink) {
-          flashImageLink.href = flashImageUrl;
-        }
-
-        // NVS-only download (for advanced use / browser flash)
-        const nvsUrl = result.nvs_url ||
-          `/api/freematics/config_nvs.bin?token=${result.token}`;
-        if (nvsLink) {
-          nvsLink.href = nvsUrl;
-        }
-
-        if (nvsStatus) {
-            nvsStatus.innerHTML =
-            "&#10003; File ready — download link active for 5 minutes. " +
-            "<em>Generated fresh from your current settings.</em>";
-          nvsStatus.style.color = "var(--success-color, #4caf50)";
-        }
-        // If esp-web-tools install button is already rendered, update its manifest attribute
-        const installBtn = this.shadowRoot.querySelector("esp-web-install-button");
-        if (installBtn) {
-          installBtn.setAttribute("manifest", this._provisioningManifestUrl);
-        }
-        // Update the "Open in New Tab" link to include the provisioned manifest URL
-        // so NVS settings (WiFi, APN, HA server) are embedded when flashing from the new tab.
-        const newtabLink = this.shadowRoot.querySelector("#flash-newtab-link");
-        if (newtabLink && this._provisioningManifestUrl &&
-            /^\/api\/freematics\/manifest\.json(\?|$)/.test(this._provisioningManifestUrl)) {
-          newtabLink.href = `/api/freematics/flasher?manifest=${encodeURIComponent(this._provisioningManifestUrl)}`;
-        }
-      }
-    } catch (e) {
-      if (nvsStatus) {
-        nvsStatus.textContent = "⚠ Could not generate settings file — no integration configured.";
-        nvsStatus.style.color = "#ff9800";
-      }
-      if (flashImageLink) {
-        flashImageLink.style.opacity = "0.4";
-        flashImageLink.style.pointerEvents = "none";
-      }
-      if (nvsLink) {
-        nvsLink.style.opacity = "0.4";
-        nvsLink.style.pointerEvents = "none";
-      }
-    }
-  }
-
-
-  _loadEspWebTools() {
-    const shadow = this.shadowRoot;
-    const container = shadow.getElementById("esp-container");
-    if (!container) return;
-
-    // Load esp-web-tools and insert the install button.  Guard with both
-    // customElements.get() and the module-level _espToolsLoaded flag to
-    // handle cases where HA's scoped-custom-element-registry polyfill makes
-    // customElements.get() return undefined even when the element has already
-    // been registered globally (e.g. after visiting config/dashboard first).
-    if (!_espToolsLoaded && !customElements.get("esp-web-install-button")) {
-      _espToolsLoaded = true;
-      const script = document.createElement("script");
-      script.type = "module";
-      script.src = "https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module";
-      script.onload = () => this._insertInstallButton(container);
-      script.onerror = () => {
-        _espToolsLoaded = false; // allow retry on next panel load
-        container.innerHTML = `
-          <p style="color:#f44336;font-size:.9rem">
-            &#9888; Failed to load the flash tool from the CDN.<br>
-            Check your internet connection, or use the
-            <a href="/api/freematics/flasher" target="_blank" rel="noopener" style="color:#2196f3">
-              standalone flasher page
-            </a> instead.
-          </p>`;
-      };
-      document.head.appendChild(script);
-    } else {
-      this._insertInstallButton(container);
-    }
-  }
-
-  _insertInstallButton(container) {
-    // Use personalized manifest URL (with NVS settings) if available,
-    // otherwise fall back to the basic manifest (firmware only).
-    const manifestUrl = this._provisioningManifestUrl || DEFAULT_MANIFEST_URL;
-    container.innerHTML = `
-      <esp-web-install-button manifest="${manifestUrl}">
-        <button slot="activate" style="
-          background:#2196f3;color:#fff;border:none;padding:12px 24px;
-          font-size:1rem;border-radius:6px;cursor:pointer;width:100%;
-          font-family:inherit;margin-bottom:10px;
-        ">
-          &#9889; Connect &amp; Flash Firmware
-        </button>
-        <span slot="unsupported" style="color:#f44336;font-size:.9rem">
-          &#9888; Web Serial is not supported in this browser. Please use Chrome or Edge 89+.
-        </span>
-      </esp-web-install-button>
-    `;
-
-    // Enable the built-in ESP Web Tools log/console so the raw flash output
-    // is visible inside the dialog – useful for debugging failures.
-    const installBtn = container.querySelector("esp-web-install-button");
-    if (installBtn) {
-      installBtn.showLog = true;
-      installBtn.logConsole = true;
-    }
-
-    // Reveal the progress section immediately so it is always visible once
-    // the flash button is ready.  This is the most reliable way to ensure
-    // the section appears: it does not depend on click-event bubbling through
-    // shadow-DOM slot boundaries or on MutationObserver timing.
-    const shadow = this.shadowRoot;
-    const progressSection = shadow.querySelector("#flash-progress");
-    if (progressSection) {
-      progressSection.style.display = "block";
-      this._updateFlashUI(
-        "Ready — connect the device and click the button above.",
-        "",
-        "#9e9e9e",
-        0,
-      );
-      this._appendFlashLog("info", "Flash tool loaded. Connect the Freematics ONE+ and click the button above.");
-    }
-
-    // On every click: reset the log and re-show "Waiting for port selection"
-    // so a second attempt always starts from a clean state.  Also re-arm the
-    // body observer in case it was torn down (e.g. HA sidebar navigation).
-    const activateBtn = container.querySelector('[slot="activate"]');
-    if (activateBtn) {
-      activateBtn.addEventListener("click", () => {
-        const progress = this.shadowRoot.querySelector("#flash-progress");
-        const log      = this.shadowRoot.querySelector("#flash-log");
-        if (!progress) return;
-        if (log) log.innerHTML = "";
-        progress.style.display = "block";
-        this._updateFlashUI("Waiting for port selection…", "", "#2196f3", 2);
-        this._appendFlashLog("info", "Waiting for port selection…");
-        // Re-arm the body observer so it is active when the dialog appears.
-        this._watchInstallDialog();
-        // If the install dialog never appears within 30 s (e.g. user dismissed
-        // the port picker or the browser couldn't open the port), show a hint.
-        if (this._flashStallTimer) clearTimeout(this._flashStallTimer);
-        this._flashStallTimer = setTimeout(() => {
-          this._flashStallTimer = null;
-          // Only fire if we are still stuck at "waiting"
-          const fill = this.shadowRoot.querySelector("#progress-bar-fill");
-          if (fill && parseFloat(fill.style.width) <= 2) {
-            this._appendFlashLog("err", "⏱ No install dialog appeared after 30 s. The port picker may have been dismissed, or the USB driver is not installed. See the Manual Flash Fallback section below.");
-            this._updateFlashUI("⏱ No response — check USB connection and driver.", "err", "#f44336", 0);
-          }
-        }, 30000);
-      });
-    }
-
-    // Manual "Start Flashing" button — shown when device is connected (DASHBOARD
-    // or ASK_ERASE state) as a fallback if auto-advance fails to click the
-    // Install button inside the (potentially invisible) popup dialog.
-    const startBtn = shadow.querySelector("#flash-start-btn");
-    if (startBtn) {
-      startBtn.addEventListener("click", () => {
-        startBtn.disabled = true;
-        startBtn.textContent = "Starting…";
-        if (!this._currentDialog) {
-          // Dialog reference is missing — guide the user to reconnect.
-          startBtn.disabled = false;
-          startBtn.textContent = "🚀 Start Flashing";
-          this._appendFlashLog("warn",
-            "⚠ No active install dialog found. " +
-            "Please click Connect & Flash Firmware to reconnect the device.");
-          return;
-        }
-        const advanced = this._tryAutoAdvanceDialog(this._currentDialog);
-        if (!advanced) {
-          // Could not find/click the Install button — re-enable and inform user.
-          startBtn.disabled = false;
-          startBtn.textContent = "🚀 Start Flashing";
-          // Give a state-aware message: if the dialog is still in CONNECTING
-          // state, the device hasn't connected yet and there is no Install
-          // button to click — guide the user accordingly.
-          const dialogState = this._currentDialog
-            ? (this._currentDialog._state
-                ? String(this._currentDialog._state).toUpperCase()
-                : this._currentDialog.getAttribute("state"))
-            : null;
-          if (!dialogState || dialogState === "CONNECTING") {
-            this._appendFlashLog("warn",
-              "⚠ The device is still connecting. " +
-              "Please wait for it to finish connecting, or check your USB cable and COM port selection. " +
-              "If needed, click Connect & Flash Firmware to try again.");
-          } else {
-            // Device is connected (DASHBOARD / other state) but the Install
-            // button could not be found inside the popup dialog — this usually
-            // means the ewt-install-dialog is visible to the user but the
-            // auto-click logic cannot reach its shadow-DOM internals from inside
-            // the HA Dashboard iframe / shadow root.  Open the standalone
-            // flasher page in a new browser tab where esp-web-tools runs in a
-            // native top-level context and the dialog is fully interactive.
-            const manifestUrl = this._provisioningManifestUrl || DEFAULT_MANIFEST_URL;
-            const flasherUrl = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}`;
-            this._appendFlashLog("warn",
-              "⚠ Could not auto-click the Install button. " +
-              "Opening the standalone flasher in a new browser tab…");
-            window.open(flasherUrl, "_blank", "noopener");
-          }
-        }
-      });
-    }
-
-    this._watchInstallDialog();
-  }
-
-  /* ── Install-dialog observer (progress bar + log) ────────────────── */
-
-  /**
-   * esp-web-tools v10 does NOT fire state-changed on <esp-web-install-button>.
-   * The actual flash work happens inside <ewt-install-dialog> which is
-   * appended to document.body.  We watch for it with a MutationObserver and
-   * track its 'state' attribute to update our progress UI.
-   */
-  _watchInstallDialog() {
-    if (this._dialogBodyObserver) return;
-    this._dialogBodyObserver = new MutationObserver(mutations => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType === 1 && node.localName === "ewt-install-dialog") {
-            this._onInstallDialogAdded(node);
-          }
-        }
-        for (const node of mutation.removedNodes) {
-          if (node.nodeType === 1 && node.localName === "ewt-install-dialog") {
-            if (this._currentAttrObserver) {
-              this._currentAttrObserver.disconnect();
-              this._currentAttrObserver = null;
-            }
-            if (this._shadowDialogObserver) {
-              this._shadowDialogObserver.disconnect();
-              this._shadowDialogObserver = null;
-            }
-            // Clear the stall-detection timeout (if still pending)
-            if (this._flashStallTimer) {
-              clearTimeout(this._flashStallTimer);
-              this._flashStallTimer = null;
-            }
-            // Clear the dialog-level stall guard from _onInstallDialogAdded
-            if (this._dialogStallRef) {
-              clearTimeout(this._dialogStallRef.timer);
-              this._dialogStallRef = null;
-            }
-            // Clear the poll timer and show an error if flash did not complete
-            if (this._progressPollTimer) {
-              clearInterval(this._progressPollTimer);
-              this._progressPollTimer = null;
-            }
-            // Cancel the fallback button-reveal timer
-            if (this._showBtnFallbackTimer) {
-              clearTimeout(this._showBtnFallbackTimer);
-              this._showBtnFallbackTimer = null;
-            }
-            // Clear dialog reference and hide the manual Start Flashing button
-            this._currentDialog = null;
-            const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
-            if (manualWrap) manualWrap.style.display = "none";
-          }
-        }
-      }
-    });
-    this._dialogBodyObserver.observe(document.body, { childList: true });
-  }
-
-  _onInstallDialogAdded(dialog) {
-    // Keep a reference so the manual Start Flashing button can call
-    // _tryAutoAdvanceDialog even outside the handleState closure.
-    this._currentDialog = dialog;
-    const shadow = this.shadowRoot;
-    const progressSection = shadow.querySelector("#flash-progress");
-    const logEl = shadow.querySelector("#flash-log");
-    if (!progressSection) return;
-
-    // Cancel the "no dialog" stall timer started by the activate-button click
-    if (this._flashStallTimer) {
-      clearTimeout(this._flashStallTimer);
-      this._flashStallTimer = null;
-    }
-
-    // Reset log and reveal the progress section (no-op if the click listener
-    // already revealed it; setting display again is harmless).
-    if (logEl) logEl.innerHTML = "";
-    progressSection.style.display = "block";
-    this._updateFlashUI("Connecting to device…", "", "#2196f3", 5);
-    this._appendFlashLog("info", "Connecting to device…");
-    this._appendFlashLog("info", "☝ The flash dialog is now open — waiting for the device to connect. Installation will start automatically.");
-
-    // Fallback: reveal the "🚀 Start Flashing" button after a short delay if
-    // auto-advance hasn't already triggered the install.  This handles the case
-    // where readState() cannot detect the DASHBOARD/ASK_ERASE state (e.g. due
-    // to an esp-web-tools internal API change) so the user always has a visible
-    // manual trigger regardless of whether state detection is working.
-    // Guard that ensures the Install / Skip-Erase button is only auto-clicked
-    // once per dialog session even if the observers fire multiple times.
-    let _autoAdvanced = false;
-    if (this._showBtnFallbackTimer) {
-      clearTimeout(this._showBtnFallbackTimer);
-      this._showBtnFallbackTimer = null;
-    }
-    const SHOW_BTN_FALLBACK_MS = 5000;
-    this._showBtnFallbackTimer = setTimeout(() => {
-      this._showBtnFallbackTimer = null;
-      if (_autoAdvanced || this._currentDialog !== dialog) return;
-      const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
-      if (manualWrap && manualWrap.style.display !== "block") {
-        manualWrap.style.display = "block";
-        const btn = manualWrap.querySelector("#flash-start-btn");
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = "🚀 Start Flashing";
-        }
-        this._appendFlashLog("info",
-          "👆 If flashing has not started automatically, click the Start Flashing button below.");
-      }
-    }, SHOW_BTN_FALLBACK_MS);
-
-    // Redirect the dialog's internal logger so real flash messages appear in
-    // our log console (e.g. "Connecting", "Erasing", chunk-write confirmations).
-    // Guard with a property-existence check in case the API changed.
-    if ("logger" in dialog) {
-      dialog.logger = {
-        log:   (msg) => this._appendFlashLog("info", String(msg)),
-        error: (msg) => this._appendFlashLog("err",  String(msg)),
-        debug: (msg) => this._appendFlashLog("warn", `[dbg] ${String(msg)}`),
-      };
-    }
-
-    // Helper: read the current dialog state from multiple possible sources and
-    // normalise to uppercase so our MAP lookup works regardless of whether the
-    // library uses "DASHBOARD" or "dashboard" as enum values.
-    const readState = () => {
-      const raw = dialog.getAttribute("state") || dialog._state || dialog.state;
-      return raw ? String(raw).toUpperCase() : null;
-    };
-
-    // Shared state tracker – all three mechanisms (attribute observer, shadow-
-    // root observer, and poll) update the same variable so we never emit a
-    // duplicate log entry and always advance monotonically.
-    if (this._progressPollTimer) clearInterval(this._progressPollTimer);
-    let lastState          = null;
-    let lastPct            = null;
-    // Track esp-web-tools v10 _installState messages for 1:1 log output.
-    // In v10 the flash function communicates progress via state events stored
-    // in dialog._installState rather than a logger interface, so we poll it.
-    let lastInstallMessage = null;
-    let lastInstallState   = null;
-    const stallRef = { timer: null };  // wrapper object so handleState (declared first)
-                                        // can cancel the timer (declared below)
-
-    const handleState = (state) => {
-      if (!state || state === lastState) return;
-      lastState = state;
-      clearTimeout(stallRef.timer);  // state changed — no longer stalled
-      this._onDialogStateChanged(state);
-      // Auto-advance past states that require interaction with the popup
-      // dialog, which may be invisible inside the HA Dashboard.
-      // A short delay lets the shadow DOM re-render and enable the button
-      // before we try to click it.
-      const DIALOG_AUTO_ADVANCE_DELAY_MS = 300;
-      if ((state === "DASHBOARD" || state === "ASK_ERASE") && !_autoAdvanced) {
-        setTimeout(() => {
-          if (!_autoAdvanced) {
-            _autoAdvanced = this._tryAutoAdvanceDialog(dialog);
-            if (_autoAdvanced && this._showBtnFallbackTimer) {
-              clearTimeout(this._showBtnFallbackTimer);
-              this._showBtnFallbackTimer = null;
-            }
-          }
-        }, DIALOG_AUTO_ADVANCE_DELAY_MS);
-      }
-    };
-
-    // Primary: watch ALL attributes on the dialog element.  Removing the
-    // attributeFilter catches cases where the library uses a different
-    // attribute name or the attribute is added under an alias.
-    const attrObserver = new MutationObserver(() => {
-      handleState(readState());
-    });
-    attrObserver.observe(dialog, { attributes: true });
-    this._currentAttrObserver = attrObserver;
-
-    // Secondary: watch the dialog's shadow root for any Lit re-render.  Lit
-    // re-renders whenever *any* @state property changes – including _client
-    // being set when the device connects (which keeps _state at "DASHBOARD"
-    // and so never triggers the attribute observer alone).
-    // Use subtree:true to catch nested DOM updates, and retry if the shadow
-    // root is not yet available (element may be upgraded asynchronously).
-    // Also: scan for Install / Skip-Erase buttons on every re-render so that
-    // auto-advance works even when readState() cannot read the dialog state
-    // (e.g. when esp-web-tools changes its internal property names).
-    const attachShadowObserver = () => {
-      if (dialog.shadowRoot && !this._shadowDialogObserver) {
-        const shadowObs = new MutationObserver(() => {
-          handleState(readState());
-          if (!_autoAdvanced) {
-            _autoAdvanced = this._tryAutoAdvanceDialog(dialog);
-            if (_autoAdvanced && this._showBtnFallbackTimer) {
-              clearTimeout(this._showBtnFallbackTimer);
-              this._showBtnFallbackTimer = null;
-            }
-          }
-        });
-        shadowObs.observe(dialog.shadowRoot, { childList: true, subtree: true });
-        this._shadowDialogObserver = shadowObs;
-      }
-    };
-    attachShadowObserver();
-    // Retry after short delays in case the element is upgraded after append.
-    setTimeout(attachShadowObserver, 100);
-    setTimeout(attachShadowObserver, 500);
-
-    // Tertiary: poll every 300 ms as a belt-and-suspenders fallback, and
-    // separately track write-progress percentage which isn't reflected in
-    // the high-level state attribute.
-    this._progressPollTimer = setInterval(() => {
-      handleState(readState());
-
-      // Retry auto-advance on every poll tick while we haven't yet clicked an
-      // Install button.  This is necessary because the nested custom elements
-      // inside ewt-install-dialog (e.g. ewt-page-dashboard) render their own
-      // shadow roots asynchronously after dialog.shadowRoot is first populated;
-      // by the time the MutationObserver on dialog.shadowRoot fires, the inner
-      // shadow roots may not yet contain the Install buttons.  Polling here
-      // ensures we retry at 300 ms intervals until the buttons are visible.
-      if (!_autoAdvanced && this._currentDialog === dialog) {
-        const didAdvance = this._tryAutoAdvanceDialog(dialog);
-        if (didAdvance) {
-          _autoAdvanced = true;
-          if (this._showBtnFallbackTimer) {
-            clearTimeout(this._showBtnFallbackTimer);
-            this._showBtnFallbackTimer = null;
-          }
-        }
-      }
-
-      // Forward esp-web-tools v10 _installState messages to the log.
-      // In v10 the flash() function communicates progress via state events
-      // (stored in dialog._installState) rather than via a logger interface.
-      // Each state transition carries a human-readable .message string such
-      // as "Initializing...", "Initialized. Found ESP32", "Erasing device...",
-      // "Writing complete", "All done!", or an error description.  We mirror
-      // every *new* message to #flash-log so the user sees 1:1 raw output.
-      // Exception: skip repetitive mid-stream "Writing progress: X%"
-      // updates -- those are already visualised by the progress bar.
-      const installState = dialog._installState;
-      if (installState) {
-        const iMsg   = installState.message;
-        const iState = installState.state;
-
-        if (iMsg && iMsg !== lastInstallMessage) {
-          // Suppress repeated writing-progress lines; keep first entry and
-          // the final "Writing complete" / any non-"Writing progress:" msg.
-          const isRepeatWritingProgress =
-            iState === "writing" &&
-            lastInstallState === "writing" &&
-            typeof iMsg === "string" &&
-            iMsg.startsWith("Writing progress:");
-
-          if (!isRepeatWritingProgress) {
-            lastInstallMessage = iMsg;
-            const cls = iState === "error" ? "err"
-                      : iState === "finished" ? "ok"
-                      : "info";
-            this._appendFlashLog(cls, iMsg);
-          }
-        }
-        lastInstallState = iState;
-
-        // Any flash state change means the device is alive – cancel the stall
-        // guard so it cannot fire a false "no response" error mid-flash.
-        if (iState && iState !== "error" && stallRef.timer) {
-          clearTimeout(stallRef.timer);
-          stallRef.timer = null;
-        }
-
-        // During the WRITING phase show real byte-level percentage
-        if (iState === "writing" && installState.details) {
-          const pct = Math.round(installState.details.percentage);
-          if (pct !== lastPct) {
-            lastPct = pct;
-            this._updateFlashUI(
-              `Installing… ${pct}%`,
-              "",
-              "#2196f3",
-              pct,
-            );
-          }
-        }
-      }
-    }, 300);
-
-    // Read the initial state in case Lit has already rendered and set it
-    // before our observers were registered.
-    handleState(readState());
-
-    // Stall guard: if no meaningful state change occurs within STALL_MS, show
-    // an actionable error so the user knows something went wrong.  The timer is
-    // cancelled as soon as the state advances OR as soon as write progress is
-    // detected (see the progress-poll interval above).
-    // 3 min (180 s) gives enough headroom for the ~103 s flash write time at
-    // 115 200 baud plus device reset and erase overhead.
-    const STALL_MS = 180000;
-    // Minimum write-progress percentage that indicates the flash is genuinely
-    // under way.  5 % is well above the noise floor (0 % = no writes started)
-    // but low enough that the guard trips before the firmware write completes.
-    const STALL_MIN_PROGRESS_PCT = 5;
-    const stallMinStr = `${Math.round(STALL_MS / 60000)} min`;
-    stallRef.timer = setTimeout(() => {
-      this._dialogStallRef = null;
-      // Only fire if no state was detected AND no byte-level write progress
-      // was observed AND no _installState messages were received.
-      // This guards against readState() returning null throughout (API version
-      // mismatch) while the flash is actually running and being tracked via
-      // _installState (message forwarding or details.percentage).
-      if ((!lastState || lastState === "CONNECTING") && (lastPct === null || lastPct < STALL_MIN_PROGRESS_PCT) && !lastInstallMessage) {
-        this._appendFlashLog("err",
-          `⏱ No response from device after ${stallMinStr}. ` +
-          "The Web Serial API could not complete the programming handshake. " +
-          "Check the USB cable and confirm the correct COM port was selected. " +
-          "If the problem persists in the browser, use the esptool command-line method — " +
-          "it handles device reset automatically via DTR/RTS: " +
-          "python -m esptool write-flash 0x1000 flash_image.bin " +
-          "(add --port COM3 if esptool does not detect the port automatically). " +
-          "See the Manual Flash section below.");
-        this._updateFlashUI("⏱ Timed out — check USB cable/driver, or use esptool from the command line.", "err", "#f44336", 0);
-      }
-    }, STALL_MS);
-    // Keep a reference on the instance so the body-observer removedNodes handler
-    // can cancel this timer if the dialog is removed without firing "closed".
-    this._dialogStallRef = stallRef;
-
-    // Finalize when the dialog closes
-    dialog.addEventListener("closed", () => {
-      clearTimeout(stallRef.timer);
-      stallRef.timer = null;
-      this._dialogStallRef = null;
-      if (this._showBtnFallbackTimer) {
-        clearTimeout(this._showBtnFallbackTimer);
-        this._showBtnFallbackTimer = null;
-      }
-      attrObserver.disconnect();
-      this._currentAttrObserver = null;
-      if (this._shadowDialogObserver) {
-        this._shadowDialogObserver.disconnect();
-        this._shadowDialogObserver = null;
-      }
-      if (this._progressPollTimer) {
-        clearInterval(this._progressPollTimer);
-        this._progressPollTimer = null;
-      }
-      if (lastState === "ERROR") {
-        this._updateFlashUI("✗ Error — see the dialog for details.", "err", "#f44336", 0);
-        this._appendFlashLog("err", "Operation ended with an error.");
-      } else {
-        this._updateFlashUI("Flash session ended.", "ok", "#4caf50", 100);
-        this._appendFlashLog("ok", "Dialog closed.");
-      }
-    }, { once: true });
-  }
-
-  _onDialogStateChanged(state) {
-    // State values are normalised to uppercase by readState() in
-    // _onInstallDialogAdded, but keep the MAP in uppercase for clarity.
-    const MAP = {
-      DASHBOARD: { pct: 20,  label: "Device connected — starting installation…", cls: "info", color: "#4caf50" },
-      ASK_ERASE: { pct: 30,  label: "Checking flash state — skipping erase…",    cls: "info", color: "#2196f3" },
-      INSTALL:   { pct: 55,  label: "Installing firmware… (may take ~2 min)",      cls: "info", color: "#2196f3" },
-      PROVISION: { pct: 90,  label: "Configuring Wi-Fi…",                        cls: "info", color: "#2196f3" },
-      LOGS:      { pct: 100, label: "✓ Installation complete.",                  cls: "ok",   color: "#4caf50" },
-      ERROR:     { pct: 0,   label: "✗ Error — see dialog for details.",         cls: "err",  color: "#f44336" },
-    };
-    const info = MAP[state] || { pct: 10, label: `Status: ${state}`, cls: "info", color: "#2196f3" };
-    this._updateFlashUI(info.label, info.cls !== "info" ? info.cls : "", info.color, info.pct);
-    this._appendFlashLog(info.cls, info.label);
-
-    // Show the manual Start Flashing button when device is connected (DASHBOARD
-    // or ASK_ERASE) so the user has a visible fallback if auto-advance fails.
-    // Hide it as soon as actual flashing begins or the session ends.
-    const manualWrap = this.shadowRoot.querySelector("#flash-manual-btn-wrap");
-    if (manualWrap) {
-      const showBtn = state === "DASHBOARD" || state === "ASK_ERASE";
-      manualWrap.style.display = showBtn ? "block" : "none";
-      // Re-enable the button text in case it was disabled by a previous click.
-      const btn = manualWrap.querySelector("#flash-start-btn");
-      if (btn && showBtn) {
-        btn.disabled = false;
-        btn.textContent = "🚀 Start Flashing";
-      }
-    }
-  }
-
-  /**
-   * Scan the esp-web-tools dialog's shadow root for Install / Skip-Erase
-   * buttons and click the appropriate one automatically.  This is needed
-   * because in some HA Dashboard environments the popup may not be
-   * interactable, and because esp-web-tools v10 changed the button element
-   * types from mwc-button / <button> to ew-list-item[type="button"] and
-   * ew-text-button.
-   *
-   * Returns true when a button was found and clicked, false otherwise.
-   * The caller should set an "_autoAdvanced" guard so this is only invoked
-   * once per dialog session.
-   */
-  _tryAutoAdvanceDialog(dialog) {
-    const sr = dialog.shadowRoot;
-    if (!sr) return false;
-
-    // Helper: return the human-visible text of a button element.
-    // mwc-button stores its label in a `label` attribute; ew-list-item (used
-    // in esp-web-tools v10) stores its visible text in a slotted child with
-    // slot="headline".  Fall back to full textContent (which includes light-DOM
-    // children) so we catch both patterns without a hard dependency on the
-    // internal structure of any particular esp-web-tools version.
-    const getBtnText = b => {
-      // ew-list-item: prefer the explicit headline slot to avoid matching SVG
-      // icon text that may be light-DOM siblings of the headline div.
-      if (b.localName === "ew-list-item") {
-        const headline = b.querySelector('[slot="headline"]');
-        if (headline) return headline.textContent.trim();
-      }
-      return (b.textContent || b.getAttribute("label") || "").trim();
-    };
-
-    // esp-web-tools v10 uses ew-list-item[type="button"] for clickable menu
-    // entries (Install, Update, Logs & Console…) and ew-text-button for
-    // dialog action buttons (Next, Back, Close).  Earlier versions used
-    // mwc-button or plain <button>.  Include all of them so this works across
-    // library versions.
-    //
-    // IMPORTANT: use _queryAllShadow (not querySelectorAll) so that buttons
-    // nested inside child custom-element shadow roots — e.g. ew-list-item
-    // elements rendered inside ewt-page-dashboard.shadowRoot — are found.
-    // A plain querySelectorAll on dialog.shadowRoot only searches one level
-    // deep and misses anything behind an inner shadow boundary.
-    const allBtns = _queryAllShadow(sr,
-      "mwc-button, ewt-button, button, [role='button'], " +
-      "ew-list-item[type='button'], ew-text-button",
-    );
-
-    // --- ASK_ERASE state ---
-    // esp-web-tools ≤ v9: "Erase device" + "Skip"/"Continue without erasing".
-    // esp-web-tools v10: "Next" button (checkbox defaults to unchecked = no
-    // erase) + "Back" button.  Handle both patterns.
-    // We always skip erasing because the manifest writes a full partition
-    // image (table + NVS + firmware) at explicit offsets that already
-    // overwrites all relevant sectors.
-    const eraseBtn = allBtns.find(b => /\berase\b/i.test(getBtnText(b)));
-    const skipBtn  = allBtns.find(b => /\bskip\b|\bwithout eras/i.test(getBtnText(b)));
-    if (eraseBtn && skipBtn) {
-      this._appendFlashLog("info",
-        "Skipping erase — the full partition image overwrites all sectors automatically.");
-      this._updateFlashUI("Skipping erase — starting flash…", "", "#2196f3", 35);
-      skipBtn.click();
-      return true;
-    }
-    // v10 ASK_ERASE: "Next" button (proceed without erasing since checkbox is
-    // unchecked by default), only when there is also a "Back" button present
-    // so we do not accidentally click "Next" buttons in unrelated states.
-    const backBtn = allBtns.find(b => /\bback\b/i.test(getBtnText(b)));
-    const nextBtn = allBtns.find(b => /\bnext\b/i.test(getBtnText(b)));
-    if (backBtn && nextBtn) {
-      this._appendFlashLog("info",
-        "Confirming install (no erase) — proceeding automatically.");
-      this._updateFlashUI("Confirming install — starting flash…", "", "#2196f3", 35);
-      nextBtn.click();
-      return true;
-    }
-
-    // --- DASHBOARD state ---
-    // An Install / Update button is present and not disabled — device is
-    // connected and ready.  Click it to start the actual flash without
-    // requiring the user to interact with the popup dialog.
-    // Match both "Install X" and "Update X" (re-flash same firmware).
-    const installBtn = allBtns.find(b =>
-      /\binstall\b|\bupdate\b/i.test(getBtnText(b)) && !b.disabled);
-    if (installBtn) {
-      this._appendFlashLog("info",
-        "Device detected — triggering installation automatically (no popup interaction required).");
-      this._updateFlashUI("Device connected — starting flash…", "", "#4caf50", 22);
-      installBtn.click();
-      return true;
-    }
-
-    return false;
-  }
-
-  _updateFlashUI(label, cls, barColor, pct) {
-    const shadow = this.shadowRoot;
-    const statusText   = shadow.querySelector("#flash-status-text");
-    const progressFill = shadow.querySelector("#progress-bar-fill");
-    if (statusText) {
-      statusText.textContent = label;
-      statusText.className   = `flash-status-text${cls ? " " + cls : ""}`;
-    }
-    if (progressFill) {
-      progressFill.style.width      = `${pct}%`;
-      progressFill.style.background = barColor;
-    }
-  }
-
-  _appendFlashLog(cls, text) {
-    const shadow = this.shadowRoot;
-    const logEl = shadow.querySelector("#flash-log");
-    if (!logEl) return;
-    const ts = new Date().toLocaleTimeString();
-    const entry = document.createElement("div");
-    entry.className   = `log-entry ${cls}`;
-    entry.textContent = `[${ts}] ${text}`;
-    logEl.appendChild(entry);
-    logEl.scrollTop = logEl.scrollHeight;
-  }
 
   _appendOtaLog(cls, text) {
     const shadow = this.shadowRoot;
