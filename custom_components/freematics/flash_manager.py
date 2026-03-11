@@ -99,7 +99,8 @@ async def async_flash_wifi(
     """Upload firmware to the device via HTTP OTA.
 
     The device must be running a firmware with ENABLE_HTTPD=1 and an OTA
-    endpoint at /api/ota that accepts a multipart firmware upload.
+    endpoint at /api/ota that accepts a raw binary POST
+    (Content-Type: application/octet-stream).
 
     Returns (success, message, log_lines) where log_lines is a list of
     timestamped log entries suitable for display in the UI log panel.
@@ -156,15 +157,18 @@ async def async_flash_wifi(
     t_start = time.monotonic()
     try:
         async with aiohttp.ClientSession() as session:
-            form = aiohttp.FormData()
-            form.add_field(
-                "firmware",
-                firmware_data,
-                filename="telelogger.bin",
-                content_type="application/octet-stream",
-            )
-            _log("info", "Uploading firmware (multipart POST)…")
-            async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=240)) as resp:
+            # Send the firmware as a raw binary body (Content-Type:
+            # application/octet-stream).  The device-side OTA handler reads
+            # the Content-Length header to know the total size, writes the
+            # first chunk from the httpd buffer, then streams the rest directly
+            # from the socket – no multipart parsing needed.
+            _log("info", "Uploading firmware (raw binary POST)…")
+            async with session.post(
+                url,
+                data=firmware_data,
+                headers={"Content-Type": "application/octet-stream"},
+                timeout=aiohttp.ClientTimeout(total=240),
+            ) as resp:
                 try:
                     text = await resp.text()
                 except aiohttp.ClientPayloadError:
