@@ -40,11 +40,14 @@
       },
       "advanced": {
         "title": "Freematics ONE+ – Betriebsmodus",
-        "description": "Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll. Dies bestimmt, welche Firmware-Funktionen aktiviert sind.\n\n**Telelogger** *(empfohlen für Home-Assistant-Nutzer)*: Sendet Telemetriedaten per Webhook an HA. HTTPD und BLE *deaktiviert* lassen, um ~104 KB Heap für die TLS-Verbindung freizugeben – das verhindert den `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)`-Fehler.\n\n**Datalogger**: Aktiviert den internen HTTP-Server (HTTPD) auf Port 80 mit den Endpunkten `/api/live`, `/api/info` usw. für den lokalen Netzwerkzugriff. Sinnvoll ohne Home Assistant oder zusammen mit einem lokalen Dashboard.\n\n**BLE** ist unabhängig von beiden Modi. Aktivieren Sie es nur, wenn Sie die Freematics Controller App über Bluetooth verwenden.\n\n**Mobilfunk-Debug-Protokollierung**: Aktivieren, um ausführliche Mobilfunk-Diagnosemeldungen (TX-Vorschau, Hex-Dump, AT+CCHSTATUS? und Eingangs-Benachrichtigungen) auf der seriellen Konsole auszugeben. Nur zur Fehlersuche verwenden; im Normalbetrieb deaktiviert lassen.\n\n**Intervalle**: Auf `0` lassen, um die Firmware-Standards beizubehalten (~1000 ms / 120 s).",
+        "description": "Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll. Dies bestimmt, welche Firmware-Funktionen aktiviert sind.\n\n**Telelogger** *(empfohlen für Home-Assistant-Nutzer)*: Sendet Telemetriedaten per Webhook an HA. HTTPD und BLE *deaktiviert* lassen, um ~104 KB Heap für die TLS-Verbindung freizugeben – das verhindert den `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)`-Fehler.\n\n**Datalogger**: Aktiviert den internen HTTP-Server (HTTPD) auf Port 80 mit den Endpunkten `/api/live`, `/api/info` usw. für den lokalen Netzwerkzugriff. Sinnvoll ohne Home Assistant oder zusammen mit einem lokalen Dashboard.\n\n**BLE** ist unabhängig von beiden Modi. Aktivieren Sie es nur, wenn Sie die Freematics Controller App über Bluetooth verwenden.\n\n**Mobilfunk-Debug-Protokollierung**: Aktivieren, um ausführliche Mobilfunk-Diagnosemeldungen (TX-Vorschau, Hex-Dump, AT+CCHSTATUS? und Eingangs-Benachrichtigungen) auf der seriellen Konsole auszugeben. Nur zur Fehlersuche verwenden; im Normalbetrieb deaktiviert lassen.\n\n**LED-Einstellungen**: Die rote/Power-LED leuchtet, solange das Gerät eingeschaltet oder im Standby ist. Die weiße/Netzwerk-LED blinkt kurz bei jeder Datenübertragung per WLAN oder Mobilfunk. Beide können unabhängig deaktiviert werden, um Licht im Fahrzeuginneren zu reduzieren.\n\n**Piepton**: Der Summer gibt bei jeder erfolgreichen WLAN- oder Mobilfunkverbindung einen kurzen Ton aus. Deaktivieren, um störende Geräusche im Fahrzeug zu unterdrücken.\n\n**Intervalle**: Auf `0` lassen, um die Firmware-Standards beizubehalten (~1000 ms / 120 s).",
         "data": {
           "operating_mode": "Betriebsmodus",
           "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
           "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
+          "led_red_en": "Rote/Power-LED aktivieren (leuchtet wenn Gerät an oder im Standby)",
+          "led_white_en": "Weiße/Netzwerk-LED aktivieren (blinkt bei WLAN/Mobilfunk-Datenübertragung)",
+          "beep_en": "Verbindungs-Piepton aktivieren (kurzer Signalton bei WLAN/Mobilfunk-Verbindung)",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard ~1000)",
           "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard 120)"
         }
@@ -78,6 +81,9 @@
           "operating_mode": "Betriebsmodus",
           "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
           "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
+          "led_red_en": "Rote/Power-LED aktivieren (leuchtet wenn Gerät an oder im Standby)",
+          "led_white_en": "Weiße/Netzwerk-LED aktivieren (blinkt bei WLAN/Mobilfunk-Datenübertragung)",
+          "beep_en": "Verbindungs-Piepton aktivieren (kurzer Signalton bei WLAN/Mobilfunk-Verbindung)",
           "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard)",
           "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard)",
           "device_ip": "Geräte-IP-Adresse",

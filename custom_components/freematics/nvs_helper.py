@@ -174,6 +174,9 @@ def generate_nvs_partition(
     cell_server_port: int = 443,
     cell_webhook_path: str = "",
     cell_debug: bool = False,
+    led_red_en: bool = True,
+    led_white_en: bool = True,
+    beep_en: bool = True,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -198,6 +201,15 @@ def generate_nvs_partition(
             enables verbose cellular diagnostic logging at runtime (TX-Preview,
             hex-dump, AT+CCHSTATUS? and per-packet "Incoming data" lines).
             Off by default; safe to toggle without reflashing the firmware.
+        led_red_en: When True (default), the red/power LED lights up while the
+            device is powered on or in standby.  Set to False to disable the
+            red LED entirely (LED_RED_EN=0 written to NVS).
+        led_white_en: When True (default), the white/network LED lights up
+            during each data-transmission burst over WiFi or cellular.  Set to
+            False to disable the network-activity LED (LED_WHITE_EN=0 in NVS).
+        beep_en: When True (default), the buzzer emits a short beep on each
+            successful WiFi or cellular connection.  Set to False to suppress
+            the connection beep (BEEP_EN=0 written to NVS).
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -264,6 +276,15 @@ def generate_nvs_partition(
     # when the firmware was built without -DNET_DEBUG (i.e. release builds where
     # those log lines are behind the cellNetDebug runtime flag).
     _add_u8("CELL_DEBUG", 1 if cell_debug else 0)
+    # LED behaviour control.  1 = enabled (default); 0 = disabled.
+    # LED_RED_EN  – red/power LED that lights up in standby/power-on state.
+    # LED_WHITE_EN – white/network LED that flashes during data transmission.
+    # Both default to 1 so un-provisioned devices keep the original behaviour.
+    _add_u8("LED_RED_EN", 1 if led_red_en else 0)
+    _add_u8("LED_WHITE_EN", 1 if led_white_en else 0)
+    # Beep/buzzer on connection.  1 = enabled (default); 0 = silent.
+    # When disabled the buzzer is suppressed on WiFi and cellular connect events.
+    _add_u8("BEEP_EN", 1 if beep_en else 0)
     # Optional data-interval override (ms).  0 = firmware compile-time default.
     if data_interval_ms and data_interval_ms >= 500:
         _add_u16("DATA_INTERVAL", data_interval_ms)

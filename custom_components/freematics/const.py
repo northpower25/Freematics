@@ -59,6 +59,21 @@ CONF_SYNC_INTERVAL_S = "sync_interval_s"
 # to keep production serial output clean.
 CONF_CELL_DEBUG = "cell_debug"
 
+# LED behaviour control (maps to LED_RED_EN / LED_WHITE_EN NVS keys, u8 0/1).
+# LED_RED_EN  – red/power LED: lights up while the device is powered on or in
+#               standby (i.e. not actively transmitting).  Default: enabled (1).
+# LED_WHITE_EN – white/network LED: lights up during each data-transmission burst
+#                over WiFi or cellular.  Default: enabled (1).
+# Both can be disabled independently via the config/options flow to reduce
+# light pollution in the vehicle cabin.
+CONF_LED_RED_EN = "led_red_en"
+CONF_LED_WHITE_EN = "led_white_en"
+
+# Beep/buzzer control (maps to BEEP_EN NVS key, u8 0/1).
+# When enabled (default) the device emits a short beep on each successful
+# WiFi or cellular connection.  Disable to suppress in-cabin noise.
+CONF_BEEP_EN = "beep_en"
+
 # Device model identifiers (Freematics ONE+ variants)
 CONF_DEVICE_MODEL = "device_model"
 DEVICE_MODEL_A = "model_a"   # Model A: WiFi + Bluetooth (no cellular)

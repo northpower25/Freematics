@@ -141,6 +141,13 @@ uint16_t lastSizeKB = 0;
 
 byte ledMode = 0;
 
+// Runtime LED / buzzer enable flags.  All default to true (on) so that
+// un-provisioned devices preserve the original hardware behaviour.
+// Set via NVS keys LED_RED_EN, LED_WHITE_EN, and BEEP_EN (u8, 0=off 1=on).
+bool enableLedRed = true;    // red/power LED: lights up in standby / power-on state
+bool enableLedWhite = true;  // white/network LED: lights up during data transmission
+bool enableBeep = true;      // connection beep: short buzz on WiFi/cellular connect
+
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
 void processMEMS(CBuffer* buffer);
@@ -1055,7 +1062,7 @@ void telemetry(void* inst)
           connErrors = 0;
           if (teleClient.connect()) {
             state.set(STATE_WIFI_CONNECTED | STATE_NET_READY);
-            beep(50);
+            if (enableBeep) beep(50);
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
               teleClient.cell.end();
@@ -1094,7 +1101,7 @@ void telemetry(void* inst)
         }
         Serial.println("[CELL] In service");
         state.set(STATE_NET_READY);
-        beep(50);
+        if (enableBeep) beep(50);
       }
 
       if (millis() - lastRssiTime > SIGNAL_CHECK_INTERVAL * 1000) {
@@ -1140,7 +1147,7 @@ void telemetry(void* inst)
 
       // start transmission
 #ifdef PIN_LED
-      if (ledMode == 0) digitalWrite(PIN_LED, HIGH);
+      if (enableLedWhite) digitalWrite(PIN_LED, HIGH);
 #endif
 
       if (teleClient.transmit(store.buffer(), store.length())) {
@@ -1157,7 +1164,7 @@ void telemetry(void* inst)
         }
       }
 #ifdef PIN_LED
-      if (ledMode == 0) digitalWrite(PIN_LED, LOW);
+      if (enableLedWhite) digitalWrite(PIN_LED, LOW);
 #endif
       store.purge();
 
@@ -1422,6 +1429,26 @@ void loadConfig()
     cellNetDebug = nvsCellDebug;
   }
 
+  // LED and buzzer behaviour overrides written by the HA config/options flow.
+  // All default to 1 (enabled) when the NVS key is absent so un-provisioned
+  // devices keep the original out-of-box behaviour.
+  //
+  // LED_RED_EN  – red/power LED (standby / power-on indicator)
+  // LED_WHITE_EN – white/network LED (data-transmission indicator)
+  // BEEP_EN     – short buzzer beep on each WiFi/cellular connect event
+  uint8_t nvsLedRedEn = 1;
+  if (nvs_get_u8(nvs, "LED_RED_EN", &nvsLedRedEn) == ESP_OK) {
+    enableLedRed = nvsLedRedEn != 0;
+  }
+  uint8_t nvsLedWhiteEn = 1;
+  if (nvs_get_u8(nvs, "LED_WHITE_EN", &nvsLedWhiteEn) == ESP_OK) {
+    enableLedWhite = nvsLedWhiteEn != 0;
+  }
+  uint8_t nvsBeepEn = 1;
+  if (nvs_get_u8(nvs, "BEEP_EN", &nvsBeepEn) == ESP_OK) {
+    enableBeep = nvsBeepEn != 0;
+  }
+
   // Optional data-interval override (milliseconds). Minimum 500 ms to avoid
   // flooding the server or the SD card.  0 / missing = keep compile-time default.
   uint16_t nvsDataInterval = 0;
@@ -1630,7 +1657,7 @@ void setup()
   // init LED pin
 #ifdef PIN_LED
   pinMode(PIN_LED, OUTPUT);
-  if (ledMode == 0) digitalWrite(PIN_LED, HIGH);
+  if (enableLedRed) digitalWrite(PIN_LED, HIGH);
 #endif
 
   // generate unique device ID
@@ -1743,7 +1770,7 @@ void loop()
   if (!state.check(STATE_WORKING)) {
     standby();
 #ifdef PIN_LED
-    if (ledMode == 0) digitalWrite(PIN_LED, HIGH);
+    if (enableLedRed) digitalWrite(PIN_LED, HIGH);
 #endif
     initialize();
 #ifdef PIN_LED

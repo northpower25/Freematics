@@ -60,10 +60,13 @@ from homeassistant.components.http import HomeAssistantView
 from .const import (
     CONF_CELL_APN,
     CONF_CELL_DEBUG,
+    CONF_BEEP_EN,
     CONF_CLOUD_HOOK_URL,
     CONF_DATA_INTERVAL_MS,
     CONF_ENABLE_BLE,
     CONF_ENABLE_HTTPD,
+    CONF_LED_RED_EN,
+    CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
@@ -1218,6 +1221,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     webhook_id = cfg.get(CONF_WEBHOOK_ID, "")
     enable_ble = bool(cfg.get(CONF_ENABLE_BLE, False))
     cell_debug = bool(cfg.get(CONF_CELL_DEBUG, False))
+    led_red_en = bool(cfg.get(CONF_LED_RED_EN, True))
+    led_white_en = bool(cfg.get(CONF_LED_WHITE_EN, True))
+    beep_en = bool(cfg.get(CONF_BEEP_EN, True))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
 
@@ -1423,6 +1429,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "enable_httpd": enable_httpd,
         "enable_ble": enable_ble,
         "cell_debug": cell_debug,
+        "led_red_en": led_red_en,
+        "led_white_en": led_white_en,
+        "beep_en": beep_en,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
     }
