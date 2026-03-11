@@ -61,6 +61,9 @@ int handlerLiveData(UrlHandlerParam* param);
 
 extern nvs_handle_t nvs;
 extern void loadConfig();
+// Set to true while an OTA flash is in progress so the telemetry task yields
+// the WiFi radio to the upload (defined in telelogger.ino).
+extern volatile bool s_ota_active;
 
 uint16_t hex2uint16(const char *p);
 
@@ -361,6 +364,12 @@ int handlerControl(UrlHandlerParam* param)
 // After a successful flash the device reboots via a one-shot esp_timer so the
 // HTTP 200 response reaches the client before the reset.
 // ---------------------------------------------------------------------------
+
+// Size of the heap-allocated receive buffer used inside handlerOTA.
+// Kept on the heap (not the stack) so the deep httpd call chain does not
+// overflow the ESP32 main-loop task stack.
+#define OTA_RECV_BUF_SIZE 4096
+
 static void ota_restart_cb(void*) {
     esp_restart();
 }
@@ -413,16 +422,31 @@ int handlerOTA(UrlHandlerParam* param) {
         written = w;
     }
 
+    // Signal the telemetry task to pause WiFi I/O for the duration of the
+    // upload so it does not compete for bandwidth or trigger a WiFi reconnect
+    // that would reset the HTTP socket mid-transfer.
+    s_ota_active = true;
+
     // Stream the remaining bytes directly from the socket to flash.
     // The socket is set non-blocking by the httpd (O_NONBLOCK), so we must
     // use select() before each recv() to wait for data without spinning.
-    // Use a larger buffer (4 KB instead of 512 B) for better throughput.
-    uint8_t recv_buf[4096];
+    // Allocate the receive buffer on the heap (not the stack) to avoid a
+    // stack-overflow when this handler is called from deep in the httpd
+    // call chain.
+    uint8_t* recv_buf = (uint8_t*)malloc(OTA_RECV_BUF_SIZE);
+    if (!recv_buf) {
+        Update.abort();
+        s_ota_active = false;
+        param->contentLength = snprintf(buf, bufsize,
+            "ERR: out of memory for recv buffer");
+        param->contentType = HTTPFILETYPE_TEXT;
+        return FLAG_DATA_RAW;
+    }
+
     int sock = param->hs->socket;
     while (written < fw_size) {
         size_t remaining = fw_size - written;
-        int to_read = (int)(remaining < sizeof(recv_buf)
-                            ? remaining : sizeof(recv_buf));
+        int to_read = (int)(remaining < OTA_RECV_BUF_SIZE ? remaining : OTA_RECV_BUF_SIZE);
         // Wait up to 30 s for the next data chunk.  For a local-network WiFi
         // connection this should be reached in milliseconds; the generous
         // timeout guards against brief network pauses.
@@ -434,6 +458,8 @@ int handlerOTA(UrlHandlerParam* param) {
         tv.tv_usec = 0;
         if (select(sock + 1, &rfds, NULL, NULL, &tv) <= 0) {
             Update.abort();
+            free(recv_buf);
+            s_ota_active = false;
             param->contentLength = snprintf(buf, bufsize,
                 "ERR: recv timeout at offset %u (remaining %u)",
                 (unsigned)written, (unsigned)remaining);
@@ -443,6 +469,8 @@ int handlerOTA(UrlHandlerParam* param) {
         int n = recv(sock, recv_buf, to_read, 0);
         if (n <= 0) {
             Update.abort();
+            free(recv_buf);
+            s_ota_active = false;
             param->contentLength = snprintf(buf, bufsize,
                 "ERR: recv failed at offset %u (remaining %u)",
                 (unsigned)written, (unsigned)remaining);
@@ -452,6 +480,8 @@ int handlerOTA(UrlHandlerParam* param) {
         size_t w = Update.write(recv_buf, (size_t)n);
         if (w != (size_t)n) {
             Update.abort();
+            free(recv_buf);
+            s_ota_active = false;
             param->contentLength = snprintf(buf, bufsize,
                 "ERR: flash write error at offset %u", (unsigned)written);
             param->contentType = HTTPFILETYPE_TEXT;
@@ -459,6 +489,8 @@ int handlerOTA(UrlHandlerParam* param) {
         }
         written += (size_t)n;
     }
+
+    free(recv_buf);
 
     // -----------------------------------------------------------------------
     // Phase 1 complete: all bytes received.  Verify the byte count before
@@ -470,6 +502,7 @@ int handlerOTA(UrlHandlerParam* param) {
     if (written != fw_size) {
         // Should never happen given the loop condition, but guard defensively.
         Update.abort();
+        s_ota_active = false;
         param->contentLength = snprintf(buf, bufsize,
             "ERR: upload incomplete (%u/%u bytes)",
             (unsigned)written, (unsigned)fw_size);
@@ -483,6 +516,7 @@ int handlerOTA(UrlHandlerParam* param) {
     // -----------------------------------------------------------------------
     Serial.println("[OTA] Validating and committing flash…");
     if (!Update.end()) {
+        s_ota_active = false;
         param->contentLength = snprintf(buf, bufsize,
             "ERR: Update.end failed: %s", Update.errorString());
         param->contentType = HTTPFILETYPE_TEXT;
@@ -493,6 +527,7 @@ int handlerOTA(UrlHandlerParam* param) {
 
     // Schedule a reboot 1.5 s from now so the HTTP 200 response is sent and
     // acknowledged by the client before the TCP connection drops.
+    // s_ota_active is intentionally left true – the device reboots anyway.
     static esp_timer_handle_t s_ota_timer = NULL;
     if (!s_ota_timer) {
         esp_timer_create_args_t args = {};

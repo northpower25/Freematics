@@ -148,6 +148,10 @@ bool enableLedRed = true;    // red/power LED: lights up in standby / power-on s
 bool enableLedWhite = true;  // white/network LED: lights up during data transmission
 bool enableBeep = true;      // connection beep: short buzz on WiFi/cellular connect
 
+// Set to true by handlerOTA while an OTA flash is in progress.
+// The telemetry task checks this flag and yields the WiFi to the OTA upload.
+volatile bool s_ota_active = false;
+
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
 void processMEMS(CBuffer* buffer);
@@ -998,6 +1002,14 @@ void telemetry(void* inst)
   teleClient.reset();
 
   for (;;) {
+    // Yield the WiFi radio to the OTA flash handler while it is active.
+    // Without this, the telemetry task competes for bandwidth and can cause
+    // WiFi reconnects that disrupt the HTTP connection used for the upload.
+    if (s_ota_active) {
+      delay(500);
+      continue;
+    }
+
     if (state.check(STATE_STANDBY)) {
       if (state.check(STATE_CELL_CONNECTED) || state.check(STATE_WIFI_CONNECTED)) {
         teleClient.shutdown();
