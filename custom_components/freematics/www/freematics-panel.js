@@ -12,7 +12,37 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.16.1";
+const PANEL_VERSION = "1.17.0";
+
+/* -------------------------------------------------------------------------
+ * Shadow-DOM helper
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Recursively query a CSS selector across shadow DOM boundaries.
+ *
+ * `querySelectorAll` does NOT pierce shadow roots, so elements nested inside
+ * custom-element shadow roots (e.g. ewt-page-dashboard inside
+ * ewt-install-dialog) are invisible to a plain `sr.querySelectorAll(sel)`.
+ * This helper walks every shadow root reachable from `root` and collects all
+ * matching elements.
+ *
+ * @param {ShadowRoot|Element} root - Starting DOM root to search from.
+ * @param {string} selector         - CSS selector to match.
+ * @returns {Element[]}
+ */
+function _queryAllShadow(root, selector) {
+  const found = [...root.querySelectorAll(selector)];
+  for (const el of root.querySelectorAll("*")) {
+    if (el.shadowRoot) {
+      found.push(..._queryAllShadow(el.shadowRoot, selector));
+    }
+  }
+  return found;
+}
+
+/** Default (unauthenticated) esp-web-tools manifest served by this integration. */
+const DEFAULT_MANIFEST_URL = "/api/freematics/manifest.json";
 
 /* -------------------------------------------------------------------------
  * Styles
@@ -1128,7 +1158,7 @@ class FreematicsPanel extends HTMLElement {
     try {
       const result = await this._hass.callApi("GET", "freematics/provisioning_token");
       if (result && result.token) {
-        this._provisioningManifestUrl = result.manifest_url || "/api/freematics/manifest.json";
+        this._provisioningManifestUrl = result.manifest_url || DEFAULT_MANIFEST_URL;
 
         // Combined single-file flash image (PT + NVS + firmware, offset 0x8000)
         const flashImageUrl = result.flash_image_url ||
@@ -1216,7 +1246,7 @@ class FreematicsPanel extends HTMLElement {
   _insertInstallButton(container) {
     // Use personalized manifest URL (with NVS settings) if available,
     // otherwise fall back to the basic manifest (firmware only).
-    const manifestUrl = this._provisioningManifestUrl || "/api/freematics/manifest.json";
+    const manifestUrl = this._provisioningManifestUrl || DEFAULT_MANIFEST_URL;
     container.innerHTML = `
       <esp-web-install-button manifest="${manifestUrl}">
         <button slot="activate" style="
@@ -1323,11 +1353,19 @@ class FreematicsPanel extends HTMLElement {
               "Please wait for it to finish connecting, or check your USB cable and COM port selection. " +
               "If needed, click Connect & Flash Firmware to try again.");
           } else {
+            // Device is connected (DASHBOARD / other state) but the Install
+            // button could not be found inside the popup dialog — this usually
+            // means the ewt-install-dialog is visible to the user but the
+            // auto-click logic cannot reach its shadow-DOM internals from inside
+            // the HA Dashboard iframe / shadow root.  Open the standalone
+            // flasher page in a new browser tab where esp-web-tools runs in a
+            // native top-level context and the dialog is fully interactive.
+            const manifestUrl = this._provisioningManifestUrl || DEFAULT_MANIFEST_URL;
+            const flasherUrl = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}`;
             this._appendFlashLog("warn",
               "⚠ Could not auto-click the Install button. " +
-              "Please interact with the flash dialog directly (click Install), " +
-              "or use the 'Open flasher in a new browser tab ↗' link above to flash " +
-              "in a standalone page where the dialog is fully interactive.");
+              "Opening the standalone flasher in a new browser tab…");
+            window.open(flasherUrl, "_blank", "noopener");
           }
         }
       });
@@ -1547,6 +1585,24 @@ class FreematicsPanel extends HTMLElement {
     this._progressPollTimer = setInterval(() => {
       handleState(readState());
 
+      // Retry auto-advance on every poll tick while we haven't yet clicked an
+      // Install button.  This is necessary because the nested custom elements
+      // inside ewt-install-dialog (e.g. ewt-page-dashboard) render their own
+      // shadow roots asynchronously after dialog.shadowRoot is first populated;
+      // by the time the MutationObserver on dialog.shadowRoot fires, the inner
+      // shadow roots may not yet contain the Install buttons.  Polling here
+      // ensures we retry at 300 ms intervals until the buttons are visible.
+      if (!_autoAdvanced && this._currentDialog === dialog) {
+        const didAdvance = this._tryAutoAdvanceDialog(dialog);
+        if (didAdvance) {
+          _autoAdvanced = true;
+          if (this._showBtnFallbackTimer) {
+            clearTimeout(this._showBtnFallbackTimer);
+            this._showBtnFallbackTimer = null;
+          }
+        }
+      }
+
       // Forward esp-web-tools v10 _installState messages to the log.
       // In v10 the flash() function communicates progress via state events
       // (stored in dialog._installState) rather than via a logger interface.
@@ -1740,10 +1796,16 @@ class FreematicsPanel extends HTMLElement {
     // dialog action buttons (Next, Back, Close).  Earlier versions used
     // mwc-button or plain <button>.  Include all of them so this works across
     // library versions.
-    const allBtns = [...sr.querySelectorAll(
+    //
+    // IMPORTANT: use _queryAllShadow (not querySelectorAll) so that buttons
+    // nested inside child custom-element shadow roots — e.g. ew-list-item
+    // elements rendered inside ewt-page-dashboard.shadowRoot — are found.
+    // A plain querySelectorAll on dialog.shadowRoot only searches one level
+    // deep and misses anything behind an inner shadow boundary.
+    const allBtns = _queryAllShadow(sr,
       "mwc-button, ewt-button, button, [role='button'], " +
       "ew-list-item[type='button'], ew-text-button",
-    )];
+    );
 
     // --- ASK_ERASE state ---
     // esp-web-tools ≤ v9: "Erase device" + "Skip"/"Continue without erasing".
