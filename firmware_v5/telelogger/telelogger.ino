@@ -1115,6 +1115,14 @@ void telemetry(void* inst)
 #endif
 
     while (state.check(STATE_WORKING)) {
+      // Break out immediately when OTA or a standby request is pending so
+      // the outer loop can process the flag and shut down SSL connections
+      // before Update.begin() is called.  Without this check the inner loop
+      // keeps transmitting packets (and holding SSL heap) even after
+      // cmd=OFF / s_ota_active is set, which exhausts available heap and
+      // triggers abort() during Update.begin().
+      if (s_ota_active || s_http_standby_enter) break;
+
 #if ENABLE_WIFI
       if (wifiSSID[0]) {
         if (!state.check(STATE_WIFI_CONNECTED) && teleClient.wifi.connected()) {
