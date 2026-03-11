@@ -372,8 +372,8 @@ int handlerOTA(UrlHandlerParam* param) {
     // The httpd caps param->payloadSize at MAX_POST_PAYLOAD_SIZE (4 KB) before
     // calling this handler.  Read the true Content-Length from the raw HTTP
     // request headers so we know how many bytes to expect in total.
-    const char* cl = strstr(param->hs->buffer, "Content-Length:");
-    if (!cl) cl = strstr(param->hs->buffer, "content-length:");
+    // strcasestr handles all capitalisation variants per RFC 7230.
+    const char* cl = strcasestr(param->hs->buffer, "Content-Length:");
     size_t fw_size = 0;
     if (cl) {
         cl += 15;
@@ -414,7 +414,8 @@ int handlerOTA(UrlHandlerParam* param) {
     }
 
     // Stream the remaining bytes directly from the socket to flash.
-    static uint8_t recv_buf[512];
+    // Use a local buffer (not static) so concurrent calls don't share state.
+    uint8_t recv_buf[512];
     int sock = param->hs->socket;
     while (written < fw_size) {
         size_t remaining = fw_size - written;
@@ -458,6 +459,10 @@ int handlerOTA(UrlHandlerParam* param) {
         args.dispatch_method  = ESP_TIMER_TASK;
         args.name             = "ota_restart";
         esp_timer_create(&args, &s_ota_timer);
+    } else {
+        // Stop any previously armed timer (e.g., a second OTA completed before
+        // the first reboot fired) before re-arming.
+        esp_timer_stop(s_ota_timer);
     }
     esp_timer_start_once(s_ota_timer, 1500000); // 1.5 s in microseconds
 
