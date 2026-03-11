@@ -167,8 +167,22 @@ async def async_flash_wifi(
                 url,
                 data=firmware_data,
                 headers={"Content-Type": "application/octet-stream"},
-                timeout=aiohttp.ClientTimeout(total=240),
+                # No hard total timeout so slow WiFi connections don't time out
+                # mid-upload; rely on a per-read timeout instead so a stalled
+                # server is still detected.
+                timeout=aiohttp.ClientTimeout(total=None, sock_read=600),
             ) as resp:
+                # By the time this block is entered, the device has received
+                # all firmware bytes, verified the byte count, validated the
+                # image (MD5) and committed the OTA partition.  The response
+                # headers are now available; we still need to read the body
+                # to get the device's final confirmation ("OK" or an error).
+                upload_elapsed = time.monotonic() - t_start
+                _log(
+                    "info",
+                    f"Firmware upload complete ({upload_elapsed:.1f} s) —"
+                    f" reading device flash confirmation…",
+                )
                 try:
                     text = await resp.text()
                 except aiohttp.ClientPayloadError:
@@ -187,9 +201,17 @@ async def async_flash_wifi(
                     return False, msg, log
                 elapsed = time.monotonic() - t_start
                 if resp.status == 200:
+                    body = text.strip()
+                    # The device-side handler writes "OK" on success or a message
+                    # starting with "ERR:" on failure.  Both return HTTP 200 so we
+                    # must inspect the body to know whether the flash succeeded.
+                    if body.startswith("ERR:"):
+                        _log("error", f"OTA handler error after {elapsed:.1f} s: {body}")
+                        msg = f"OTA failed: {body}"
+                        return False, msg, log
                     _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
-                    _log("ok", f"Device response: {text.strip()}")
-                    msg = f"OTA flash successful ({elapsed:.1f} s): {text.strip()}"
+                    _log("ok", f"Device response: {body}")
+                    msg = f"OTA flash successful ({elapsed:.1f} s): {body}"
                     return True, msg, log
                 _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — device response: {text.strip()}")
                 msg = f"OTA failed, HTTP {resp.status}: {text.strip()}"
@@ -210,7 +232,7 @@ async def async_flash_wifi(
         return False, detail, log
     except asyncio.TimeoutError:
         elapsed = time.monotonic() - t_start
-        msg = f"OTA flash timed out after {elapsed:.1f} s (limit 240 s)."
+        msg = f"OTA flash timed out after {elapsed:.1f} s."
         _log("error", msg)
         return False, msg, log
     except Exception as exc:  # noqa: BLE001
