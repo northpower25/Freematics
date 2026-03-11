@@ -165,7 +165,22 @@ async def async_flash_wifi(
             )
             _log("info", "Uploading firmware (multipart POST)…")
             async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=240)) as resp:
-                text = await resp.text()
+                try:
+                    text = await resp.text()
+                except aiohttp.ClientPayloadError:
+                    # The device reboots immediately after a successful OTA flash,
+                    # which closes the TCP connection before the HTTP response body
+                    # is fully sent.  Treat an incomplete response as success when
+                    # the status was 200.
+                    elapsed = time.monotonic() - t_start
+                    if resp.status == 200:
+                        _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
+                        _log("ok", "Device rebooted after flashing (response truncated — expected).")
+                        msg = f"OTA flash successful ({elapsed:.1f} s): device rebooted."
+                        return True, msg, log
+                    _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — response payload incomplete")
+                    msg = f"OTA failed, HTTP {resp.status}: response payload incomplete"
+                    return False, msg, log
                 elapsed = time.monotonic() - t_start
                 if resp.status == 200:
                     _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
