@@ -226,7 +226,7 @@ async def async_flash_wifi(
                 except asyncio.CancelledError:
                     pass
 
-            progress_task: asyncio.Task = asyncio.ensure_future(_progress_logger())
+            progress_task = asyncio.create_task(_progress_logger())
             try:
                 async with session.post(
                     url,
@@ -325,7 +325,7 @@ async def async_flash_wifi(
         # Provide an actionable hint when the device resets the connection.
         # This typically happens because the device's telemetry task is still
         # making SSL connections during the upload, exhausting the ESP32 heap.
-        if "104" in exc_str or "connection reset" in exc_str.lower() or "reset by peer" in exc_str.lower():
+        if isinstance(exc, ConnectionResetError) or "[Errno 104]" in exc_str:
             _log(
                 "error",
                 "The device reset the TCP connection mid-upload. "
