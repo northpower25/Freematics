@@ -49,12 +49,18 @@ jobs:
              custom_components/freematics/firmware/telelogger.bin
           echo "Firmware binary size: $(wc -c < custom_components/freematics/firmware/telelogger.bin) bytes"
 
-      - name: Commit updated firmware binary
+      - name: Copy bootloader binary
+        run: |
+          cp firmware_v5/telelogger/.pio/build/esp32dev/bootloader.bin \
+             custom_components/freematics/firmware/bootloader.bin
+          echo "Bootloader binary size: $(wc -c < custom_components/freematics/firmware/bootloader.bin) bytes"
+
+      - name: Commit updated firmware binaries
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           # [skip ci] prevents this auto-commit from re-triggering the workflow.
           # Manual changes to workflow files still trigger a fresh build as expected.
-          commit_message: "chore: rebuild telelogger.bin from source [skip ci]"
-          file_pattern: "custom_components/freematics/firmware/telelogger.bin"
+          commit_message: "chore: rebuild telelogger.bin and bootloader.bin from source [skip ci]"
+          file_pattern: "custom_components/freematics/firmware/telelogger.bin custom_components/freematics/firmware/bootloader.bin"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"

@@ -32,12 +32,15 @@ Stored NVS keys (namespace "storage"):
 
 Single-file flash image (esptool)
 ----------------------------------
-generate_flash_image() combines the partition table, NVS partition, and the
-application firmware into one binary written at PARTITION_TABLE_OFFSET (0x8000).
-Starting at 0x8000 ensures the correct huge_app partition table is always
-programmed, which is required for the firmware to locate the NVS and app
-partitions correctly and prevents a reset loop on devices that previously
-had a different partition scheme.
+generate_flash_image() combines the second-stage bootloader, partition table,
+NVS partition, and the application firmware into one binary written at
+BOOTLOADER_PARTITION_OFFSET (0x1000).
+
+Including the bootloader is critical: esp-web-tools performs a chip erase on
+the first installation ("new install"), wiping the bootloader at 0x1000.
+Without restoring it the ROM bootloader cannot hand off to the second-stage
+bootloader and the device loops endlessly with "flash read err, 1000".
+Writing the combined image at 0x1000 ensures the bootloader is always present.
 
   **Important**: Do NOT use the Freematics Builder with this combined image.
   The Builder writes binaries at the app partition offset (0x10000), which
@@ -45,14 +48,16 @@ had a different partition scheme.
   For the Freematics Builder, use telelogger.bin (firmware only) and provision
   NVS settings separately via the browser-based flasher.
 
-  Layout (relative to PARTITION_TABLE_OFFSET = 0x8000):
-    0x0000 – 0x0FFF  Partition table  (huge_app scheme, 4 KB)
-    0x1000 – 0x5FFF  NVS partition    (config_nvs.bin, 20 KB)
-    0x6000 – 0x7FFF  0xFF padding     (otadata region – preserved as erased)
-    0x8000 –  end    Application firmware (telelogger.bin, flash mode = DIO)
+  Layout (relative to BOOTLOADER_PARTITION_OFFSET = 0x1000):
+    0x0000 – bootloader_size  Second-stage bootloader (bootloader.bin, DIO/40 MHz)
+    [padding to 0x7000]       0xFF (reserved)
+    0x7000 – 0x7FFF           Partition table  (huge_app scheme, 4 KB)
+    0x8000 – 0xCFFF           NVS partition    (config_nvs.bin, 20 KB)
+    0xD000 – 0xEFFF           0xFF padding     (otadata region – preserved as erased)
+    0xF000 –  end             Application firmware (telelogger.bin, flash mode = DIO)
 
   esptool usage:
-    python -m esptool write-flash 0x8000 flash_image.bin
+    python -m esptool write-flash 0x1000 flash_image.bin
 """
 
 from __future__ import annotations
@@ -67,6 +72,9 @@ import types
 from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
+
+# Flash offset of the second-stage bootloader (always 0x1000 on ESP32).
+BOOTLOADER_PARTITION_OFFSET = 0x1000
 
 # Flash offset of the partition table (same across all ESP32 schemes).
 PARTITION_TABLE_OFFSET = 0x8000
@@ -83,9 +91,11 @@ NVS_PARTITION_OFFSET = 0x9000
 # Flash offset of the application partition (same across all common ESP32 schemes).
 APP_PARTITION_OFFSET = 0x10000
 
-# Byte offsets within the combined flash image (relative to PARTITION_TABLE_OFFSET).
-_NVS_OFFSET_IN_IMAGE = NVS_PARTITION_OFFSET - PARTITION_TABLE_OFFSET   # 0x1000
-_APP_OFFSET_IN_IMAGE = APP_PARTITION_OFFSET - PARTITION_TABLE_OFFSET    # 0x8000
+# Byte offsets within the combined flash image (relative to BOOTLOADER_PARTITION_OFFSET).
+# The combined image now starts at 0x1000 so the bootloader is always included.
+_PT_OFFSET_IN_IMAGE = PARTITION_TABLE_OFFSET - BOOTLOADER_PARTITION_OFFSET   # 0x7000
+_NVS_OFFSET_IN_IMAGE = NVS_PARTITION_OFFSET - BOOTLOADER_PARTITION_OFFSET    # 0x8000
+_APP_OFFSET_IN_IMAGE = APP_PARTITION_OFFSET - BOOTLOADER_PARTITION_OFFSET    # 0xF000
 
 # ---------------------------------------------------------------------------
 # Partition-table generation
@@ -323,35 +333,45 @@ def generate_nvs_partition(
             return None
 
 
-def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
-    """Combine partition table, NVS data, and firmware into one flash image.
+def generate_flash_image(nvs_data: bytes, firmware_path: Path, bootloader_path: Path | None = None) -> bytes | None:
+    """Combine the bootloader, partition table, NVS data, and firmware into one flash image.
 
-    The returned bytes must be flashed at PARTITION_TABLE_OFFSET (0x8000) using
+    The returned bytes must be flashed at BOOTLOADER_PARTITION_OFFSET (0x1000) using
     esptool – do **not** use the Freematics Builder with this file, because the
     Builder writes binaries at the app partition offset (0x10000) which would
     place partition-table data where firmware belongs and cause a restart loop.
     Use esptool instead.
 
-    Including the partition table ensures the device always has the correct
-    huge_app partition scheme, which is required for the firmware to locate the
-    NVS and app partitions.  Without it, a device that previously had a different
-    partition table would enter a reset loop.
+    Including the second-stage bootloader is **critical**.  During a first-time
+    ("new install") flash, esp-web-tools performs a chip erase that wipes the
+    bootloader at 0x1000.  Without restoring it the ROM bootloader cannot hand
+    off to the second-stage loader and the device loops endlessly with:
+        flash read err, 1000  /  ets_main.c 371
 
-    Memory layout of the returned image (all offsets relative to 0x8000):
-      0x0000 – 0x0FFF : Partition table (huge_app scheme, 4 KB)
-      0x1000 – 0x5FFF : NVS partition   (20 KB, your WiFi/server settings)
-      0x6000 – 0x7FFF : 0xFF padding    (otadata region, written as erased)
-      0x8000 – end    : Application firmware (telelogger.bin, flash mode
+    Including the partition table ensures the device always has the correct
+    huge_app partition scheme.  Without it, a device that previously had a
+    different partition table would also enter a reset loop.
+
+    Memory layout of the returned image (all offsets relative to 0x1000):
+      0x0000 – bootloader_size  Second-stage bootloader (DIO/40 MHz)
+      [padding to 0x7000]       0xFF (reserved)
+      0x7000 – 0x7FFF : Partition table (huge_app scheme, 4 KB)
+      0x8000 – 0xCFFF : NVS partition   (20 KB, your WiFi/server settings)
+      0xD000 – 0xEFFF : 0xFF padding    (otadata region, written as erased)
+      0xF000 – end    : Application firmware (telelogger.bin, flash mode
                         patched to DIO for maximum hardware compatibility)
 
-    When flashed at 0x8000 with
-    ``python -m esptool write-flash 0x8000 flash_image.bin``
-    the device boots immediately with the correct settings.  The bootloader at
-    0x1000 that is already on the device is not touched.
+    When flashed at 0x1000 with
+    ``python -m esptool write-flash 0x1000 flash_image.bin``
+    the device boots immediately with the correct settings.
 
     Args:
-        nvs_data:      NVS partition bytes returned by generate_nvs_partition().
-        firmware_path: Path to the pre-compiled application binary (telelogger.bin).
+        nvs_data:        NVS partition bytes returned by generate_nvs_partition().
+        firmware_path:   Path to the pre-compiled application binary (telelogger.bin).
+        bootloader_path: Path to the second-stage bootloader binary (bootloader.bin).
+                         When *None* the bootloader section is filled with 0xFF bytes
+                         (not recommended — the device may fail to boot if the
+                         bootloader was previously erased by a chip erase).
 
     Returns:
         Combined bytes on success, None on failure.
@@ -362,12 +382,23 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
         _LOGGER.error("Failed to read firmware binary %s: %s", firmware_path, exc)
         return None
 
+    bootloader_data: bytes | None = None
+    if bootloader_path is not None:
+        try:
+            bootloader_data = bootloader_path.read_bytes()
+        except OSError as exc:
+            _LOGGER.error(
+                "Failed to read bootloader binary %s: %s", bootloader_path, exc
+            )
+            return None
+
     # Patch the firmware's flash-mode byte (offset 2 in the ESP32 image header)
     # to DIO (0x02).  esptool's --flash_mode flag only patches binaries whose
     # first byte is the ESP32 magic (0xE9); because the combined image starts
-    # with partition-table data (not 0xE9), esptool would leave the embedded
-    # firmware in its original QIO mode.  DIO works on every ESP32 flash chip
-    # and is what the Freematics ONE+ 2nd-stage bootloader expects.
+    # with bootloader / partition-table data (not 0xE9 at offset 0), esptool
+    # would leave the embedded firmware in its original QIO mode.  DIO works
+    # on every ESP32 flash chip and is what the Freematics ONE+ 2nd-stage
+    # bootloader expects.
     #
     # When hash_appended=1 (byte offset 23 of the image header), ESP-IDF
     # appends a SHA-256 digest of the entire image as the last 32 bytes.
@@ -392,16 +423,24 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path) -> bytes | None:
             new_hash = hashlib.sha256(firmware_data[:hash_start]).digest()
             firmware_data[hash_start:] = new_hash
 
-    # Build the image: partition table, NVS bytes, 0xFF gap, then firmware.
+    # Build the image starting at BOOTLOADER_PARTITION_OFFSET (0x1000):
+    #   [0x0000 – 0x7000): bootloader + 0xFF padding
+    #   [0x7000 – 0x8000): partition table
+    #   [0x8000 – 0xD000): NVS partition
+    #   [0xD000 – 0xF000): 0xFF (otadata)
+    #   [0xF000 – end):    application firmware
     image = bytearray(b"\xff" * _APP_OFFSET_IN_IMAGE)
+    if bootloader_data is not None:
+        image[:len(bootloader_data)] = bootloader_data
     pt_data = generate_partition_table()
-    image[:PARTITION_TABLE_SIZE] = pt_data
+    image[_PT_OFFSET_IN_IMAGE : _PT_OFFSET_IN_IMAGE + PARTITION_TABLE_SIZE] = pt_data
     image[_NVS_OFFSET_IN_IMAGE : _NVS_OFFSET_IN_IMAGE + len(nvs_data)] = nvs_data
     image += firmware_data
 
     _LOGGER.debug(
-        "Flash image generated: %d bytes (PT=%d, NVS=%d, firmware=%d)",
+        "Flash image generated: %d bytes (BL=%d, PT=%d, NVS=%d, firmware=%d)",
         len(image),
+        len(bootloader_data) if bootloader_data else 0,
         len(pt_data),
         len(nvs_data),
         len(firmware_data),

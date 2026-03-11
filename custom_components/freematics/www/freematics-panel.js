@@ -907,7 +907,7 @@ class FreematicsPanel extends HTMLElement {
                   &#11015; flash_image.bin
                 </a>
                 <span style="color:var(--secondary-text-color);font-size:.82rem">
-                  &nbsp;— Partition table&nbsp;+&nbsp;NVS&nbsp;+&nbsp;firmware, for <strong>esptool</strong> at offset <code style="${cs}">0x8000</code>
+                  &nbsp;— Bootloader&nbsp;+&nbsp;Partition table&nbsp;+&nbsp;NVS&nbsp;+&nbsp;firmware, for <strong>esptool</strong> at offset <code style="${cs}">0x1000</code>
                 </span>
                 <div id="nvs-dl-status" style="font-size:.82rem;color:var(--secondary-text-color);margin-top:2px">
                   &#9203; Generating settings file…
@@ -926,8 +926,12 @@ class FreematicsPanel extends HTMLElement {
 
             <!-- flash_image.bin info box -->
             <div style="margin-top:8px;background:var(--primary-background-color);border-radius:4px;padding:8px 10px;font-size:.82rem;color:var(--secondary-text-color)">
-              <strong style="color:var(--primary-text-color)">&#8505; What flash_image.bin contains (offset&nbsp;0x8000)</strong><br>
+              <strong style="color:var(--primary-text-color)">&#8505; What flash_image.bin contains (offset&nbsp;0x1000)</strong><br>
               <table style="margin-top:4px;border-collapse:collapse;width:100%">
+                <tr>
+                  <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0x1000</code></td>
+                  <td>Second-stage bootloader (∼19 KB) — <strong>critical:</strong> restores the bootloader erased by esp-web-tools on first install</td>
+                </tr>
                 <tr>
                   <td style="padding:2px 8px 2px 0;white-space:nowrap">Offset <code style="${cs}">0x8000</code></td>
                   <td>Partition table (huge_app scheme, 4 KB) — ensures the correct partition layout</td>
@@ -946,10 +950,6 @@ class FreematicsPanel extends HTMLElement {
                   <td>Application firmware (telelogger.bin, pre-compiled, flash mode DIO)</td>
                 </tr>
               </table>
-              <p style="margin:6px 0 0">
-                The bootloader at <code style="${cs}">0x1000</code> is <strong>not overwritten</strong> —
-                the factory-programmed one remains intact.
-              </p>
               <p style="margin:4px 0 0;color:#e65100">
                 &#9888; <strong>flash_image.bin cannot be used with the Freematics Builder.</strong>
                 The Builder writes binaries at the app partition offset (0x10000), which would
@@ -987,7 +987,7 @@ class FreematicsPanel extends HTMLElement {
               </li>
               <li>Connect the device via USB, find the COM port (Windows: Device Manager → Ports, e.g. <code style="${cs}">COM3</code>; Linux: <code style="${cs}">/dev/ttyUSB0</code>)</li>
               <li>Flash with a single command (esptool auto-detects the port; add <code style="${cs}">--port COM3</code> if it is not found):
-                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">python -m esptool write-flash 0x8000 flash_image.bin</pre>
+                <pre style="background:var(--primary-background-color);padding:5px 8px;border-radius:4px;font-size:.82rem;margin:3px 0;overflow-x:auto">python -m esptool write-flash 0x1000 flash_image.bin</pre>
               </li>
             </ol>
           </details>
@@ -1024,7 +1024,7 @@ class FreematicsPanel extends HTMLElement {
               <li>Add ESP32 board support: <em>File → Preferences → Board Manager URLs</em> → add <code style="${cs}">https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json</code>, then install <em>esp32 by Espressif</em></li>
               <li>Select board: <em>Tools → Board → ESP32 Arduino → ESP32 Dev Module</em></li>
               <li>Select port: <em>Tools → Port → COM3</em> (or your port)</li>
-              <li>Flash <code style="${cs}">flash_image.bin</code> at offset <code style="${cs}">0x8000</code> using esptool (see Option A above)</li>
+              <li>Flash <code style="${cs}">flash_image.bin</code> at offset <code style="${cs}">0x1000</code> using esptool (see Option A above)</li>
             </ol>
           </details>
         </div>
@@ -1689,7 +1689,7 @@ class FreematicsPanel extends HTMLElement {
           "Check the USB cable and confirm the correct COM port was selected. " +
           "If the problem persists in the browser, use the esptool command-line method — " +
           "it handles device reset automatically via DTR/RTS: " +
-          "python -m esptool write-flash 0x8000 flash_image.bin " +
+          "python -m esptool write-flash 0x1000 flash_image.bin " +
           "(add --port COM3 if esptool does not detect the port automatically). " +
           "See the Manual Flash section below.");
         this._updateFlashUI("⏱ Timed out — check USB cable/driver, or use esptool from the command line.", "err", "#f44336", 0);

@@ -6,11 +6,13 @@ Serves the following endpoints:
                                           Accepts optional ?token=<tok> to return a
                                           personalised manifest with NVS settings part.
   GET  /api/freematics/firmware.bin     – Bundled pre-compiled firmware binary
+  GET  /api/freematics/bootloader.bin   – Second-stage bootloader binary (offset 0x1000)
   GET  /api/freematics/config_nvs.bin   – NVS partition image with device settings
                                           Requires ?token=<tok> issued by
                                           /api/freematics/provisioning_token.
   GET  /api/freematics/flash_image.bin  – Combined single-file flash image
-                                          (partition table + NVS + firmware, written at 0x8000).
+                                          (bootloader + partition table + NVS + firmware,
+                                          written at 0x1000).
                                           Requires ?token=<tok> issued by
                                           /api/freematics/provisioning_token.
   GET  /api/freematics/provisioning_token – (auth required) Issue a short-lived token
@@ -29,16 +31,15 @@ NVS provisioning flow
               "flash_image_url": "…"}
 2. Panel passes manifest_url to <esp-web-install-button>.
    esp-web-tools fetches the manifest and discovers the NVS part URL.
-3. During flash, esp-web-tools writes firmware.bin at 0x10000 and
-   config_nvs.bin at 0x9000 in one pass.
+3. During flash, esp-web-tools writes bootloader.bin at 0x1000, firmware.bin
+   at 0x10000, and config_nvs.bin at 0x9000 in one pass.
 4. Device reboots with WiFi SSID/password, APN, and server settings
    already stored in NVS — no post-flash manual configuration needed.
 
-For manual flashing (Freematics Builder / esptool) the panel provides a
-single flash_image.bin download that contains the partition table, the NVS
-partition and the firmware merged into one file.  The user flashes it at
-offset 0x8000 and the device boots with the correct settings without needing
-to handle multiple files.
+For manual flashing (esptool) the panel provides a single flash_image.bin
+download that contains the bootloader, partition table, NVS partition and the
+firmware merged into one file.  The user flashes it at offset 0x1000 and the
+device boots with the correct settings without needing to handle multiple files.
 """
 
 from __future__ import annotations
@@ -80,8 +81,14 @@ _LOGGER = logging.getLogger(__name__)
 _TOKEN_TTL = 300
 
 FIRMWARE_PATH = Path(__file__).parent / "firmware" / "telelogger.bin"
+BOOTLOADER_PATH = Path(__file__).parent / "firmware" / "bootloader.bin"
 
 # esp-web-tools manifest — describes the chip family and flash offsets.
+# 0x1000 = 4096   – second-stage bootloader offset (always this on ESP32).
+#                   Including the bootloader is critical: esp-web-tools performs
+#                   a full chip erase on the first ("new install") flash, wiping
+#                   the bootloader at 0x1000.  Without it the device loops with:
+#                       flash read err, 1000  /  ets_main.c 371
 # 0x8000 = 32768  – partition table offset (always this address on ESP32).
 # 0x10000 = 65536 – application partition offset for ESP32.
 # 0x9000  = 36864 – NVS partition offset (huge_app partition scheme).
@@ -96,6 +103,7 @@ _MANIFEST_BASE = {
         {
             "chipFamily": "ESP32",
             "parts": [
+                {"path": "bootloader.bin", "offset": 4096},
                 {"path": "partition_table.bin", "offset": 32768},
                 {"path": "firmware.bin", "offset": 65536},
             ],
@@ -208,7 +216,7 @@ _FLASHER_HTML = """\
     The Web Serial API may not complete the automatic reset in some browsers. Use the
     <strong>esptool command line</strong> instead — it handles device reset automatically
     via DTR/RTS, just as it does when you run<br>
-    <code>python -m esptool write-flash 0x8000 flash_image.bin</code><br>
+    <code>python -m esptool write-flash 0x1000 flash_image.bin</code><br>
     (add <code>--port COM3</code> if esptool does not detect the port automatically).
     Download <code>flash_image.bin</code> from the Home Assistant panel.
   </div>
@@ -584,6 +592,46 @@ class FreematicsFirmwareView(HomeAssistantView):
             content_type="application/octet-stream",
             headers={
                 "Content-Disposition": "attachment; filename=telelogger.bin",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+class FreematicsBootloaderView(HomeAssistantView):
+    """Serve the second-stage bootloader binary.
+
+    Accessible at /api/freematics/bootloader.bin.
+    Referenced by the esp-web-tools manifest so that the bootloader is always
+    written at 0x1000 during a Web Serial flash.
+
+    Including the bootloader is critical: esp-web-tools performs a full chip
+    erase on the first ("new install") flash, wiping the existing bootloader at
+    0x1000.  Without restoring it the ROM bootloader cannot hand off to the
+    second-stage loader and the device loops endlessly with:
+        flash read err, 1000  /  ets_main.c 371
+
+    requires_auth is False: the bootloader binary is not device-specific and
+    contains no sensitive data.
+    """
+
+    url = "/api/freematics/bootloader.bin"
+    name = "api:freematics:bootloader"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return the second-stage bootloader binary."""
+        if not BOOTLOADER_PATH.exists():
+            return web.Response(status=404, text="Bootloader binary not found")
+        try:
+            hass = request.app["hass"]
+            data: bytes = await hass.async_add_executor_job(BOOTLOADER_PATH.read_bytes)
+        except OSError as exc:
+            return web.Response(status=500, text=f"Cannot read bootloader: {exc}")
+        return web.Response(
+            body=data,
+            content_type="application/octet-stream",
+            headers={
+                "Content-Disposition": "attachment; filename=bootloader.bin",
                 "Access-Control-Allow-Origin": "*",
             },
         )
@@ -1091,17 +1139,21 @@ class FreematicsFlashImageView(HomeAssistantView):
     Accessible at GET /api/freematics/flash_image.bin?token=<token>.
 
     The returned binary merges:
+      - The second-stage bootloader (0x1000, ~19 KB)
       - The huge_app partition table (0x8000, 4 KB)
       - The personalised NVS partition (0x9000, 20 KB) with device settings
       - 0xFF padding covering the otadata region (0xE000–0xFFFF)
       - The pre-compiled application firmware (telelogger.bin, from 0x10000)
 
-    The whole file is written at flash offset 0x8000 in a single operation:
-      python -m esptool write-flash 0x8000 flash_image.bin
+    The whole file is written at flash offset 0x1000 in a single operation:
+      python -m esptool write-flash 0x1000 flash_image.bin
 
-    Including the partition table ensures the correct huge_app partition scheme
-    is always programmed, preventing a reset loop on devices that previously had
-    a different partition table.
+    Including the bootloader is critical: esp-web-tools performs a full chip
+    erase on the first ("new install") flash, wiping the bootloader at 0x1000.
+    Without restoring it the ROM bootloader cannot hand off and the device loops
+    endlessly with "flash read err, 1000 / ets_main.c 371".  Including the
+    partition table ensures the correct huge_app partition scheme is always
+    programmed.
 
     Do NOT use the Freematics Builder with this file – the Builder writes at
     0x10000 which would corrupt the partition layout and cause a restart loop.
@@ -1115,7 +1167,7 @@ class FreematicsFlashImageView(HomeAssistantView):
     requires_auth = False
 
     async def get(self, request: web.Request) -> web.Response:
-        """Return the combined NVS + firmware flash image."""
+        """Return the combined bootloader + NVS + firmware flash image."""
         token = request.rel_url.query.get("token", "")
         if not token:
             return web.Response(status=400, text="token parameter required")
@@ -1165,8 +1217,9 @@ class FreematicsFlashImageView(HomeAssistantView):
                 ),
             )
 
+        bootloader_path = BOOTLOADER_PATH if BOOTLOADER_PATH.exists() else None
         image_data = await hass.async_add_executor_job(
-            generate_flash_image, nvs_data, FIRMWARE_PATH
+            generate_flash_image, nvs_data, FIRMWARE_PATH, bootloader_path
         )
 
         if image_data is None:

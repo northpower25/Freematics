@@ -2,9 +2,10 @@
 
 This directory contains the pre-compiled firmware binary for the Freematics ONE+.
 
-## File
+## Files
 
 - `telelogger.bin` – compiled firmware binary (ESP32, flash at offset `0x10000`)
+- `bootloader.bin` – second-stage bootloader binary (ESP32, flash at offset `0x1000`, DIO/40 MHz)
 
 ## Firmware Configuration
 
@@ -32,32 +33,42 @@ integration's `config_nvs.bin` / `flash_image.bin`):
 
 The firmware is automatically rebuilt by the `Build Firmware` GitHub Actions
 workflow whenever source files in `firmware_v5/telelogger/` or `libraries/`
-change.  The updated binary is committed back as `telelogger.bin`.
+change.  The updated binaries (`telelogger.bin` and `bootloader.bin`) are
+committed back automatically.
 
 To compile the firmware manually:
 
 1. Install [PlatformIO](https://platformio.org/)
 2. Open `firmware_v5/telelogger/` in PlatformIO
 3. Run: `pio run --environment esp32dev`
-4. Find the compiled binary at `.pio/build/esp32dev/firmware.bin`
-5. Replace `telelogger.bin` in this directory with the new binary
+4. Find the compiled binaries at:
+   - `.pio/build/esp32dev/firmware.bin` → replace `telelogger.bin`
+   - `.pio/build/esp32dev/bootloader.bin` → replace `bootloader.bin`
 
 ## Flash Offsets (ESP32)
 
-| Component       | Offset    |
-|-----------------|-----------|
-| Bootloader      | `0x1000`  |
-| Partition table | `0x8000`  |
-| NVS partition   | `0x9000`  |
-| Application     | `0x10000` |
+| Component              | Offset    |
+|------------------------|-----------|
+| Bootloader             | `0x1000`  |
+| Partition table        | `0x8000`  |
+| NVS partition          | `0x9000`  |
+| Application            | `0x10000` |
 
 The integration's **Web Serial / esp-web-tools flash** writes:
+- `bootloader.bin` at `0x1000` (**critical** — esp-web-tools erases the chip on first install, wiping the factory bootloader)
+- `partition_table.bin` (generated) at `0x8000`
 - `telelogger.bin` at `0x10000`
 - `config_nvs.bin` (NVS with WiFi/server settings) at `0x9000`
 
 The **combined `flash_image.bin`** (downloaded from the integration panel)
-includes the partition table, NVS, and firmware merged into one file that is
-written at `0x8000` using:
+includes the bootloader, partition table, NVS, and firmware merged into one
+file that is written at `0x1000` using:
 ```
-python -m esptool write-flash 0x8000 flash_image.bin
+python -m esptool write-flash 0x1000 flash_image.bin
 ```
+
+> **Why 0x1000?** The second-stage bootloader lives at 0x1000. esp-web-tools
+> performs a full chip erase on the first installation, which wipes it. Without
+> restoring the bootloader the device loops with `flash read err, 1000 /
+> ets_main.c 371`. The combined image starts at 0x1000 so a single esptool
+> command restores everything, including the bootloader.

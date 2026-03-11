@@ -50,6 +50,7 @@ from .const import (
     SENSOR_DEFINITIONS,
 )
 from .views import (
+    FreematicsBootloaderView,
     FreematicsConfigNvsView,
     FreematicsFirmwareView,
     FreematicsFlashImageView,
@@ -149,6 +150,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsSerialConsoleView())
     hass.http.register_view(FreematicsPersonalisedManifestView())
     hass.http.register_view(FreematicsFirmwareView())
+    hass.http.register_view(FreematicsBootloaderView())
     hass.http.register_view(FreematicsPartitionTableView())
     hass.http.register_view(FreematicsProxyOTAView())
     hass.http.register_view(FreematicsProvisioningTokenView())
