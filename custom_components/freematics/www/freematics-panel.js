@@ -603,6 +603,8 @@ class FreematicsPanel extends HTMLElement {
     let flashImageUrl = null;
     let nvsUrl = null;
     let provisioningToken = "";
+    let deviceIp = "";
+    let devicePort = 80;
     try {
       const result = await Promise.race([
         this._hass.callApi("GET", "freematics/provisioning_token"),
@@ -614,13 +616,17 @@ class FreematicsPanel extends HTMLElement {
         flashImageUrl = result.flash_image_url || null;
         nvsUrl        = result.nvs_url || null;
         provisioningToken = result.token || "";
+        deviceIp = result.device_ip || "";
+        devicePort = result.device_port || 80;
       }
     } catch (_) {
       // Non-fatal: fall back to default manifest (firmware without NVS settings).
     }
 
     const flasherUrl    = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}&embedded=1`;
-    const otaFlasherUrl = `/api/freematics/ota_flasher?token=${encodeURIComponent(provisioningToken)}&embedded=1`;
+    const otaFlasherUrl = `/api/freematics/ota_flasher?token=${encodeURIComponent(provisioningToken)}&embedded=1`
+      + (deviceIp ? `&device_ip=${encodeURIComponent(deviceIp)}` : "")
+      + (devicePort && devicePort !== 80 ? `&device_port=${encodeURIComponent(devicePort)}` : "");
 
     el.innerHTML = `
       <div class="flash-wrap">

@@ -63,6 +63,8 @@ from .const import (
     CONF_BEEP_EN,
     CONF_CLOUD_HOOK_URL,
     CONF_DATA_INTERVAL_MS,
+    CONF_DEVICE_IP,
+    CONF_DEVICE_PORT,
     CONF_ENABLE_BLE,
     CONF_ENABLE_HTTPD,
     CONF_LED_RED_EN,
@@ -73,6 +75,7 @@ from .const import (
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
+    DEFAULT_DEVICE_PORT,
     DOMAIN,
     OPERATING_MODE_DATALOGGER,
 )
@@ -1124,7 +1127,9 @@ class FreematicsProvisioningTokenView(HomeAssistantView):
         "nvs_url": "/api/freematics/config_nvs.bin?token=<token>",
         "flash_image_url": "/api/freematics/flash_image.bin?token=<token>",
         "nvs_offset": 36864,
-        "expires_in": 300
+        "expires_in": 300,
+        "device_ip": "<configured device IP or empty string>",
+        "device_port": 80
       }
     """
 
@@ -1140,6 +1145,8 @@ class FreematicsProvisioningTokenView(HomeAssistantView):
 
         entries = hass.config_entries.async_entries(DOMAIN)
         entry_id = entries[0].entry_id if entries else None
+        entry = entries[0] if entries else None
+        cfg = {**(entry.data if entry else {}), **(entry.options if entry else {})}
 
         token_store = hass.data.setdefault(DOMAIN, {}).setdefault("_tokens", {})
         token_store[token] = (entry_id, expiry)
@@ -1159,6 +1166,8 @@ class FreematicsProvisioningTokenView(HomeAssistantView):
                 "flash_image_url": f"/api/freematics/flash_image.bin?token={token}",
                 "nvs_offset": NVS_PARTITION_OFFSET,
                 "expires_in": _TOKEN_TTL,
+                "device_ip": cfg.get(CONF_DEVICE_IP, ""),
+                "device_port": cfg.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT),
             }).encode("utf-8"),
             content_type="application/json",
         )
