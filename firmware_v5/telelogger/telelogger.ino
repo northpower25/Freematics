@@ -203,6 +203,33 @@ OLED_SH1106 oled;
 
 State state;
 
+// ---------------------------------------------------------------------------
+// Volatile request flags set by the httpd task (handlerControl) to request
+// telemetry state changes.  All actual state.m_state modifications are
+// applied by the net task at the top of its main loop so that m_state is
+// always written from a single task context — same thread-safety pattern
+// as s_ota_active.
+// ---------------------------------------------------------------------------
+static volatile bool s_http_standby_enter = false;
+static volatile bool s_http_standby_exit  = false;
+
+// Called from handlerControl (httpd task) to pause or resume the telemetry task.
+void httpControlStandby(bool enter) {
+    if (enter) {
+        s_http_standby_enter = true;
+        s_http_standby_exit  = false;
+    } else {
+        s_http_standby_exit  = true;
+        s_http_standby_enter = false;
+    }
+}
+
+// Returns true when the telemetry task is in (or has been requested to enter)
+// standby mode.  Called from handlerControl to answer "ON?" queries.
+bool httpIsStandby() {
+    return state.check(STATE_STANDBY) || s_http_standby_enter;
+}
+
 void printTimeoutStats()
 {
   Serial.print("Timeouts: OBD:");
@@ -1008,6 +1035,21 @@ void telemetry(void* inst)
     if (s_ota_active) {
       delay(500);
       continue;
+    }
+
+    // Apply standby / resume requests originating from the httpd task.
+    // The actual m_state writes happen here (net task only) so that
+    // state.m_state is always modified from a single task context.
+    if (s_http_standby_enter) {
+      s_http_standby_enter = false;
+      state.set(STATE_STANDBY);
+      state.clear(STATE_WORKING);
+      Serial.println("[HTTP] Telemetry paused via /api/control?cmd=OFF");
+    }
+    if (s_http_standby_exit) {
+      s_http_standby_exit = false;
+      state.clear(STATE_STANDBY);
+      Serial.println("[HTTP] Telemetry resumed via /api/control?cmd=ON");
     }
 
     if (state.check(STATE_STANDBY)) {

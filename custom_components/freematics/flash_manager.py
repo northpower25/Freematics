@@ -30,6 +30,14 @@ OTA_UPLOAD_PATH = "/api/ota"
 # Config commands supported by /api/control
 CONTROL_PATH = "/api/control"
 
+# How long (seconds) to wait after a successful cmd=OFF before starting the
+# OTA upload.  Gives the telemetry task time to close its SSL connections and
+# release heap memory so the OTA has plenty of room to run.
+_STANDBY_SETTLE_S = 4
+
+# Report upload progress this often (seconds).
+_PROGRESS_INTERVAL_S = 20
+
 
 def _firmware_exists() -> bool:
     """Return True if the bundled firmware binary is present."""
@@ -152,7 +160,46 @@ async def async_flash_wifi(
 
     firmware_kb = len(firmware_data) / 1024
     _log("info", f"Firmware size: {firmware_kb:.1f} KB ({len(firmware_data)} bytes)")
+
+    # -----------------------------------------------------------------------
+    # Pre-OTA step: ask the device to pause telemetry (cmd=OFF).
+    # This stops the SSL cloud-hook connections that compete for heap memory
+    # during the OTA upload.  Supported by firmware built with the
+    # httpControlStandby() handler; older firmware returns "ERR" which is
+    # silently ignored so the upload still proceeds (but may fail on devices
+    # with old firmware due to SSL memory pressure).
+    # -----------------------------------------------------------------------
     _log("info", "Connecting to device…")
+    off_url = f"http://{validated_ip}:{device_port}{CONTROL_PATH}?cmd=OFF"
+    try:
+        async with aiohttp.ClientSession() as pre_session:
+            async with pre_session.get(
+                off_url,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as r:
+                body = (await r.text()).strip()
+                if r.status == 200 and body == "OK":
+                    _log(
+                        "info",
+                        f"Device telemetry paused (cmd=OFF → HTTP {r.status} OK). "
+                        f"Waiting {_STANDBY_SETTLE_S} s for SSL connections to close…",
+                    )
+                    await asyncio.sleep(_STANDBY_SETTLE_S)
+                else:
+                    _log(
+                        "info",
+                        f"Device did not acknowledge pause command "
+                        f"(HTTP {r.status}: {body!r}). "
+                        "This is normal for firmware without the HTTP standby handler. "
+                        "Proceeding — if the upload fails with a connection reset, "
+                        "flash the latest firmware via serial first.",
+                    )
+    except Exception as exc:  # noqa: BLE001
+        _log(
+            "info",
+            f"Could not reach device control endpoint before OTA ({exc}). "
+            "Proceeding with upload anyway.",
+        )
 
     t_start = time.monotonic()
     try:
@@ -163,68 +210,94 @@ async def async_flash_wifi(
             # first chunk from the httpd buffer, then streams the rest directly
             # from the socket – no multipart parsing needed.
             _log("info", "Uploading firmware (raw binary POST)…")
-            async with session.post(
-                url,
-                data=firmware_data,
-                headers={"Content-Type": "application/octet-stream"},
-                # No hard total timeout so slow WiFi connections don't time out
-                # mid-upload; rely on a per-read timeout instead so a stalled
-                # server is still detected.
-                timeout=aiohttp.ClientTimeout(total=None, sock_read=600),
-            ) as resp:
-                # By the time this block is entered, the device has received
-                # all firmware bytes, verified the byte count, validated the
-                # image (MD5) and committed the OTA partition.  The response
-                # headers are now available; we still need to read the body
-                # to get the device's final confirmation ("OK" or an error).
-                upload_elapsed = time.monotonic() - t_start
-                _log(
-                    "info",
-                    f"Firmware upload complete ({upload_elapsed:.1f} s) —"
-                    f" reading device flash confirmation…",
-                )
+
+            # Background task: log periodic progress messages so the UI shows
+            # activity during the long upload instead of going silent.
+            async def _progress_logger() -> None:
                 try:
-                    text = await resp.text()
-                except aiohttp.ClientPayloadError:
-                    # The device reboots immediately after a successful OTA flash,
-                    # which closes the TCP connection before the HTTP response body
-                    # is fully sent.  Treat an incomplete response as success when
-                    # the status was 200.
+                    while True:
+                        await asyncio.sleep(_PROGRESS_INTERVAL_S)
+                        elapsed = time.monotonic() - t_start
+                        _log(
+                            "info",
+                            f"Upload in progress… {elapsed:.0f} s elapsed "
+                            f"(firmware: {firmware_kb:.0f} KB)",
+                        )
+                except asyncio.CancelledError:
+                    pass
+
+            progress_task: asyncio.Task = asyncio.ensure_future(_progress_logger())
+            try:
+                async with session.post(
+                    url,
+                    data=firmware_data,
+                    headers={"Content-Type": "application/octet-stream"},
+                    # No hard total timeout so slow WiFi connections don't time out
+                    # mid-upload; rely on a per-read timeout instead so a stalled
+                    # server is still detected.
+                    timeout=aiohttp.ClientTimeout(total=None, sock_read=600),
+                ) as resp:
+                    progress_task.cancel()
+                    # By the time this block is entered, the device has received
+                    # all firmware bytes, verified the byte count, validated the
+                    # image (MD5) and committed the OTA partition.  The response
+                    # headers are now available; we still need to read the body
+                    # to get the device's final confirmation ("OK" or an error).
+                    upload_elapsed = time.monotonic() - t_start
+                    _log(
+                        "info",
+                        f"Firmware upload complete ({upload_elapsed:.1f} s) —"
+                        f" reading device flash confirmation…",
+                    )
+                    try:
+                        text = await resp.text()
+                    except aiohttp.ClientPayloadError:
+                        # The device reboots immediately after a successful OTA flash,
+                        # which closes the TCP connection before the HTTP response body
+                        # is fully sent.  Treat an incomplete response as success when
+                        # the status was 200.
+                        elapsed = time.monotonic() - t_start
+                        if resp.status == 200:
+                            _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
+                            _log("ok", "Device rebooted after flashing (response truncated — expected).")
+                            msg = f"OTA flash successful ({elapsed:.1f} s): device rebooted."
+                            return True, msg, log
+                        _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — response payload incomplete")
+                        if resp.status == 404:
+                            hint = (
+                                "The device HTTP server returned 404 — the OTA handler "
+                                "was not reached. This can happen when the telemetry task "
+                                "on the device causes a WiFi disruption mid-upload. "
+                                "Update the firmware to include the s_ota_active fix so "
+                                "telemetry is paused during the upload, then retry."
+                            )
+                            _log("error", hint)
+                        msg = f"OTA failed, HTTP {resp.status}: response payload incomplete"
+                        return False, msg, log
                     elapsed = time.monotonic() - t_start
                     if resp.status == 200:
+                        body = text.strip()
+                        # The device-side handler writes "OK" on success or a message
+                        # starting with "ERR:" on failure.  Both return HTTP 200 so we
+                        # must inspect the body to know whether the flash succeeded.
+                        if body.startswith("ERR:"):
+                            _log("error", f"OTA handler error after {elapsed:.1f} s: {body}")
+                            msg = f"OTA failed: {body}"
+                            return False, msg, log
                         _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
-                        _log("ok", "Device rebooted after flashing (response truncated — expected).")
-                        msg = f"OTA flash successful ({elapsed:.1f} s): device rebooted."
+                        _log("ok", f"Device response: {body}")
+                        msg = f"OTA flash successful ({elapsed:.1f} s): {body}"
                         return True, msg, log
-                    _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — response payload incomplete")
-                    if resp.status == 404:
-                        hint = (
-                            "The device HTTP server returned 404 — the OTA handler "
-                            "was not reached. This can happen when the telemetry task "
-                            "on the device causes a WiFi disruption mid-upload. "
-                            "Update the firmware to include the s_ota_active fix so "
-                            "telemetry is paused during the upload, then retry."
-                        )
-                        _log("error", hint)
-                    msg = f"OTA failed, HTTP {resp.status}: response payload incomplete"
+                    _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — device response: {text.strip()}")
+                    msg = f"OTA failed, HTTP {resp.status}: {text.strip()}"
                     return False, msg, log
-                elapsed = time.monotonic() - t_start
-                if resp.status == 200:
-                    body = text.strip()
-                    # The device-side handler writes "OK" on success or a message
-                    # starting with "ERR:" on failure.  Both return HTTP 200 so we
-                    # must inspect the body to know whether the flash succeeded.
-                    if body.startswith("ERR:"):
-                        _log("error", f"OTA handler error after {elapsed:.1f} s: {body}")
-                        msg = f"OTA failed: {body}"
-                        return False, msg, log
-                    _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
-                    _log("ok", f"Device response: {body}")
-                    msg = f"OTA flash successful ({elapsed:.1f} s): {body}"
-                    return True, msg, log
-                _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — device response: {text.strip()}")
-                msg = f"OTA failed, HTTP {resp.status}: {text.strip()}"
-                return False, msg, log
+            finally:
+                if not progress_task.done():
+                    progress_task.cancel()
+                    try:
+                        await asyncio.wait_for(progress_task, timeout=1.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
 
     except aiohttp.ClientConnectorError as exc:
         elapsed = time.monotonic() - t_start
@@ -246,8 +319,22 @@ async def async_flash_wifi(
         return False, msg, log
     except Exception as exc:  # noqa: BLE001
         elapsed = time.monotonic() - t_start
+        exc_str = str(exc)
         msg = f"OTA flash failed after {elapsed:.1f} s: {exc}"
         _log("error", msg)
+        # Provide an actionable hint when the device resets the connection.
+        # This typically happens because the device's telemetry task is still
+        # making SSL connections during the upload, exhausting the ESP32 heap.
+        if "104" in exc_str or "connection reset" in exc_str.lower() or "reset by peer" in exc_str.lower():
+            _log(
+                "error",
+                "The device reset the TCP connection mid-upload. "
+                "This usually means the telemetry task was still running SSL "
+                "connections during the OTA, exhausting available heap memory. "
+                "To fix: flash the latest firmware via serial once — subsequent "
+                "OTA updates will then pause telemetry automatically (s_ota_active / "
+                "cmd=OFF support).",
+            )
         return False, msg, log
 
 
