@@ -29,6 +29,14 @@ Stored NVS keys (namespace "storage"):
   ENABLE_BLE    – 0 = disable BLE SPP server (frees ~100 KB heap for TLS webhook)
   DATA_INTERVAL – Telemetry post interval in ms (≥500; 0 = firmware default ≈1000 ms)
   SYNC_INTERVAL – Server-sync check interval in seconds (0 = firmware default 120 s)
+  OTA_TOKEN     – Secret token embedded in the pull-OTA endpoint URL path
+                  (firmware v5.2+).  When set, the device periodically GETs
+                  ``{OTA_HOST}:{OTA_PORT}/api/freematics/ota_pull/{OTA_TOKEN}/meta.json``
+                  and downloads new firmware if available.
+  OTA_HOST      – Hostname of the HA server serving pull-OTA files (firmware v5.2+).
+                  May differ from SERVER_HOST when Nabu Casa cloud is active.
+  OTA_PORT      – TCP port for OTA_HOST (u16, firmware v5.2+, default 443).
+  OTA_INTERVAL  – Seconds between pull-OTA checks (u16, firmware v5.2+, 0 = off).
 
 Single-file flash image (esptool)
 ----------------------------------
@@ -201,6 +209,10 @@ def generate_nvs_partition(
     led_red_en: bool = True,
     led_white_en: bool = True,
     beep_en: bool = True,
+    ota_token: str = "",
+    ota_host: str = "",
+    ota_port: int = 443,
+    ota_check_interval_s: int = 0,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -234,6 +246,22 @@ def generate_nvs_partition(
         beep_en: When True (default), the buzzer emits a short beep on each
             successful WiFi or cellular connection.  Set to False to suppress
             the connection beep (BEEP_EN=0 written to NVS).
+        ota_token: Secret token used to construct the authenticated pull-OTA
+            endpoint URL.  Stored in NVS as OTA_TOKEN.  When set, the firmware
+            will periodically GET
+            ``{server_host}:{server_port}/api/freematics/ota_pull/{ota_token}/meta.json``
+            and download/flash a newer version if one is available.
+            Empty string disables the pull-OTA feature (default).
+        ota_host: Hostname of the Home Assistant server serving the pull-OTA
+            endpoint (OTA_HOST NVS key).  Defaults to ``server_host`` when
+            empty.  Stored separately so that cloud-webhook deployments (where
+            SERVER_HOST is ``hooks.nabu.casa``) still reach the correct HA
+            instance for firmware downloads.
+        ota_port: TCP port for the OTA host (OTA_PORT NVS key, u16).
+            Defaults to 443.
+        ota_check_interval_s: How often (seconds) the firmware should check
+            for a new firmware version (OTA_INTERVAL NVS key, u16).
+            0 = disabled (default).
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -315,6 +343,26 @@ def generate_nvs_partition(
     # Optional server-sync-interval override (s).  0 = firmware compile-time default.
     if sync_interval_s and sync_interval_s > 0:
         _add_u16("SYNC_INTERVAL", sync_interval_s)
+    # ── Pull-OTA configuration (Variant 1: authenticated endpoint, Variant 2:
+    #    /local/ path).  All three keys must be present for the firmware to
+    #    enable periodic pull-OTA checks.  The token acts as a path component in
+    #    the HA endpoint URL so no Authorization header is required.
+    #
+    #    OTA_TOKEN   – secret embedded in the endpoint path; empty disables OTA pull.
+    #    OTA_HOST    – HA server hostname for downloads (may differ from SERVER_HOST
+    #                  when Nabu Casa cloud hook is active and SERVER_HOST is
+    #                  hooks.nabu.casa which does not serve pull-OTA files).
+    #    OTA_PORT    – TCP port for OTA_HOST (u16, default 443).
+    #    OTA_INTERVAL – check interval in seconds (u16, 0 = disabled).
+    if ota_token:
+        _add_str("OTA_TOKEN", ota_token)
+        _ota_host = ota_host or server_host
+        if _ota_host:
+            _add_str("OTA_HOST", _ota_host)
+        _ota_port = ota_port if ota_port else (server_port or 443)
+        _add_u16("OTA_PORT", _ota_port)
+    if ota_check_interval_s and ota_check_interval_s > 0:
+        _add_u16("OTA_INTERVAL", ota_check_interval_s)
 
     csv_content = "\n".join(rows) + "\n"
 

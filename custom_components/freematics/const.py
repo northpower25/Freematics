@@ -28,7 +28,6 @@ DEFAULT_DEVICE_PORT = 80
 # Flash settings
 CONF_FLASH_METHOD = "flash_method"
 FLASH_METHOD_SERIAL = "serial"
-FLASH_METHOD_WIFI = "wifi"
 
 CONF_SERIAL_PORT = "serial_port"
 DEFAULT_SERIAL_BAUD = 921600
@@ -163,6 +162,17 @@ PID_MAP: dict[str, _PidMapping] = {
     "10F": ("intake_temp",        1.0),   # PID_INTAKE_TEMP (°C)
     "111": ("throttle",           1.0),   # PID_THROTTLE (%)
 }
+
+# OTA pull update configuration
+# CONF_OTA_TOKEN: long-lived Bearer token stored in entry.options.  Embedded as
+# a path component in the HA pull-OTA endpoint so the device can download
+# firmware without HA session credentials.  Provisioned into device NVS as the
+# OTA_TOKEN key so the firmware knows its token after the next NVS flash.
+CONF_OTA_TOKEN = "ota_token"
+# How often (seconds) the device should check the pull-OTA endpoint for new
+# firmware.  0 = disabled (default).  Stored as NVS key OTA_INTERVAL (u16).
+CONF_OTA_CHECK_INTERVAL_S = "ota_check_interval_s"
+DEFAULT_OTA_CHECK_INTERVAL_S = 0   # off by default; user must opt in
 
 # Control commands supported by the device HTTP API (/api/control)
 CMD_SSID = "SSID={}"

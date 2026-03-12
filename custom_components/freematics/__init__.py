@@ -55,13 +55,12 @@ from .views import (
     FreematicsFirmwareView,
     FreematicsFlashImageView,
     FreematicsFlasherView,
-    FreematicsOtaFlasherView,
+    FreematicsOtaPullView,
+    FreematicsOtaTokenView,
     FreematicsPartitionTableView,
     FreematicsPersonalisedManifestView,
     FreematicsProvisioningTokenView,
-    FreematicsProxyOTAView,
     FreematicsSerialConsoleView,
-    FreematicsWifiOtaSseView,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -154,12 +153,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsFirmwareView())
     hass.http.register_view(FreematicsBootloaderView())
     hass.http.register_view(FreematicsPartitionTableView())
-    hass.http.register_view(FreematicsProxyOTAView())
     hass.http.register_view(FreematicsProvisioningTokenView())
     hass.http.register_view(FreematicsConfigNvsView())
     hass.http.register_view(FreematicsFlashImageView())
-    hass.http.register_view(FreematicsOtaFlasherView())
-    hass.http.register_view(FreematicsWifiOtaSseView())
+    hass.http.register_view(FreematicsOtaTokenView())
+    hass.http.register_view(FreematicsOtaPullView())
 
     # Serve the www/ directory so the panel JS and custom card are reachable.
     await hass.http.async_register_static_paths(
@@ -307,6 +305,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "obd_errors": 0,
         "last_obd_connection": None,
         "obd_services_seen": set(),
+        # OTA pull – updated by FreematicsOtaPullView when an OTA event occurs
+        "ota_last_success": None,
+        "ota_last_error": None,
+        "ota_last_version": None,
+        # Firmware version – set after the first successful pull-OTA or from NVS
+        "fw_version": None,
     }
 
     # OBD-II sensor keys (those that require an active OBD2 connection)
@@ -431,6 +435,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "connection_type": conn_label,
         "raw_history": raw_history,
         "error_log": error_log,
+        # Mutable diag dict shared with views so OTA events can update sensor state.
+        "diag": diag,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -479,8 +485,12 @@ def _build_debug_payload(
         # BLE – not determinable from webhook alone
         "ble_configured": _UNK,
         "ble_active": _UNK,
-        # FW version – not transmitted in webhook payloads
-        "fw_version": _UNK,
+        # FW version – set from diag["fw_version"] when known (e.g. after OTA)
+        "fw_version": diag.get("fw_version") or _UNK,
+        # OTA pull update status
+        "ota_last_success": diag.get("ota_last_success") or _UNK,
+        "ota_last_error": diag.get("ota_last_error") or _UNK,
+        "ota_last_version": diag.get("ota_last_version") or _UNK,
         # Raw data for advanced debugging
         "raw_data": list(raw_history),
         "errors": list(error_log),

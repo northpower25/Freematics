@@ -2,14 +2,18 @@
 
 Provides the following button entities:
 - Flash Firmware via Serial   – triggers esptool serial flash
-- Flash Firmware via WiFi OTA – triggers HTTP OTA upload to device
 - Send Config to Device       – pushes stored WiFi/APN settings to running device
 - Restart Device              – sends RESET command via device HTTP API
+- Publish Firmware for Cloud OTA – copies firmware to /config/www/FreematicsONE/{id}/
+                                   (Variant 2: accessible via /local/ NabuCasa path)
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
@@ -22,7 +26,6 @@ from .const import (
     CONF_CELL_APN,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
-    CONF_FLASH_METHOD,
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_SERIAL_PORT,
@@ -31,17 +34,25 @@ from .const import (
     CONF_WIFI_SSID,
     DEFAULT_DEVICE_PORT,
     DOMAIN,
-    FLASH_METHOD_SERIAL,
-    FLASH_METHOD_WIFI,
+    FIRMWARE_VERSION,
 )
 from .flash_manager import (
     CONTROL_PATH,
+    FIRMWARE_PATH,
     async_flash_serial,
-    async_flash_wifi,
     async_send_config,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Base directory under /config/www where Cloud OTA firmware files are published.
+# Each device gets its own sub-directory keyed by the first 8 characters of
+# its webhook_id to avoid collisions when multiple devices are registered.
+_CLOUD_OTA_WWW_BASE = "FreematicsONE"
+
+# Filenames published into the /local/ directory for Variant 2 Cloud OTA.
+_CLOUD_OTA_FIRMWARE_FILENAME = "firmware.bin"
+_CLOUD_OTA_VERSION_FILENAME = "version.json"
 
 
 async def async_setup_entry(
@@ -55,9 +66,9 @@ async def async_setup_entry(
 
     buttons: list[ButtonEntity] = [
         FlashSerialButton(entry, webhook_id),
-        FlashWifiButton(entry, webhook_id),
         SendConfigButton(entry, webhook_id),
         RestartDeviceButton(entry, webhook_id),
+        PublishCloudOtaButton(entry, webhook_id),
     ]
     async_add_entities(buttons)
 
@@ -164,48 +175,6 @@ class FlashSerialButton(_FreematicsButton):
             )
 
 
-class FlashWifiButton(_FreematicsButton):
-    """Button that flashes the firmware via WiFi OTA."""
-
-    _attr_name = "Flash Firmware via WiFi OTA"
-    _attr_icon = "mdi:wifi-arrow-up-down"
-
-    def __init__(self, entry: ConfigEntry, webhook_id: str) -> None:
-        super().__init__(entry, webhook_id)
-        self._attr_unique_id = f"freematics_{webhook_id}_flash_wifi"
-
-    async def async_press(self) -> None:
-        """Execute WiFi OTA flash."""
-        device_ip = self._cfg(CONF_DEVICE_IP, "")
-        device_port = self._cfg(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)
-        if not device_ip:
-            _LOGGER.error(
-                "Freematics: no device IP configured. "
-                "Go to Settings → Integrations → Freematics ONE+ → Configure to set it. "
-                "If the device is in AP mode, connect to 'TELELOGGER' WiFi and use IP 192.168.4.1."
-            )
-            return
-        _LOGGER.info("Freematics: starting WiFi OTA flash to %s:%s", device_ip, device_port)
-        cfg = {**self._entry.data, **self._entry.options}
-        # WiFi OTA preserves the NVS partition, so we must NOT actively send
-        # LED_RED=1/LED_WHITE=1/BEEP=1 commands.  Doing so would overwrite a
-        # user's manually-disabled setting (LED_RED_EN=0 set via /api/control
-        # or a previous serial flash) with the HA default (True = on).
-        # Only send the "disable" command (=False) when the HA config explicitly
-        # disables the setting; leave NVS untouched when the setting is True.
-        ok, msg, _log_lines = await async_flash_wifi(
-            device_ip,
-            device_port,
-            led_red_en=None if bool(cfg.get(CONF_LED_RED_EN, True)) else False,
-            led_white_en=None if bool(cfg.get(CONF_LED_WHITE_EN, True)) else False,
-            beep_en=None if bool(cfg.get(CONF_BEEP_EN, True)) else False,
-        )
-        if ok:
-            _LOGGER.info("Freematics WiFi OTA flash: %s", msg)
-        else:
-            _LOGGER.error("Freematics WiFi OTA flash failed: %s", msg)
-
-
 class SendConfigButton(_FreematicsButton):
     """Button that pushes WiFi / APN settings to a running device."""
 
@@ -277,3 +246,100 @@ class RestartDeviceButton(_FreematicsButton):
                     _LOGGER.info("Freematics restart sent, HTTP %s", resp.status)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Freematics restart command error (device may have restarted): %s", exc)
+
+
+class PublishCloudOtaButton(_FreematicsButton):
+    """Button that publishes the firmware to /config/www/FreematicsONE/{id}/.
+
+    Implements Variant 2 of the Cloud OTA update mechanism: the firmware binary
+    and a version.json metadata file are written to the HA www/ directory so
+    that the device can fetch them via the NabuCasa Remote URL or any external
+    HA URL at the well-known /local/ path:
+
+      https://<ha-external-url>/local/FreematicsONE/<device_id>/version.json
+      https://<ha-external-url>/local/FreematicsONE/<device_id>/firmware.bin
+
+    The device stores the OTA check path in NVS (OTA_PATH) and periodically
+    polls version.json.  When a newer version is reported it downloads
+    firmware.bin and flashes it over-the-air.
+
+    The files are placed under the HA configuration directory:
+      <config_dir>/www/FreematicsONE/<device_id>/version.json
+      <config_dir>/www/FreematicsONE/<device_id>/firmware.bin
+    """
+
+    _attr_name = "Publish Firmware for Cloud OTA"
+    _attr_icon = "mdi:cloud-upload"
+
+    def __init__(self, entry: ConfigEntry, webhook_id: str) -> None:
+        super().__init__(entry, webhook_id)
+        self._attr_unique_id = f"freematics_{webhook_id}_publish_cloud_ota"
+
+    async def async_press(self) -> None:
+        """Copy firmware binary and version metadata to /config/www/FreematicsONE/{id}/."""
+        from homeassistant.core import HomeAssistant  # noqa: PLC0415
+
+        # Resolve the HA config directory at runtime via the hass object stored
+        # by the button platform during entity registration.  We use self.hass
+        # which is set by HA's entity infrastructure before async_press() runs.
+        hass: HomeAssistant = self.hass  # type: ignore[attr-defined]
+        config_dir = hass.config.config_dir
+
+        device_id = self._webhook_id[:8]
+        # Sanitize: keep only alphanumeric, hyphen and underscore characters so
+        # the derived path component can never contain ".." or other traversal
+        # sequences regardless of how webhook_id was generated.
+        import re as _re  # noqa: PLC0415
+        device_id = _re.sub(r"[^A-Za-z0-9_-]", "", device_id)
+        if not device_id:
+            _LOGGER.error("Freematics Cloud OTA: could not derive a safe device ID")
+            return
+        target_dir = Path(config_dir) / "www" / _CLOUD_OTA_WWW_BASE / device_id
+
+        if not FIRMWARE_PATH.exists():
+            _LOGGER.error(
+                "Freematics Cloud OTA publish: firmware binary not found at %s",
+                FIRMWARE_PATH,
+            )
+            return
+
+        def _publish() -> tuple[bool, str]:
+            """Blocking file I/O – runs in a thread executor."""
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+
+                fw_data = FIRMWARE_PATH.read_bytes()
+                fw_size = len(fw_data)
+                fw_sha256 = hashlib.sha256(fw_data).hexdigest()
+
+                # Write firmware binary.
+                fw_dest = target_dir / _CLOUD_OTA_FIRMWARE_FILENAME
+                fw_dest.write_bytes(fw_data)
+
+                # Write version metadata.
+                version_meta = {
+                    "available": True,
+                    "version": FIRMWARE_VERSION,
+                    "size": fw_size,
+                    "sha256": fw_sha256,
+                    # Relative filename within the same /local/ directory.
+                    "filename": _CLOUD_OTA_FIRMWARE_FILENAME,
+                }
+                version_dest = target_dir / _CLOUD_OTA_VERSION_FILENAME
+                version_dest.write_text(
+                    json.dumps(version_meta, indent=2), encoding="utf-8"
+                )
+
+                return True, (
+                    f"Published firmware v{FIRMWARE_VERSION} ({fw_size} bytes) "
+                    f"to {target_dir} — "
+                    f"accessible at /local/{_CLOUD_OTA_WWW_BASE}/{device_id}/"
+                )
+            except OSError as exc:
+                return False, f"Failed to publish firmware: {exc}"
+
+        ok, msg = await hass.async_add_executor_job(_publish)
+        if ok:
+            _LOGGER.info("Freematics Cloud OTA: %s", msg)
+        else:
+            _LOGGER.error("Freematics Cloud OTA: %s", msg)

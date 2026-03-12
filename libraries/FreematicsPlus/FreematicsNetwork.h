@@ -73,6 +73,12 @@ public:
     uint16_t code() { return m_code; }
 protected:
     String genHeader(HTTP_METHOD method, const char* path, const char* payload, int payloadSize);
+    // Generate an HTTP request header with an optional Authorization: Bearer header.
+    // When bearerToken is non-null and non-empty it is appended before the
+    // terminal CRLF-CRLF so the server can authenticate the request.
+    String genHeaderWithAuth(HTTP_METHOD method, const char* path,
+                             const char* payload, int payloadSize,
+                             const char* bearerToken);
     HTTP_STATES m_state = HTTP_DISCONNECTED;
     uint16_t m_code = 0;
     String m_host;
@@ -114,6 +120,15 @@ public:
     void close();
     bool send(HTTP_METHOD method, const char* path, const char* payload = 0, int payloadSize = 0);
     char* receive(char* buffer, int bufsize, int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
+    // Expose the underlying TLS socket so callers can stream a large response
+    // body (e.g. a firmware binary) in chunks without buffering it all at once.
+    // Used by performPullOtaCheck() in telelogger.ino.
+    WiFiClientSecure& rawClient() { return client; }
+    // Parse the HTTP response headers that are already in the socket, return the
+    // HTTP status code and (via *contentLength) the Content-Length value.
+    // Leaves the socket positioned at the first byte of the body.
+    // Returns -1 on timeout or parse failure.
+    int receiveHeaders(int* contentLength, unsigned int timeout = HTTP_CONN_TIMEOUT);
 private:
     WiFiClientSecure client;
 };
