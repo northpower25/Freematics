@@ -1132,6 +1132,13 @@ class FreematicsProxyOTAView(HomeAssistantView):
         # Try to find LED/beep settings from a Freematics config entry.
         # This view lacks a per-device token so we use the first active entry.
         # If multiple entries exist, use the OTA flasher page instead.
+        #
+        # WiFi OTA preserves the NVS partition, so we must NOT send
+        # LED_RED=1/LED_WHITE=1/BEEP=1: doing so would overwrite a user's
+        # manually-disabled NVS setting (e.g. LED_RED_EN=0 set via
+        # /api/control or a previous serial flash) with the HA default (True).
+        # Only send the "disable" command (False) when the HA config explicitly
+        # disables the setting; pass None (leave NVS untouched) otherwise.
         hass = request.app["hass"]
         _led_red_en: bool | None = None
         _led_white_en: bool | None = None
@@ -1139,9 +1146,12 @@ class FreematicsProxyOTAView(HomeAssistantView):
         entries = hass.config_entries.async_entries(DOMAIN)
         if entries:
             _cfg = {**entries[0].data, **entries[0].options}
-            _led_red_en   = bool(_cfg.get(CONF_LED_RED_EN,   True))
-            _led_white_en = bool(_cfg.get(CONF_LED_WHITE_EN, True))
-            _beep_en      = bool(_cfg.get(CONF_BEEP_EN,      True))
+            if not bool(_cfg.get(CONF_LED_RED_EN,   True)):
+                _led_red_en   = False
+            if not bool(_cfg.get(CONF_LED_WHITE_EN, True)):
+                _led_white_en = False
+            if not bool(_cfg.get(CONF_BEEP_EN,      True)):
+                _beep_en      = False
 
         ok, msg, log_lines = await async_flash_wifi(
             device_ip,

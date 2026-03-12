@@ -1218,8 +1218,15 @@ void telemetry(void* inst)
       Serial.println(store.buffer());
 
       // start transmission
+      // Snapshot enableLedWhite before the (blocking) transmit call so that
+      // if the main task processes a LED_WHITE=0 /api/control command while
+      // teleClient.transmit() is running, the LED is still driven LOW after
+      // the transmission completes.  Without the snapshot, the check at the
+      // second #ifdef PIN_LED block could see enableLedWhite=false and skip
+      // the LOW write, leaving the LED stuck on.
 #ifdef PIN_LED
-      if (enableLedWhite) digitalWrite(PIN_LED, HIGH);
+      const bool ledWhiteFlash = enableLedWhite;
+      if (ledWhiteFlash) digitalWrite(PIN_LED, HIGH);
 #endif
 
       if (teleClient.transmit(store.buffer(), store.length())) {
@@ -1236,7 +1243,7 @@ void telemetry(void* inst)
         }
       }
 #ifdef PIN_LED
-      if (enableLedWhite) digitalWrite(PIN_LED, LOW);
+      if (ledWhiteFlash) digitalWrite(PIN_LED, LOW);
 #endif
       store.purge();
 
@@ -1701,6 +1708,17 @@ void processBLE(int timeout)
 
 void setup()
 {
+  // Drive the LED pin LOW immediately so that the GPIO output register
+  // retained from a previous run (HIGH when the device was in standby)
+  // does not keep the red LED on for several hundred milliseconds while
+  // NVS is being initialised and loadConfig() is called.  The correct
+  // on/off state based on the NVS LED_RED_EN setting is applied further
+  // below, after loadConfig() has run.
+#ifdef PIN_LED
+  pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, LOW);
+#endif
+
   delay(500);
 
   // Initialize NVS.  Only erase and reinitialize for the two errors that ESP-IDF
@@ -1726,11 +1744,10 @@ void setup()
   // initialize USB serial
   Serial.begin(115200);
 
-  // init LED pin
+  // Set the LED to the state determined by the NVS LED_RED_EN setting loaded
+  // above.  When LED_RED_EN=1 (default) the LED is driven HIGH as a visual
+  // power-on / initialising indicator; when LED_RED_EN=0 it stays LOW.
 #ifdef PIN_LED
-  pinMode(PIN_LED, OUTPUT);
-  // Explicitly drive the pin so the LED state is deterministic regardless of
-  // the GPIO output register value retained from a previous run.
   digitalWrite(PIN_LED, enableLedRed ? HIGH : LOW);
 #endif
 
