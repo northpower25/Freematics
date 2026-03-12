@@ -829,16 +829,24 @@ class FreematicsWifiOtaSseView(HomeAssistantView):
         from .flash_manager import async_flash_wifi  # noqa: PLC0415
 
         # Resolve LED/beep settings from the config entry identified by the
-        # provisioning token so they are applied to NVS before flashing.
+        # provisioning token.  WiFi OTA preserves the NVS partition, so we
+        # must NOT send LED_RED=1/LED_WHITE=1/BEEP=1: doing so would overwrite
+        # a user's manually-disabled NVS setting (LED_RED_EN=0 set via
+        # /api/control or a previous serial flash) with the HA default (True).
+        # Only send the "disable" command (False) when the HA config explicitly
+        # disables the setting; leave NVS untouched when the setting is True.
         _led_red_en: bool | None = None
         _led_white_en: bool | None = None
         _beep_en: bool | None = None
         entry = hass.config_entries.async_get_entry(entry_id)
         if entry is not None:
             cfg = {**entry.data, **entry.options}
-            _led_red_en   = bool(cfg.get(CONF_LED_RED_EN,   True))
-            _led_white_en = bool(cfg.get(CONF_LED_WHITE_EN, True))
-            _beep_en      = bool(cfg.get(CONF_BEEP_EN,      True))
+            if not bool(cfg.get(CONF_LED_RED_EN,   True)):
+                _led_red_en   = False
+            if not bool(cfg.get(CONF_LED_WHITE_EN, True)):
+                _led_white_en = False
+            if not bool(cfg.get(CONF_BEEP_EN,      True)):
+                _beep_en      = False
 
         # Start the flash in a background task so the SSE handler can still
         # send keep-alive pings and the flash continues even if the client

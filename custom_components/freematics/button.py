@@ -187,12 +187,18 @@ class FlashWifiButton(_FreematicsButton):
             return
         _LOGGER.info("Freematics: starting WiFi OTA flash to %s:%s", device_ip, device_port)
         cfg = {**self._entry.data, **self._entry.options}
+        # WiFi OTA preserves the NVS partition, so we must NOT actively send
+        # LED_RED=1/LED_WHITE=1/BEEP=1 commands.  Doing so would overwrite a
+        # user's manually-disabled setting (LED_RED_EN=0 set via /api/control
+        # or a previous serial flash) with the HA default (True = on).
+        # Only send the "disable" command (=False) when the HA config explicitly
+        # disables the setting; leave NVS untouched when the setting is True.
         ok, msg, _log_lines = await async_flash_wifi(
             device_ip,
             device_port,
-            led_red_en=bool(cfg.get(CONF_LED_RED_EN, True)),
-            led_white_en=bool(cfg.get(CONF_LED_WHITE_EN, True)),
-            beep_en=bool(cfg.get(CONF_BEEP_EN, True)),
+            led_red_en=None if bool(cfg.get(CONF_LED_RED_EN, True)) else False,
+            led_white_en=None if bool(cfg.get(CONF_LED_WHITE_EN, True)) else False,
+            beep_en=None if bool(cfg.get(CONF_BEEP_EN, True)) else False,
         )
         if ok:
             _LOGGER.info("Freematics WiFi OTA flash: %s", msg)
