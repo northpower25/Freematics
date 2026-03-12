@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.20.0";
+const PANEL_VERSION = "1.21.0";
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper
@@ -304,26 +304,31 @@ class FreematicsPanel extends HTMLElement {
   /* ── entity discovery ───────────────────────────────────────────── */
 
   /**
-   * Scan hass.states for sensor.freematics_*_speed entities and
+   * Scan hass.states for sensor.freematics_*_device_temp entities and
    * return the list of unique entity prefixes, e.g.
    *   ["sensor.freematics_b1af617d"]
    *
-   * The regex uses \w+ which includes underscores, so it correctly matches
-   * ALL known entity-ID variants regardless of how many underscore-separated
-   * segments appear between "freematics_" and "_speed":
-   *   • Current installs: sensor.freematics_<id8>_speed
-   *                   e.g. sensor.freematics_b1af617d_speed
-   *   • PR-36 era:        sensor.freematics_one_<id8>_speed
-   *   • Legacy installs:  sensor.freematics_one_unknown_speed
-   *   • Minimal name:     sensor.freematics_one_speed
-   * The non-greedy \w+? combined with the $ anchor ensures only the LAST
-   * "_speed" is matched, giving the correct prefix for all variants.
+   * Why device_temp instead of speed:
+   *   The firmware sends two speed sensors: PID 0x10D (OBD speed → _speed)
+   *   and PID 0x0D (GPS speed → _gps_speed).  Using _speed as the anchor
+   *   produced a ghost "gps" device entry in the dashboard because the
+   *   non-greedy regex matched sensor.freematics_one_<id>_gps_speed and
+   *   extracted "sensor.freematics_one_<id>_gps" as the prefix — a prefix
+   *   for which no battery/rpm/etc. entities exist, so all values showed "—".
+   *
+   *   device_temp (PID 82) is transmitted in every data packet and has no
+   *   GPS or OBD variant, so it is a unique, stable anchor for each device.
+   *
+   * The regex matches all known entity-ID formats:
+   *   • Current installs: sensor.freematics_<id8>_device_temp
+   *   • PR-36 era:        sensor.freematics_one_<id8>_device_temp
+   *   • Legacy installs:  sensor.freematics_one_unknown_device_temp
    */
   _discoverDevices() {
     if (!this._hass) return [];
     const prefixes = new Set();
     for (const entityId of Object.keys(this._hass.states)) {
-      const m = entityId.match(/^(sensor\.freematics_\w+?)_speed$/);
+      const m = entityId.match(/^(sensor\.freematics_\w+)_device_temp$/);
       if (m) prefixes.add(m[1]);
     }
     return [...prefixes];

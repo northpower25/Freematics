@@ -41,6 +41,14 @@ _STANDBY_SETTLE_S = 4
 # Report upload progress this often (seconds).
 _PROGRESS_INTERVAL_S = 20
 
+# After a successful OTA the device reboots.  Poll the device until it comes
+# back online so LED/beep settings can be re-applied via /api/control.  This
+# "belt-and-suspenders" re-application ensures the NVS settings are present
+# even if the pre-OTA write was lost (e.g. because nvs_flash_init() erased the
+# NVS partition on first boot after a firmware version change).
+_POST_OTA_WAIT_S = 45   # max seconds to wait for device to come back online
+_POST_OTA_POLL_S = 3    # poll interval in seconds
+
 # Partition table flash offset (ESP32 always reads the partition table here)
 _PARTITION_TABLE_OFFSET = "0x8000"
 
@@ -338,6 +346,12 @@ async def async_flash_wifi(
         except Exception as exc:  # noqa: BLE001
             _log("info", f"Settings pre-provisioning skipped ({exc}).")
 
+    # Result holders for the OTA upload.  Using variables instead of an
+    # immediate return lets us run the post-reboot settings re-application
+    # step (below) before returning to the caller.
+    _ota_ok: bool = False
+    _ota_msg: str = ""
+
     t_start = time.monotonic()
     try:
         async with aiohttp.ClientSession() as session:
@@ -397,20 +411,21 @@ async def async_flash_wifi(
                         if resp.status == 200:
                             _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
                             _log("ok", "Device rebooted after flashing (response truncated — expected).")
-                            msg = f"OTA flash successful ({elapsed:.1f} s): device rebooted."
-                            return True, msg, log
-                        _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — response payload incomplete")
-                        if resp.status == 404:
-                            hint = (
-                                "The device HTTP server returned 404 — the OTA handler "
-                                "was not reached. This can happen when the telemetry task "
-                                "on the device causes a WiFi disruption mid-upload. "
-                                "Update the firmware to include the s_ota_active fix so "
-                                "telemetry is paused during the upload, then retry."
-                            )
-                            _log("error", hint)
-                        msg = f"OTA failed, HTTP {resp.status}: response payload incomplete"
-                        return False, msg, log
+                            _ota_ok = True
+                            _ota_msg = f"OTA flash successful ({elapsed:.1f} s): device rebooted."
+                        else:
+                            _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — response payload incomplete")
+                            if resp.status == 404:
+                                hint = (
+                                    "The device HTTP server returned 404 — the OTA handler "
+                                    "was not reached. This can happen when the telemetry task "
+                                    "on the device causes a WiFi disruption mid-upload. "
+                                    "Update the firmware to include the s_ota_active fix so "
+                                    "telemetry is paused during the upload, then retry."
+                                )
+                                _log("error", hint)
+                            msg = f"OTA failed, HTTP {resp.status}: response payload incomplete"
+                            return False, msg, log
                     elapsed = time.monotonic() - t_start
                     if resp.status == 200:
                         body = text.strip()
@@ -423,11 +438,12 @@ async def async_flash_wifi(
                             return False, msg, log
                         _log("info", f"HTTP {resp.status} — upload completed in {elapsed:.1f} s")
                         _log("ok", f"Device response: {body}")
-                        msg = f"OTA flash successful ({elapsed:.1f} s): {body}"
-                        return True, msg, log
-                    _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — device response: {text.strip()}")
-                    msg = f"OTA failed, HTTP {resp.status}: {text.strip()}"
-                    return False, msg, log
+                        _ota_ok = True
+                        _ota_msg = f"OTA flash successful ({elapsed:.1f} s): {body}"
+                    else:
+                        _log("error", f"HTTP {resp.status} after {elapsed:.1f} s — device response: {text.strip()}")
+                        msg = f"OTA failed, HTTP {resp.status}: {text.strip()}"
+                        return False, msg, log
             finally:
                 if not progress_task.done():
                     progress_task.cancel()
@@ -483,6 +499,87 @@ async def async_flash_wifi(
                 "0x8000 so subsequent WiFi OTA updates work correctly.",
             )
         return False, msg, log
+
+    # -----------------------------------------------------------------------
+    # Post-OTA: wait for the device to reboot and reconnect, then re-apply
+    # LED/beep settings via /api/control.
+    #
+    # Rationale: the pre-OTA /api/control writes happen while the device is
+    # running the *old* firmware.  After flashing, the ESP32 calls
+    # esp_restart().  On the very first boot after a firmware upgrade,
+    # nvs_flash_init() may return ESP_ERR_NVS_NEW_VERSION_FOUND (if the new
+    # firmware was built with a different ESP-IDF version that changed the NVS
+    # format) or ESP_ERR_NVS_NO_FREE_PAGES (if the NVS partition was full),
+    # causing setup() to erase the entire NVS partition — including the
+    # LED_RED_EN=0 we just wrote.  Re-applying the settings after the reboot
+    # guarantees the LEDs are off even when NVS was wiped on first boot.
+    # -----------------------------------------------------------------------
+    if _ota_ok and _setting_cmds:
+        _log(
+            "info",
+            f"OTA complete. Waiting up to {_POST_OTA_WAIT_S} s for device "
+            "to reboot and reconnect before re-applying LED/beep settings…",
+        )
+        uptime_url = (
+            f"http://{validated_ip}:{device_port}{CONTROL_PATH}?cmd=UPTIME"
+        )
+        t_wait = time.monotonic()
+        came_back = False
+        while time.monotonic() - t_wait < _POST_OTA_WAIT_S:
+            await asyncio.sleep(_POST_OTA_POLL_S)
+            try:
+                async with aiohttp.ClientSession() as poll_sess:
+                    async with poll_sess.get(
+                        uptime_url,
+                        timeout=aiohttp.ClientTimeout(total=3),
+                    ) as r:
+                        if r.status == 200:
+                            came_back = True
+                            break
+            except Exception:  # noqa: BLE001
+                pass  # device still rebooting – try again
+
+        if came_back:
+            _log("info", "Device is back online; re-applying LED/beep settings…")
+            try:
+                async with aiohttp.ClientSession() as post_sess:
+                    for nvs_key, cmd_str in _setting_cmds:
+                        cmd_url = (
+                            f"http://{validated_ip}:{device_port}"
+                            f"{CONTROL_PATH}?cmd={cmd_str}"
+                        )
+                        try:
+                            async with post_sess.get(
+                                cmd_url,
+                                timeout=aiohttp.ClientTimeout(total=5),
+                            ) as r:
+                                body = (await r.text()).strip()
+                                if r.status == 200 and body == "OK":
+                                    _log(
+                                        "info",
+                                        f"Post-reboot: re-applied {nvs_key} to device NVS.",
+                                    )
+                                else:
+                                    _log(
+                                        "info",
+                                        f"Post-reboot: could not apply {nvs_key} "
+                                        f"(HTTP {r.status}: {body!r}).",
+                                    )
+                        except Exception as exc:  # noqa: BLE001
+                            _log(
+                                "info",
+                                f"Post-reboot: could not apply {nvs_key} ({exc}).",
+                            )
+            except Exception as exc:  # noqa: BLE001
+                _log("info", f"Post-reboot settings re-application skipped ({exc}).")
+        else:
+            _log(
+                "info",
+                f"Device did not come back online within {_POST_OTA_WAIT_S} s. "
+                "LED/beep settings may need to be re-applied on next flash.",
+            )
+
+    return _ota_ok, _ota_msg, log
 
 
 async def async_send_config(
