@@ -10,7 +10,7 @@
  *   entity_prefix: sensor.freematics_one_<webhook_id_short>
  */
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 class FreematicsVehicleCard extends HTMLElement {
   set hass(hass) {
@@ -38,6 +38,7 @@ class FreematicsVehicleCard extends HTMLElement {
   _stateVal(suffix, unit) {
     const e = this._getEntity(suffix);
     if (!e) return "—";
+    if (e.state === "unavailable" || e.state === "unknown") return "0";
     const v = parseFloat(e.state);
     if (isNaN(v)) return e.state;
     return unit ? `${v.toFixed(1)} ${unit}` : v.toFixed(1);
@@ -46,7 +47,16 @@ class FreematicsVehicleCard extends HTMLElement {
   _stateRaw(suffix) {
     const e = this._getEntity(suffix);
     if (!e) return null;
-    return parseFloat(e.state);
+    const v = parseFloat(e.state);
+    return isNaN(v) ? null : v;
+  }
+
+  /** Like _stateRaw() but returns 0 when entity exists but has no numeric value yet. */
+  _stateRawZ(suffix) {
+    const e = this._getEntity(suffix);
+    if (!e) return null;
+    const v = parseFloat(e.state);
+    return isNaN(v) ? 0 : v;
   }
 
   _batteryIcon(v) {
@@ -82,23 +92,23 @@ class FreematicsVehicleCard extends HTMLElement {
     if (!this._hass || !this._config) return;
 
     const title = this._config.title || "Freematics ONE+";
-    const speed = this._stateRaw("speed");
-    const rpm = this._stateRaw("rpm");
-    const battery = this._stateRaw("battery");
+    const speed = this._stateRawZ("speed");
+    const rpm = this._stateRawZ("rpm");
+    const battery = this._stateRawZ("battery");
     const signal = this._stateRaw("signal");
     const lat = this._stateRaw("lat");
     const lng = this._stateRaw("lng");
     const alt = this._stateRaw("alt");
     const heading = this._stateRaw("heading");
     const gpsSpeed = this._stateRaw("gps_speed");
-    const coolant = this._stateRaw("coolant_temp");
-    const engineLoad = this._stateRaw("engine_load");
-    const throttle = this._stateRaw("throttle");
-    const fuelPressure = this._stateRaw("fuel_pressure");
+    const coolant = this._stateRawZ("coolant_temp");
+    const engineLoad = this._stateRawZ("engine_load");
+    const throttle = this._stateRawZ("throttle");
+    const fuelPressure = this._stateRawZ("fuel_pressure");
     const satellites = this._stateRaw("satellites");
-    const accX = this._stateRaw("acc_x");
-    const accY = this._stateRaw("acc_y");
-    const accZ = this._stateRaw("acc_z");
+    const accX = this._stateRawZ("acc_x");
+    const accY = this._stateRawZ("acc_y");
+    const accZ = this._stateRawZ("acc_z");
 
     const speedColor = this._speedColor(speed);
     const battColor = this._batteryColor(battery);
