@@ -1405,7 +1405,7 @@ void standby()
   // yields and does not compete for the SD card or flash hardware.
   if (s_ota_pending && state.check(STATE_STORAGE_READY)) {
     s_ota_active = true;
-    delay(1000); // give the telemetry task one scheduling cycle to yield
+    delay(OTA_TELEMETRY_YIELD_DELAY_MS); // give the telemetry task one scheduling cycle to yield
     if (performPullOtaFlash()) {
       // Flash succeeded; reboot timer is running — block here until it fires.
       while (true) delay(1000);
@@ -1718,6 +1718,10 @@ void loadConfig()
 // in milliseconds; this generous timeout guards against brief pauses.
 #define PULL_OTA_CHUNK_TIMEOUT_MS 30000U  // 30 s
 
+// How long to wait after setting s_ota_active before starting the flash,
+// giving the telemetry task one FreeRTOS scheduling cycle to yield.
+#define OTA_TELEMETRY_YIELD_DELAY_MS 1000U
+
 // Shared chunk buffer used by both the download (to SD) and flash (from SD)
 // phases.  Declared here so both functions share the same static allocation
 // and the buffer is not duplicated on the heap.
@@ -1838,7 +1842,7 @@ static bool performPullOtaFlash()
     written += (size_t)n;
 
     // Log progress every 10%.
-    if (written - lastLogAt >= fwSize / 10) {
+    if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
       lastLogAt = written;
       Serial.printf("[OTA-PULL] Flash %u / %u bytes (%.0f%%) in %u ms\n",
                     (unsigned)written, (unsigned)fwSize,
@@ -2131,7 +2135,7 @@ bool performPullOtaCheck()
         break;
       }
       written += (size_t)n;
-      if (written - lastLogAt >= fwSize / 10) {
+      if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
         lastLogAt = written;
         Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
                       (unsigned)written, (unsigned)fwSize,
@@ -2284,7 +2288,7 @@ bool performPullOtaCheck()
     written += (size_t)n;
 
     // Log progress every 10%.
-    if (written - lastLogAt >= fwSize / 10) {
+    if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
       lastLogAt = written;
       Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
                     (unsigned)written, (unsigned)fwSize,

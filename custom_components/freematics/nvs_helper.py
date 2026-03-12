@@ -359,7 +359,7 @@ def generate_nvs_partition(
         _ota_host = ota_host or server_host
         if _ota_host:
             _add_str("OTA_HOST", _ota_host)
-        _ota_port = ota_port if ota_port is not None else (server_port or 443)
+        _ota_port = ota_port if ota_port else (server_port or 443)
         _add_u16("OTA_PORT", _ota_port)
     if ota_check_interval_s and ota_check_interval_s > 0:
         _add_u16("OTA_INTERVAL", ota_check_interval_s)
