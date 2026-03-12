@@ -1,0 +1,114 @@
+name: "✨ Feature Request"
+description: Suggest a new feature or improvement for the Freematics ONE+ integration or firmware
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thank you for suggesting a new feature!
+
+        Please fill in as much detail as possible so we can understand your use case.
+        The more context you provide, the easier it is to evaluate and implement the request.
+
+  - type: checkboxes
+    id: not_duplicate
+    attributes:
+      label: "Duplicate check"
+      options:
+        - label: "I have searched existing feature requests and this is not a duplicate"
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: "Feature Summary"
+      description: "A clear and concise description of the feature you'd like to see."
+      placeholder: "I'd like the integration to support..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem / Use Case"
+      description: "What problem does this feature solve? What is the use case or pain point?"
+      placeholder: "Currently I have to... / I often find myself needing to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: "Proposed Solution"
+      description: "How do you envision this feature working? Describe your ideal solution."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives Considered"
+      description: "Have you considered any workarounds? Why do they fall short?"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: affected_area
+    attributes:
+      label: "Feature Area"
+      description: "Which area does this feature relate to? (Select all that apply)"
+      options:
+        - label: "Integration setup / config flow"
+        - label: "WiFi OTA flashing"
+        - label: "Browser Serial (Web Serial) flashing"
+        - label: "Serial USB flashing"
+        - label: "Sensor entities / telemetry"
+        - label: "Webhook / server communication"
+        - label: "Cellular / SIM support"
+        - label: "LED / buzzer control"
+        - label: "Lovelace dashboard / card"
+        - label: "Firmware (ESP32 / Arduino)"
+        - label: "NVS / device configuration"
+        - label: "HACS / installation"
+        - label: "Documentation"
+        - label: "Other"
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: "Priority / Impact"
+      description: "How important is this feature for your use?"
+      options:
+        - "Nice to have — minor convenience improvement"
+        - "Useful — would noticeably improve my workflow"
+        - "Important — I need this to use the integration effectively"
+        - "Critical — the integration is not usable for me without this"
+    validations:
+      required: true
+
+  - type: input
+    id: integration_version
+    attributes:
+      label: "Integration Version (Current)"
+      placeholder: "e.g. 0.0.96"
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: "Additional Context"
+      description: "Links, references, screenshots, or any other helpful information."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: "Final Checklist"
+      options:
+        - label: "I have described the problem/use case clearly"
+          required: true
+        - label: "I have proposed at least a rough solution"
+          required: true

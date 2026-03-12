@@ -61,6 +61,12 @@ BSD License — see [LICENSE](LICENSE).
 
 ---
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a full list of changes and release notes.
+
+---
+
 # Freematics ONE+ – Home Assistant Integration (Deutsch)
 
 Eine HACS-kompatible Home Assistant Integration für das **Freematics ONE+** OBD-II Telematik-Gerät.  
@@ -95,4 +101,16 @@ Das Gerät sendet Echtzeit-Fahrzeugdaten direkt an Home Assistant über einen si
 | `server/` | [Freematics Hub](https://freematics.com/hub/) Server-Quellcode |
 | `docs/` | Vollständige Integrationsdokumentation |
 | `old/` | Ältere Firmware-Versionen (v2 / v3 / v4) zur Referenz |
+
+---
+
+## Lizenz
+
+BSD-Lizenz — siehe [LICENSE](LICENSE).
+
+---
+
+## Changelog
+
+Alle Änderungen und Release Notes finden sich in [CHANGELOG.md](CHANGELOG.md).
 

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation (EN / DE)
+    url: https://github.com/northpower25/Freematics/blob/master/docs/README.md
+    about: Please read the full documentation before opening an issue — your question may already be answered there.
+  - name: ❓ FAQ & HowTo
+    url: https://github.com/northpower25/Freematics/blob/master/docs/README.md#faq--howto
+    about: Check the FAQ section for the most common problems and solutions.
+  - name: 💬 Discussions
+    url: https://github.com/northpower25/Freematics/discussions
+    about: For general questions, ideas, and show-and-tell, please use GitHub Discussions instead of issues.
