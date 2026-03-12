@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [0.0.96] – 2025-03-12
+## [0.1.00] – 2025-03-12
 
 ### Summary
 
