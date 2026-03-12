@@ -28,6 +28,7 @@ from .const import (
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
+    CONF_OTA_CHECK_INTERVAL_S,
     CONF_SERIAL_PORT,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
@@ -39,6 +40,7 @@ from .const import (
     CONN_TYPE_WIFI,
     DEFAULT_DATA_INTERVAL_MS,
     DEFAULT_DEVICE_PORT,
+    DEFAULT_OTA_CHECK_INTERVAL_S,
     DEFAULT_OPERATING_MODE,
     DEFAULT_SYNC_INTERVAL_S,
     DEVICE_MODEL_A,
@@ -397,6 +399,10 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                         CONF_SYNC_INTERVAL_S,
                         default=current.get(CONF_SYNC_INTERVAL_S, DEFAULT_SYNC_INTERVAL_S),
                     ): vol.All(int, vol.Range(min=0, max=3600)),
+                    vol.Optional(
+                        CONF_OTA_CHECK_INTERVAL_S,
+                        default=current.get(CONF_OTA_CHECK_INTERVAL_S, DEFAULT_OTA_CHECK_INTERVAL_S),
+                    ): vol.All(int, vol.Range(min=0, max=86400)),
                     vol.Optional(CONF_DEVICE_IP, default=current.get(CONF_DEVICE_IP, "")): str,
                     vol.Optional(CONF_DEVICE_PORT, default=current.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)): int,
                     vol.Optional(CONF_FLASH_METHOD, default=current.get(CONF_FLASH_METHOD, FLASH_METHOD_SERIAL)): vol.In(

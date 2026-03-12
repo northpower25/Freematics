@@ -626,9 +626,6 @@ class FreematicsPanel extends HTMLElement {
     let manifestUrl = DEFAULT_MANIFEST_URL;
     let flashImageUrl = null;
     let nvsUrl = null;
-    let provisioningToken = "";
-    let deviceIp = "";
-    let devicePort = 80;
     try {
       const result = await Promise.race([
         this._hass.callApi("GET", "freematics/provisioning_token"),
@@ -639,18 +636,12 @@ class FreematicsPanel extends HTMLElement {
         this._provisioningManifestUrl = manifestUrl;
         flashImageUrl = result.flash_image_url || null;
         nvsUrl        = result.nvs_url || null;
-        provisioningToken = result.token || "";
-        deviceIp = result.device_ip || "";
-        devicePort = result.device_port || 80;
       }
     } catch (_) {
       // Non-fatal: fall back to default manifest (firmware without NVS settings).
     }
 
     const flasherUrl    = `/api/freematics/flasher?manifest=${encodeURIComponent(manifestUrl)}&embedded=1`;
-    const otaFlasherUrl = `/api/freematics/ota_flasher?token=${encodeURIComponent(provisioningToken)}&embedded=1`
-      + (deviceIp ? `&device_ip=${encodeURIComponent(deviceIp)}` : "")
-      + (devicePort && devicePort !== 80 ? `&device_port=${encodeURIComponent(devicePort)}` : "");
 
     el.innerHTML = `
       <div class="flash-wrap">
@@ -685,40 +676,50 @@ class FreematicsPanel extends HTMLElement {
           </p>
         </div>
 
-        <!-- ── WiFi OTA (AP mode) ─────────────────────────────────── -->
+        <!-- ── Cloud Pull-OTA ─────────────────────────────────────── -->
         <div class="flash-card">
-          <h3>&#128221; WiFi OTA (AP Mode)</h3>
-          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0">
-            <li>Power on the Freematics ONE+ (factory or freshly flashed device)</li>
-            <li>Connect your computer to WiFi <strong>TELELOGGER</strong> (password: <strong>PASSWORD</strong>)</li>
-            <li>Set <code style="${cs}">192.168.4.1</code> as the Device IP in the integration settings</li>
-            <li>Press <strong>Flash Firmware via WiFi OTA</strong> on the device page in HA</li>
-          </ol>
-        </div>
-
-        <!-- ── WiFi OTA (Local network via iframe) ───────────────── -->
-        <div class="flash-card">
-          <h3>&#128246; WiFi OTA (Local Network)</h3>
+          <h3>&#9729; Cloud Pull-OTA (Remote Firmware Update)</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
-            Flash when the Freematics ONE+ is already connected to your
-            <strong>local WiFi network</strong> and reachable from the Home Assistant
-            server. Requires firmware compiled with
-            <code style="${cs}">ENABLE_HTTPD=1</code>.
+            <strong>How it works:</strong> The device periodically polls a secure endpoint
+            on this Home Assistant instance and automatically downloads &amp; installs
+            a new firmware version when you publish one — no USB cable required.
           </p>
-          <iframe
-            id="ota-iframe"
-            src="${otaFlasherUrl}"
-            style="width:100%;height:380px;border:1px solid var(--divider-color);border-radius:6px;"
-            title="Freematics ONE+ WiFi OTA Flash"
-          ></iframe>
-          <p style="font-size:.82rem;color:var(--secondary-text-color);margin:4px 0 0;text-align:center">
-            Iframe not working? &nbsp;
-            <a href="${otaFlasherUrl.replace('&embedded=1','')}"
-               target="_blank" rel="noopener"
-               style="color:#2196f3;white-space:nowrap">
-              Open OTA flasher in a new browser tab ↗
-            </a>
-          </p>
+          <ol style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 12px">
+            <li>
+              <strong>Enable the OTA check interval:</strong>
+              Go to <em>Settings → Integrations → Freematics ONE+ → Configure</em>
+              and set <em>OTA Check Interval</em> to a positive value (e.g.
+              <strong>3600</strong> for once per hour, <strong>0</strong> = disabled).
+            </li>
+            <li>
+              <strong>Re-provision the device</strong> (once) so that the OTA token
+              and interval are written to the device NVS:
+              Flash via <em>Connect &amp; Flash Firmware</em> below, or use the
+              <em>flash_image.bin</em> download which includes all settings.
+            </li>
+            <li>
+              <strong>Publish the firmware</strong> by pressing
+              <em>Publish Firmware for Cloud OTA</em> on the device page in Home Assistant.
+              This marks the current firmware as available for download.
+            </li>
+            <li>
+              The device will detect the update at its next scheduled check, download
+              the binary to the SD card, enter standby, then flash and reboot
+              automatically — <strong>no data is lost</strong> during an active trip.
+            </li>
+          </ol>
+          <div style="background:var(--secondary-background-color);border-radius:6px;padding:8px 12px;font-size:.85rem;color:var(--secondary-text-color)">
+            <strong>&#128273; How the URL is resolved:</strong>
+            The device uses the <em>OTA_HOST</em> and <em>OTA_TOKEN</em> NVS keys that
+            are written during provisioning.  The host is your Home Assistant external URL
+            (e.g. <code style="${cs}">abc123.ui.nabu.casa</code> when Nabu Casa is active,
+            or your own domain / local IP).  The token is a 64-character secret that
+            authenticates the request — it is embedded in the URL path so no extra
+            HTTP headers are needed.
+            The device never accesses <code style="${cs}">/local/</code> paths directly;
+            it always uses the authenticated endpoint
+            <code style="${cs}">/api/freematics/ota_pull/&lt;token&gt;/meta.json</code>.
+          </div>
         </div>
 
         <!-- ── Manual flash (esptool / Freematics Builder) ─────────── -->
@@ -875,12 +876,12 @@ class FreematicsPanel extends HTMLElement {
 
         <!-- ── Datalogger / HTTPD info ────────────────────────────── -->
         <div class="flash-card">
-          <h3>&#128202; Built-in Data Viewer &amp; OTA Update Server (HTTPD)</h3>
+          <h3>&#128202; Built-in Data Viewer &amp; HTTPD Server</h3>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
             The pre-compiled firmware has the built-in HTTP server
             (<code style="${cs}">ENABLE_HTTPD=1</code>) <strong>enabled by default</strong>.
-            This allows WiFi OTA firmware updates and lets you view live data
-            directly on the device via a web browser.
+            This lets you view live data directly on the device via a web browser,
+            and send control commands without going through Home Assistant.
           </p>
           <p style="font-size:.9rem;color:var(--secondary-text-color);margin:0 0 8px">
             <strong>Available endpoints when the device is reachable on the network:</strong>
@@ -891,7 +892,6 @@ class FreematicsPanel extends HTMLElement {
             <li><code style="${cs}">/api/control?cmd=…</code> – send control commands</li>
             <li><code style="${cs}">/api/list</code> – list log files on SD card</li>
             <li><code style="${cs}">/api/log/&lt;n&gt;</code> – download raw CSV log file</li>
-            <li><code style="${cs}">/update</code> – OTA firmware upload endpoint (used by WiFi OTA above)</li>
           </ul>
         </div>
 
