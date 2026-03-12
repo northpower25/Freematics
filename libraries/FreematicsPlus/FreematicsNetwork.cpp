@@ -287,7 +287,8 @@ int WifiHTTP::receiveHeaders(int* contentLength, unsigned int timeout)
       continue;
     }
     char c = (char)client.read();
-    if (hdrLen < (int)(sizeof(hdrBuf) - 1)) {
+    // Guard: leave room for both the new character and the null terminator.
+    if (hdrLen < (int)(sizeof(hdrBuf) - 2)) {
       hdrBuf[hdrLen++] = c;
       hdrBuf[hdrLen]   = '\0';
     }

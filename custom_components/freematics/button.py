@@ -286,6 +286,14 @@ class PublishCloudOtaButton(_FreematicsButton):
         config_dir = hass.config.config_dir
 
         device_id = self._webhook_id[:8]
+        # Sanitize: keep only alphanumeric, hyphen and underscore characters so
+        # the derived path component can never contain ".." or other traversal
+        # sequences regardless of how webhook_id was generated.
+        import re as _re  # noqa: PLC0415
+        device_id = _re.sub(r"[^A-Za-z0-9_-]", "", device_id)
+        if not device_id:
+            _LOGGER.error("Freematics Cloud OTA: could not derive a safe device ID")
+            return
         target_dir = Path(config_dir) / "www" / _CLOUD_OTA_WWW_BASE / device_id
 
         if not FIRMWARE_PATH.exists():

@@ -1686,7 +1686,7 @@ bool performPullOtaCheck()
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) {
       char _ota_diag[48];
-      snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=META_HTTP%u", (unsigned)teleClient.wifi.code());
+      snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=META_HTTP%d", (int)teleClient.wifi.code());
       logger.logEvent(_ota_diag);
     }
 #endif
@@ -1801,6 +1801,7 @@ bool performPullOtaCheck()
   static uint8_t otaRecvBuf[PULL_OTA_CHUNK_SIZE];
   size_t written = 0;
   uint32_t dlStart = millis();
+  size_t lastLogAt = 0;  // reset per-OTA; tracks progress-log threshold
 
   while (written < fwSize) {
     // Wait up to PULL_OTA_CHUNK_TIMEOUT_MS for the next chunk.
@@ -1845,7 +1846,6 @@ bool performPullOtaCheck()
     written += (size_t)n;
 
     // Log progress every 10%.
-    static size_t lastLogAt = 0;
     if (written - lastLogAt >= fwSize / 10) {
       lastLogAt = written;
       Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",

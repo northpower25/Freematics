@@ -1412,8 +1412,10 @@ class FreematicsOtaPullView(HomeAssistantView):
         if entry_id is None:
             # Cold-start: rebuild cache from all config entries.
             for _entry in hass.config_entries.async_entries(DOMAIN):
-                _t = (_entry.options or {}).get(CONF_OTA_TOKEN) or \
-                     (_entry.data or {}).get(CONF_OTA_TOKEN, "")
+                _t = (
+                    (_entry.options or {}).get(CONF_OTA_TOKEN)
+                    or (_entry.data or {}).get(CONF_OTA_TOKEN, "")
+                )
                 if _t:
                     ota_store[_t] = _entry.entry_id
                     if _t == token:
@@ -1486,7 +1488,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                         f"{DOMAIN}_{_webhook}_debug",
                         {
                             "ota_last_success": now_iso,
-                            "ota_last_error": "Kein Fehler",
+                            "ota_last_error": "No error",
                             "ota_last_version": FIRMWARE_VERSION,
                             "fw_version": FIRMWARE_VERSION,
                         },
