@@ -164,15 +164,29 @@ PID_MAP: dict[str, _PidMapping] = {
 }
 
 # OTA pull update configuration
-# CONF_OTA_TOKEN: long-lived Bearer token stored in entry.options.  Embedded as
-# a path component in the HA pull-OTA endpoint so the device can download
+# CONF_OTA_TOKEN: long-lived secret token stored in entry.data/options.  Embedded
+# as a path component in the HA pull-OTA endpoint so the device can download
 # firmware without HA session credentials.  Provisioned into device NVS as the
 # OTA_TOKEN key so the firmware knows its token after the next NVS flash.
 CONF_OTA_TOKEN = "ota_token"
 # How often (seconds) the device should check the pull-OTA endpoint for new
 # firmware.  0 = disabled (default).  Stored as NVS key OTA_INTERVAL (u16).
 CONF_OTA_CHECK_INTERVAL_S = "ota_check_interval_s"
-DEFAULT_OTA_CHECK_INTERVAL_S = 0   # off by default; user must opt in
+DEFAULT_OTA_CHECK_INTERVAL_S = 3600  # check once per hour by default when OTA is enabled
+
+# OTA update mode.
+# OTA_MODE_DISABLED – no OTA; device never checks for firmware updates.
+# OTA_MODE_PULL     – Variant 1: HA always serves the latest bundled firmware;
+#                     the device downloads and flashes whenever HA has a newer
+#                     version.  No manual "Publish" step needed.
+# OTA_MODE_CLOUD    – Variant 2: HA only offers firmware after the user presses
+#                     the "Publish Firmware for Cloud OTA" button, giving full
+#                     manual control over when the device receives an update.
+CONF_OTA_MODE = "ota_mode"
+OTA_MODE_DISABLED = "disabled"
+OTA_MODE_PULL     = "pull"
+OTA_MODE_CLOUD    = "cloud"
+DEFAULT_OTA_MODE  = OTA_MODE_DISABLED  # opt-in; no automatic updates out of the box
 
 # Control commands supported by the device HTTP API (/api/control)
 CMD_SSID = "SSID={}"

@@ -76,6 +76,7 @@ from .const import (
     CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_MODE,
     CONF_OTA_TOKEN,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
@@ -86,6 +87,9 @@ from .const import (
     DOMAIN,
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
+    OTA_MODE_CLOUD,
+    OTA_MODE_DISABLED,
+    OTA_MODE_PULL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -847,8 +851,14 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
     # Pull-OTA configuration (Variant 1: authenticated HA endpoint).
-    ota_token = cfg.get(CONF_OTA_TOKEN, "")
-    ota_check_interval_s = int(cfg.get(CONF_OTA_CHECK_INTERVAL_S, 0))
+    # When ota_mode is disabled, suppress OTA NVS keys so the device never polls.
+    _ota_mode = cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
+    if _ota_mode == OTA_MODE_DISABLED:
+        ota_token = ""
+        ota_check_interval_s = 0
+    else:
+        ota_token = cfg.get(CONF_OTA_TOKEN, "")
+        ota_check_interval_s = int(cfg.get(CONF_OTA_CHECK_INTERVAL_S, 3600))
 
     # Determine the operating mode.  New entries use the operating_mode selector;
     # legacy pre-existing entries fall back to the old enable_httpd boolean.
@@ -1452,7 +1462,7 @@ class FreematicsOtaPullView(HomeAssistantView):
             """Read and parse the device's published version.json (blocking I/O)."""
             try:
                 return json.loads(_version_json.read_text(encoding="utf-8"))
-            except Exception as _exc:  # noqa: BLE001
+            except (OSError, json.JSONDecodeError, ValueError) as _exc:
                 _LOGGER.warning(
                     "Freematics pull-OTA: could not read version.json at %s: %s",
                     _version_json,
@@ -1464,82 +1474,137 @@ class FreematicsOtaPullView(HomeAssistantView):
             """Write updated version.json (blocking I/O)."""
             try:
                 _version_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            except Exception as _exc:  # noqa: BLE001
+            except OSError as _exc:
                 _LOGGER.warning(
                     "Freematics pull-OTA: could not update version.json: %s", _exc
                 )
 
+        # Determine OTA mode from the config entry so we can apply the correct
+        # availability policy:
+        #   pull  (Variant 1) – always serve the latest bundled firmware; no
+        #                        manual "Publish" step needed.
+        #   cloud (Variant 2) – only serve firmware after the user presses
+        #                        "Publish Firmware for Cloud OTA" (version.json gate).
+        #   disabled / unknown – return available=false for meta.json; 404 for binary.
+        _entry_cfg = {**(entry.data or {}), **(entry.options or {})}
+        _ota_mode = _entry_cfg.get(CONF_OTA_MODE, OTA_MODE_CLOUD)
+
         if filename == "meta.json":
-            # Return available=true only when the user has published a firmware
-            # via the "Publish Firmware for Cloud OTA" button.  If no firmware
-            # has been published yet, return available=false so the device skips
-            # the download and tries again at the next interval.
-            if not _version_json.exists():
+            if _ota_mode == OTA_MODE_PULL:
+                # Variant 1: always serve the latest firmware when the binary exists.
+                if not FIRMWARE_PATH.exists():
+                    return web.Response(
+                        body=json.dumps({
+                            "available": False,
+                            "version": FIRMWARE_VERSION,
+                        }).encode("utf-8"),
+                        content_type="application/json",
+                    )
+
+                def _compute_meta_pull() -> tuple[int, str]:
+                    data = FIRMWARE_PATH.read_bytes()
+                    digest = hashlib.sha256(data).hexdigest()
+                    return len(data), digest
+
+                try:
+                    fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_pull)
+                except OSError as exc:
+                    return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+
                 return web.Response(
                     body=json.dumps({
-                        "available": False,
+                        "available": True,
                         "version": FIRMWARE_VERSION,
+                        "size": fw_size,
+                        "sha256": fw_sha256,
+                        "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
                     }).encode("utf-8"),
                     content_type="application/json",
                 )
 
-            published = await hass.async_add_executor_job(_read_version_json)
-            if not published.get("available"):
+            if _ota_mode == OTA_MODE_CLOUD:
+                # Variant 2: only serve firmware when the user has pressed
+                # "Publish Firmware for Cloud OTA" (version.json gate).
+                if not _version_json.exists():
+                    return web.Response(
+                        body=json.dumps({
+                            "available": False,
+                            "version": FIRMWARE_VERSION,
+                        }).encode("utf-8"),
+                        content_type="application/json",
+                    )
+
+                published = await hass.async_add_executor_job(_read_version_json)
+                if not published.get("available"):
+                    return web.Response(
+                        body=json.dumps({
+                            "available": False,
+                            "version": published.get("version", FIRMWARE_VERSION),
+                        }).encode("utf-8"),
+                        content_type="application/json",
+                    )
+
+                if not FIRMWARE_PATH.exists():
+                    return web.Response(status=503, text="Firmware binary not found")
+
+                def _compute_meta_cloud() -> tuple[int, str]:
+                    data = FIRMWARE_PATH.read_bytes()
+                    digest = hashlib.sha256(data).hexdigest()
+                    return len(data), digest
+
+                try:
+                    fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_cloud)
+                except OSError as exc:
+                    return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+
                 return web.Response(
                     body=json.dumps({
-                        "available": False,
+                        "available": True,
                         "version": published.get("version", FIRMWARE_VERSION),
+                        "size": fw_size,
+                        "sha256": fw_sha256,
+                        "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
                     }).encode("utf-8"),
                     content_type="application/json",
                 )
 
-            # Firmware has been published — return its metadata.
-            # Re-compute SHA-256 from FIRMWARE_PATH (canonical source) to ensure
-            # the hash matches the binary that will be served.
-            if not FIRMWARE_PATH.exists():
-                return web.Response(status=503, text="Firmware binary not found")
-
-            def _compute_meta() -> tuple[int, str]:
-                data = FIRMWARE_PATH.read_bytes()
-                digest = hashlib.sha256(data).hexdigest()
-                return len(data), digest
-
-            try:
-                fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta)
-            except OSError as exc:
-                return web.Response(status=500, text=f"Cannot read firmware: {exc}")
-
+            # OTA disabled (or unknown mode): tell device nothing is available.
             return web.Response(
                 body=json.dumps({
-                    "available": True,
-                    "version": published.get("version", FIRMWARE_VERSION),
-                    "size": fw_size,
-                    "sha256": fw_sha256,
-                    "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                    "available": False,
+                    "version": FIRMWARE_VERSION,
                 }).encode("utf-8"),
                 content_type="application/json",
             )
 
         # filename == "firmware.bin"
-        # Only serve the binary when the user has published firmware.
-        if not _version_json.exists():
-            return web.Response(
-                status=404,
-                text=(
-                    "No firmware published. Press 'Publish Firmware for Cloud OTA' "
-                    "on the device page in Home Assistant first."
-                ),
-            )
+        if _ota_mode == OTA_MODE_DISABLED:
+            return web.Response(status=404, text="OTA is disabled for this device")
 
-        published = await hass.async_add_executor_job(_read_version_json)
-        if not published.get("available"):
-            return web.Response(
-                status=404,
-                text=(
-                    "Firmware already downloaded or not yet published. "
-                    "Press 'Publish Firmware for Cloud OTA' to make a new version available."
-                ),
-            )
+        if _ota_mode == OTA_MODE_CLOUD:
+            # Variant 2: only serve binary when version.json gate is open.
+            if not _version_json.exists():
+                return web.Response(
+                    status=404,
+                    text=(
+                        "No firmware published. Press 'Publish Firmware for Cloud OTA' "
+                        "on the device page in Home Assistant first."
+                    ),
+                )
+
+            published = await hass.async_add_executor_job(_read_version_json)
+            if not published.get("available"):
+                return web.Response(
+                    status=404,
+                    text=(
+                        "Firmware already downloaded or not yet published. "
+                        "Press 'Publish Firmware for Cloud OTA' to make a new version available."
+                    ),
+                )
+        else:
+            # Variant 1: no gate; read published dict as empty placeholder so
+            # the logging/diag code below can reference it uniformly.
+            published = {}
 
         if not FIRMWARE_PATH.exists():
             return web.Response(status=503, text="Firmware binary not found")
@@ -1551,19 +1616,20 @@ class FreematicsOtaPullView(HomeAssistantView):
         except OSError as exc:
             return web.Response(status=500, text=f"Cannot read firmware: {exc}")
 
-        # Mark firmware as downloaded: set "available": false in version.json so
-        # the device does not re-download the same firmware on the next interval.
-        # This is done before the response is returned; the response body is
-        # fully buffered in memory so the flag update cannot race with delivery.
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        def _mark_downloaded() -> None:
-            data = dict(published)
-            data["available"] = False
-            data["downloaded_at"] = now_iso
-            _write_version_json(data)
+        if _ota_mode == OTA_MODE_CLOUD:
+            # Mark firmware as downloaded: set "available": false in version.json so
+            # the device does not re-download the same firmware on the next interval.
+            def _mark_downloaded() -> None:
+                data = dict(published)
+                data["available"] = False
+                data["downloaded_at"] = now_iso
+                _write_version_json(data)
 
-        await hass.async_add_executor_job(_mark_downloaded)
+            await hass.async_add_executor_job(_mark_downloaded)
+
+        _fw_version = published.get("version", FIRMWARE_VERSION)
 
         # Record the firmware-download event so the debug sensor can show
         # "OTA firmware downloaded at <time>" to the user.  The device will
@@ -1572,27 +1638,26 @@ class FreematicsOtaPullView(HomeAssistantView):
         for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
             if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
                 _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
-                # Match by OTA token → entry_id resolved above.
                 if _eid == entry_id:
                     _diag = _entry_data["diag"]
                     _diag["ota_last_success"] = now_iso
                     _diag["ota_last_error"] = None
-                    _diag["ota_last_version"] = published.get("version", FIRMWARE_VERSION)
-                    _diag["fw_version"] = published.get("version", FIRMWARE_VERSION)
+                    _diag["ota_last_version"] = _fw_version
+                    _diag["fw_version"] = _fw_version
                     async_dispatcher_send(
                         hass,
                         f"{DOMAIN}_{_webhook}_debug",
                         {
                             "ota_last_success": now_iso,
                             "ota_last_error": "No error",
-                            "ota_last_version": published.get("version", FIRMWARE_VERSION),
-                            "fw_version": published.get("version", FIRMWARE_VERSION),
+                            "ota_last_version": _fw_version,
+                            "fw_version": _fw_version,
                         },
                     )
                     _LOGGER.info(
-                        "Freematics pull-OTA: firmware v%s downloaded by device (entry %s); "
-                        "marked as downloaded in version.json",
-                        published.get("version", FIRMWARE_VERSION),
+                        "Freematics pull-OTA (%s): firmware v%s downloaded by device (entry %s)",
+                        _ota_mode,
+                        _fw_version,
                         entry_id,
                     )
                     break
