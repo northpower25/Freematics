@@ -98,10 +98,12 @@ BOOTLOADER_PATH = Path(__file__).parent / "firmware" / "bootloader.bin"
 #                       flash read err, 1000  /  ets_main.c 371
 # 0x8000 = 32768  – partition table offset (always this address on ESP32).
 # 0x10000 = 65536 – application partition offset for ESP32.
-# 0x9000  = 36864 – NVS partition offset (huge_app partition scheme).
+# 0x9000  = 36864 – NVS partition offset.
 # Including the partition table ensures the device always has the correct
-# huge_app partition scheme, which is required for the NVS at 0x9000 to be
-# found.  Without it, devices that had a different scheme would crash.
+# dual-OTA partition scheme (ota_0 + ota_1), which is required both for
+# the NVS to be located correctly and for WiFi OTA updates to work.
+# Devices that still have huge_app.csv (single ota_0 only) will be migrated
+# to the dual-OTA layout on their first Web Serial flash.
 _MANIFEST_BASE = {
     "name": "Freematics ONE+ Telelogger",
     "version": "5.0",
@@ -1026,16 +1028,17 @@ class FreematicsBootloaderView(HomeAssistantView):
 
 
 class FreematicsPartitionTableView(HomeAssistantView):
-    """Serve the huge_app partition table binary.
+    """Serve the dual-OTA partition table binary.
 
     Accessible at /api/freematics/partition_table.bin.
     Referenced by the esp-web-tools manifest so that the correct partition
     scheme is always written at 0x8000 when flashing via Web Serial.
 
-    Including the partition table ensures devices with a different scheme
-    (e.g. default Arduino partitions) are migrated to huge_app automatically
-    during the Web Serial flash, which is required for the NVS partition at
-    0x9000 to be located correctly by the firmware.
+    The table uses two OTA app partitions (ota_0 at 0x10000, ota_1 at
+    0x200000, each 1.94 MB).  Devices that previously had the huge_app.csv
+    layout (single ota_0 only) are automatically migrated to the dual-OTA
+    layout.  Without two OTA slots, WiFi OTA crashes with abort() because
+    esp_ota_begin() refuses to write to the currently-running partition.
 
     requires_auth is False: the partition table is the same for all devices
     (not device-specific) and contains no sensitive data.

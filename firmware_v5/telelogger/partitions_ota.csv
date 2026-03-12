@@ -1,0 +1,22 @@
+# Freematics ONE+ custom partition table – dual OTA app partitions
+#
+# Works on both 4 MB and 16 MB flash.  The total used space is 0x3F0000
+# (≈ 3.94 MB) which leaves room on 4 MB devices and is well within 16 MB.
+#
+# Two equal-sized OTA app partitions (app0/ota_0 and app1/ota_1) are
+# required for ESP-IDF OTA to work.  The default huge_app.csv only has
+# one OTA partition (ota_0), which causes esp_ota_get_next_update_partition()
+# to return the currently running partition.  esp_ota_begin() then fails with
+# ESP_ERR_OTA_PARTITION_CONFLICT and the Arduino Update library calls abort().
+#
+# Partition layout:
+#   nvs      @ 0x009000  20 KB  – NVS key/value storage (WiFi/settings)
+#   otadata  @ 0x00e000   8 KB  – OTA selection data
+#   app0     @ 0x010000   1.94 MB (0x1F0000) – OTA slot 0 (initial firmware)
+#   app1     @ 0x200000   1.94 MB (0x1F0000) – OTA slot 1 (first OTA target)
+#
+# Name,   Type, SubType,  Offset,   Size,    Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x1F0000,
+app1,     app,  ota_1,    0x200000, 0x1F0000,
