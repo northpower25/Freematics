@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.21.0";
+const PANEL_VERSION = "1.22.0";
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper
@@ -337,6 +337,7 @@ class FreematicsPanel extends HTMLElement {
   _val(prefix, suffix, decimals = 1) {
     const state = this._hass && this._hass.states[`${prefix}_${suffix}`];
     if (!state) return "—";
+    if (state.state === "unavailable" || state.state === "unknown") return "0";
     const v = parseFloat(state.state);
     if (isNaN(v)) return state.state;
     return decimals === 0 ? Math.round(v).toString() : v.toFixed(decimals);
@@ -347,6 +348,21 @@ class FreematicsPanel extends HTMLElement {
     if (!state) return null;
     const v = parseFloat(state.state);
     return isNaN(v) ? null : v;
+  }
+
+  /**
+   * Like _raw() but returns 0 instead of null when the entity EXISTS but has
+   * no numeric value yet (state is "unavailable" / "unknown").  Use this for
+   * sensors where 0 is a meaningful default so the dashboard can render gauge
+   * bars and numeric displays even before the first telemetry packet arrives
+   * after setup or a Home Assistant restart.  Keep using _raw() for GPS
+   * coordinates (lat/lng) so the map link is never shown pointing to 0°N 0°E.
+   */
+  _rawZ(prefix, suffix) {
+    const state = this._hass && this._hass.states[`${prefix}_${suffix}`];
+    if (!state) return null;
+    const v = parseFloat(state.state);
+    return isNaN(v) ? 0 : v;
   }
 
   /* ── full render (first time) ───────────────────────────────────── */
@@ -447,23 +463,26 @@ class FreematicsPanel extends HTMLElement {
   }
 
   _deviceHTML(prefix) {
-    const speed    = this._raw(prefix, "speed");
-    const rpm      = this._raw(prefix, "rpm");
-    const battery  = this._raw(prefix, "battery");
+    // Use _rawZ() for sensors where 0 is a meaningful default when no value
+    // has arrived yet (entity exists but is "unavailable").  GPS lat/lng keep
+    // _raw() so the map link is never shown pointing to 0°N 0°E.
+    const speed    = this._rawZ(prefix, "speed");
+    const rpm      = this._rawZ(prefix, "rpm");
+    const battery  = this._rawZ(prefix, "battery");
     const signal   = this._raw(prefix, "signal");
-    const coolant  = this._raw(prefix, "coolant_temp");
-    const load     = this._raw(prefix, "engine_load");
-    const throttle = this._raw(prefix, "throttle");
+    const coolant  = this._rawZ(prefix, "coolant_temp");
+    const load     = this._rawZ(prefix, "engine_load");
+    const throttle = this._rawZ(prefix, "throttle");
     const lat      = this._raw(prefix, "lat");
     const lng      = this._raw(prefix, "lng");
     const alt      = this._raw(prefix, "alt");
     const gpsSpd   = this._raw(prefix, "gps_speed");
     const sats     = this._raw(prefix, "satellites");
-    const accX     = this._raw(prefix, "acc_x");
-    const accY     = this._raw(prefix, "acc_y");
-    const accZ     = this._raw(prefix, "acc_z");
-    const intakeT  = this._raw(prefix, "intake_temp");
-    const fuelP    = this._raw(prefix, "fuel_pressure");
+    const accX     = this._rawZ(prefix, "acc_x");
+    const accY     = this._rawZ(prefix, "acc_y");
+    const accZ     = this._rawZ(prefix, "acc_z");
+    const intakeT  = this._rawZ(prefix, "intake_temp");
+    const fuelP    = this._rawZ(prefix, "fuel_pressure");
     const heading  = this._raw(prefix, "heading");
 
     const deviceLabel = prefix.replace("sensor.", "").replace(/_/g, " ");

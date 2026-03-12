@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, SENSOR_DEFINITIONS
 
@@ -87,7 +88,7 @@ async def async_setup_entry(
     )
 
 
-class FreematicsSensor(SensorEntity):
+class FreematicsSensor(RestoreEntity, SensorEntity):
     """A sensor entity representing a single telemetry data point."""
 
     _attr_should_poll = False
@@ -144,12 +145,32 @@ class FreematicsSensor(SensorEntity):
 
     @callback
     def update_state(self, value) -> None:
-        """Receive a new value from the webhook handler."""
+        """Receive a new value from the webhook handler.
+
+        Empty / None values are ignored so the last persisted state is
+        preserved rather than being overwritten with nothing.
+        """
+        if value is None or value == "":
+            return
         try:
             self._attr_native_value = float(value)
         except (TypeError, ValueError):
             self._attr_native_value = value
         self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known value after a Home Assistant restart."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state not in (
+            "unavailable",
+            "unknown",
+            None,
+        ):
+            try:
+                self._attr_native_value = float(last_state.state)
+            except (TypeError, ValueError):
+                self._attr_native_value = last_state.state
 
 
 class FreematicsDebugSensor(SensorEntity):
