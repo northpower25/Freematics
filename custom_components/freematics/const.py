@@ -28,7 +28,6 @@ DEFAULT_DEVICE_PORT = 80
 # Flash settings
 CONF_FLASH_METHOD = "flash_method"
 FLASH_METHOD_SERIAL = "serial"
-FLASH_METHOD_WIFI = "wifi"
 
 CONF_SERIAL_PORT = "serial_port"
 DEFAULT_SERIAL_BAUD = 921600

@@ -1655,6 +1655,9 @@ bool performPullOtaCheck()
 
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", otaHost, (unsigned)otaPort);
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
+#endif
     return false;
   }
 
@@ -1667,6 +1670,9 @@ bool performPullOtaCheck()
   if (!teleClient.wifi.send(METHOD_GET, metaPath)) {
     Serial.println("[OTA-PULL] META send failed");
     teleClient.wifi.close();
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_SEND");
+#endif
     return false;
   }
 
@@ -1677,6 +1683,13 @@ bool performPullOtaCheck()
   if (!metaBody || teleClient.wifi.code() != 200) {
     Serial.printf("[OTA-PULL] META HTTP %u\n", (unsigned)teleClient.wifi.code());
     teleClient.wifi.close();
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) {
+      char _ota_diag[48];
+      snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=META_HTTP%u", (unsigned)teleClient.wifi.code());
+      logger.logEvent(_ota_diag);
+    }
+#endif
     return false;
   }
   metaBuf[metaBytes < (int)sizeof(metaBuf) - 1 ? metaBytes : (int)sizeof(metaBuf) - 1] = '\0';
@@ -1694,16 +1707,29 @@ bool performPullOtaCheck()
   if (!sizeField) {
     Serial.println("[OTA-PULL] META: missing size field");
     teleClient.wifi.close();
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_NOSIZE");
+#endif
     return false;
   }
   fwSize = (size_t)atol(sizeField + 7);
   if (fwSize < PULL_OTA_MIN_FW_SIZE) { // sanity check: firmware must be at least 64 KB
     Serial.printf("[OTA-PULL] META: implausible size %u\n", (unsigned)fwSize);
     teleClient.wifi.close();
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_SIZE");
+#endif
     return false;
   }
 
   Serial.printf("[OTA-PULL] Update available: %u bytes\n", (unsigned)fwSize);
+#if STORAGE != STORAGE_NONE
+  if (state.check(STATE_STORAGE_READY)) {
+    char _ota_diag[48];
+    snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL START SIZE=%u", (unsigned)fwSize);
+    logger.logEvent(_ota_diag);
+  }
+#endif
   teleClient.wifi.close();
 
   // ---- Step 2: Download and flash firmware ----------------------------------
@@ -1719,6 +1745,9 @@ bool performPullOtaCheck()
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
     s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
+#endif
     return false;
   }
 
@@ -1726,6 +1755,9 @@ bool performPullOtaCheck()
     Serial.println("[OTA-PULL] FW send failed");
     teleClient.wifi.close();
     s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_SEND");
+#endif
     return false;
   }
 
@@ -1736,6 +1768,13 @@ bool performPullOtaCheck()
     Serial.printf("[OTA-PULL] FW HTTP %d\n", httpCode);
     teleClient.wifi.close();
     s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) {
+      char _ota_diag[48];
+      snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=FW_HTTP%d", httpCode);
+      logger.logEvent(_ota_diag);
+    }
+#endif
     return false;
   }
   if (contentLength > 0 && (size_t)contentLength != fwSize) {
@@ -1749,6 +1788,9 @@ bool performPullOtaCheck()
     Serial.printf("[OTA-PULL] Update.begin failed: %s\n", Update.errorString());
     teleClient.wifi.close();
     s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=UPD_BEGIN");
+#endif
     return false;
   }
 
@@ -1769,6 +1811,9 @@ bool performPullOtaCheck()
       Update.abort();
       teleClient.wifi.close();
       s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_TIMEOUT");
+#endif
       return false;
     }
 
@@ -1780,6 +1825,9 @@ bool performPullOtaCheck()
       Update.abort();
       teleClient.wifi.close();
       s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_READ");
+#endif
       return false;
     }
 
@@ -1789,6 +1837,9 @@ bool performPullOtaCheck()
       Update.abort();
       teleClient.wifi.close();
       s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FLASH_WRITE");
+#endif
       return false;
     }
     written += (size_t)n;
@@ -1810,10 +1861,21 @@ bool performPullOtaCheck()
   if (!Update.end()) {
     Serial.printf("[OTA-PULL] Update.end failed: %s\n", Update.errorString());
     s_ota_active = false;
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=UPD_END");
+#endif
     return false;
   }
 
   Serial.println("[OTA-PULL] Flash successful, rebooting in 1.5 s");
+#if STORAGE != STORAGE_NONE
+  if (state.check(STATE_STORAGE_READY)) {
+    char _ota_diag[64];
+    snprintf(_ota_diag, sizeof(_ota_diag),
+             "OTA-PULL OK FW=%s SIZE=%u", FIRMWARE_VERSION, (unsigned)written);
+    logger.logEvent(_ota_diag);
+  }
+#endif
   // s_ota_active remains true; device reboots shortly.
   static esp_timer_handle_t s_pull_ota_timer = NULL;
   if (!s_pull_ota_timer) {

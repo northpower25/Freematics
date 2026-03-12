@@ -18,7 +18,11 @@ Serves the following endpoints:
   GET  /api/freematics/provisioning_token – (auth required) Issue a short-lived token
                                           that ties the NVS / manifest endpoints to
                                           the caller's config-entry settings.
-  POST /api/freematics/wifi_ota         – Server-side WiFi OTA proxy (panel → HA → device)
+  GET  /api/freematics/ota_token        – (auth required) Issue or retrieve the
+                                          long-lived pull-OTA token for the device.
+  GET  /api/freematics/ota_pull/{token}/{filename} – Pull-OTA firmware endpoint
+                                          Serves meta.json (version/size/sha256) or
+                                          firmware.bin authenticated by URL token.
 
 The flasher page uses the Web Serial API (Chrome/Edge 89+) so the user can
 flash the Freematics ONE+ that is connected to *their own computer's* USB port,
@@ -545,369 +549,6 @@ _CONSOLE_HTML = """\
 </html>
 """
 
-_OTA_FLASHER_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Freematics ONE+ WiFi OTA Flash</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      max-width: 640px; margin: 2rem auto; padding: 0 1.2rem; color: #333;
-    }
-    body.embedded { margin: 0.5rem; max-width: 100%; }
-    body.embedded h1 { display: none; }
-    body.embedded .card { margin: 0.4rem 0; padding: 0.6rem 0.9rem; }
-    body.embedded .nav-links { display: none; }
-    h1 { color: #03a9f4; font-size: 1.5rem; }
-    .card {
-      border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0;
-      background: #f5f5f5;
-    }
-    .info { background: #e3f2fd; border-left: 4px solid #03a9f4; }
-    .warn { background: #fff8e1; border-left: 4px solid #ffc107; }
-    .ok   { background: #e8f5e9; border-left: 4px solid #4caf50; }
-    .err  { background: #ffebee; border-left: 4px solid #f44336; }
-    code { background: #e0e0e0; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
-    a { color: #03a9f4; }
-    .form-row {
-      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-      margin-bottom: 10px;
-    }
-    input[type=text], input[type=number] {
-      padding: 8px 10px;
-      border: 1px solid #ccc; border-radius: 6px;
-      font-size: 0.9rem; font-family: inherit;
-      background: #fff; color: #333;
-    }
-    #ip-input   { flex: 1; min-width: 130px; }
-    #port-input { width: 72px; }
-    #flash-btn {
-      background: #2196f3; color: #fff; border: none;
-      padding: 10px 18px; font-size: 0.95rem; border-radius: 6px;
-      cursor: pointer; font-family: inherit; white-space: nowrap;
-    }
-    #flash-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    #flash-btn:not(:disabled):hover { background: #1976d2; }
-    #status { margin-top: 6px; font-size: 0.88rem; display: none; }
-    .terminal {
-      background: #0d1117; color: #c9d1d9;
-      font-family: "Courier New", Courier, monospace; font-size: 0.82rem;
-      padding: 10px 12px; border-radius: 8px;
-      min-height: 60px; max-height: 220px;
-      overflow-y: auto; white-space: pre-wrap; word-break: break-all;
-      box-shadow: inset 0 2px 8px rgba(0,0,0,.5);
-      margin-top: 10px; display: none;
-    }
-    .log-ok   { color: #58d68d; }
-    .log-info { color: #c9d1d9; }
-    .log-err  { color: #ff6b6b; }
-  </style>
-</head>
-<body>
-  <h1>&#128246; Freematics ONE+ WiFi OTA Flash</h1>
-
-  <div class="card info">
-    Flash firmware to the Freematics ONE+ over WiFi. The device must be
-    reachable from the Home Assistant server and running firmware with
-    <code>ENABLE_HTTPD=1</code>.
-  </div>
-
-  <div class="card">
-    <div class="form-row">
-      <input id="ip-input"   type="text"   placeholder="192.168.x.x" autocomplete="off">
-      <input id="port-input" type="number" placeholder="80" value="80" min="1" max="65535">
-      <button id="flash-btn">&#128246; Flash via WiFi OTA</button>
-    </div>
-    <div id="status"></div>
-    <div id="terminal" class="terminal"></div>
-  </div>
-
-  <p class="nav-links" style="margin-top:1.5rem">
-    <a href="javascript:history.back()">&#8592; Back to Home Assistant</a>
-  </p>
-
-  <script>
-    (function () {
-      const params    = new URLSearchParams(window.location.search);
-      const ipInput   = document.getElementById('ip-input');
-      const portInput = document.getElementById('port-input');
-      const flashBtn  = document.getElementById('flash-btn');
-      const terminal  = document.getElementById('terminal');
-      const statusEl  = document.getElementById('status');
-
-      // Pre-fill IP / port from URL params when opened from the panel.
-      const initIp   = params.get('device_ip');
-      const initPort = params.get('device_port');
-      if (initIp)   ipInput.value   = initIp;
-      if (initPort) portInput.value = initPort;
-
-      // Compact layout when embedded in a dashboard iframe.
-      if (params.get('embedded') === '1') {
-        document.body.classList.add('embedded');
-      }
-
-      const token = params.get('token') || '';
-
-      function appendLog(level, text) {
-        terminal.style.display = 'block';
-        const span = document.createElement('span');
-        span.className = 'log-' + level;
-        span.textContent = text + '\\n';
-        terminal.appendChild(span);
-        terminal.scrollTop = terminal.scrollHeight;
-      }
-
-      function setStatus(color, html) {
-        statusEl.style.display = 'block';
-        statusEl.style.color   = color;
-        statusEl.innerHTML     = html;
-      }
-
-      flashBtn.addEventListener('click', () => {
-        const ip   = ipInput.value.trim();
-        const port = parseInt(portInput.value) || 80;
-
-        if (!ip) {
-          setStatus('#ff9800', '&#9888; Please enter the device IP address.');
-          return;
-        }
-        if (!token) {
-          setStatus('#f44336', '&#10007; No provisioning token &mdash; reload the page.');
-          return;
-        }
-
-        // Reset UI
-        terminal.innerHTML    = '';
-        terminal.style.display = 'none';
-        setStatus('#2196f3', '&#9203; Uploading firmware&hellip; (may take ~2 min)');
-        flashBtn.disabled    = true;
-        flashBtn.textContent = '\\u23F3 Uploading\\u2026';
-
-        const url = '/api/freematics/wifi_ota_sse'
-          + '?device_ip='   + encodeURIComponent(ip)
-          + '&device_port=' + encodeURIComponent(port)
-          + '&token='       + encodeURIComponent(token);
-
-        const es = new EventSource(url);
-
-        es.onmessage = function (ev) {
-          let data;
-          try { data = JSON.parse(ev.data); } catch (_) { return; }
-
-          if (data.type === 'log') {
-            const level = data.level === 'error' ? 'err'
-                        : data.level === 'ok'    ? 'ok'
-                        : 'info';
-            const ts = data.ts || new Date().toLocaleTimeString();
-            appendLog(level, '[' + ts + '] ' + data.message);
-
-          } else if (data.type === 'done') {
-            es.close();
-            flashBtn.disabled    = false;
-            flashBtn.textContent = '\\uD83D\\uDCF6 Flash via WiFi OTA';
-            if (data.ok) {
-              setStatus('#4caf50', '&#10003; Flash successful!');
-              appendLog('ok', '\\u2713 OTA flash completed successfully.');
-            } else {
-              const msg = data.message || 'OTA flash failed.';
-              setStatus('#f44336', '&#10007; Flash failed: ' + msg);
-              appendLog('err', '\\u2717 ' + msg);
-            }
-          }
-        };
-
-        es.onerror = function () {
-          es.close();
-          setStatus('#f44336', '&#10007; Connection to Home Assistant lost.');
-          appendLog('err', '\\u2717 SSE connection error \u2014 flash may still be running on the server.');
-          flashBtn.disabled    = false;
-          flashBtn.textContent = '\\uD83D\\uDCF6 Flash via WiFi OTA';
-        };
-      });
-    })();
-  </script>
-</body>
-</html>
-"""
-
-
-class FreematicsOtaFlasherView(HomeAssistantView):
-    """Serve the WiFi OTA flasher HTML page.
-
-    Accessible at /api/freematics/ota_flasher.
-
-    The page is a self-contained UI for flashing firmware to the device over
-    WiFi.  It uses the /api/freematics/wifi_ota_sse SSE endpoint to stream
-    real-time progress, avoiding the HTTP timeout issue that occurs when the
-    long-running POST to /api/freematics/wifi_ota blocks for ~2 minutes.
-
-    requires_auth is False so the page can be loaded inside an iframe from the
-    panel (which already has HA auth context).  The page authenticates the SSE
-    request via the provisioning token embedded in the URL by the panel JS.
-    """
-
-    url = "/api/freematics/ota_flasher"
-    name = "api:freematics:ota_flasher"
-    requires_auth = False
-
-    async def get(self, request: web.Request) -> web.Response:
-        """Return the WiFi OTA flasher HTML page."""
-        return web.Response(
-            body=_OTA_FLASHER_HTML.encode("utf-8"),
-            content_type="text/html",
-            charset="utf-8",
-        )
-
-
-class FreematicsWifiOtaSseView(HomeAssistantView):
-    """Stream WiFi OTA flash progress as Server-Sent Events.
-
-    Accessible at GET /api/freematics/wifi_ota_sse.
-
-    Query parameters:
-      device_ip   – IPv4 or IPv6 literal address of the target device.
-      device_port – TCP port of the device HTTP server (default: 80).
-      token       – Short-lived provisioning token issued by
-                    /api/freematics/provisioning_token.
-
-    The endpoint validates the token, then starts the WiFi OTA flash in a
-    background asyncio task and streams progress events via SSE so the
-    browser can display real-time feedback without hitting the ~60 s HTTP
-    timeout that occurs with the synchronous POST endpoint.
-
-    Event format (JSON):
-      {"type": "log",  "level": "<info|ok|error>", "message": "…", "ts": "HH:MM:SS"}
-      {"type": "done", "ok": true|false, "message": "…"}
-
-    requires_auth is False – authentication is via the provisioning token.
-    """
-
-    url = "/api/freematics/wifi_ota_sse"
-    name = "api:freematics:wifi_ota_sse"
-    requires_auth = False
-
-    async def get(self, request: web.Request) -> web.Response | web.StreamResponse:
-        """Stream OTA flash progress events."""
-        token       = request.rel_url.query.get("token",       "").strip()
-        device_ip   = request.rel_url.query.get("device_ip",   "").strip()
-        try:
-            device_port = int(request.rel_url.query.get("device_port", "80"))
-        except (TypeError, ValueError):
-            device_port = 80
-
-        hass = request.app["hass"]
-
-        # Validate provisioning token (same store used by NVS / manifest views).
-        token_store = hass.data.get(DOMAIN, {}).get("_tokens", {})
-        entry_id, expiry = token_store.get(token, (None, 0))
-        if not token or expiry <= time.monotonic() or entry_id is None:
-            return web.Response(status=401, text="Invalid or expired token")
-
-        if not device_ip:
-            return web.Response(status=400, text="device_ip is required")
-
-        try:
-            ipaddress.ip_address(device_ip)
-        except ValueError:
-            return web.Response(
-                status=400,
-                text="device_ip must be a valid IPv4 or IPv6 address",
-            )
-
-        # Prepare SSE response.
-        resp = web.StreamResponse(
-            headers={
-                "Content-Type":  "text/event-stream",
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            }
-        )
-        await resp.prepare(request)
-
-        queue: asyncio.Queue = asyncio.Queue()
-
-        from .flash_manager import async_flash_wifi  # noqa: PLC0415
-
-        # Resolve LED/beep settings from the config entry identified by the
-        # provisioning token.  WiFi OTA preserves the NVS partition, so we
-        # must NOT send LED_RED=1/LED_WHITE=1/BEEP=1: doing so would overwrite
-        # a user's manually-disabled NVS setting (LED_RED_EN=0 set via
-        # /api/control or a previous serial flash) with the HA default (True).
-        # Only send the "disable" command (False) when the HA config explicitly
-        # disables the setting; leave NVS untouched when the setting is True.
-        _led_red_en: bool | None = None
-        _led_white_en: bool | None = None
-        _beep_en: bool | None = None
-        entry = hass.config_entries.async_get_entry(entry_id)
-        if entry is not None:
-            cfg = {**entry.data, **entry.options}
-            if not bool(cfg.get(CONF_LED_RED_EN,   True)):
-                _led_red_en   = False
-            if not bool(cfg.get(CONF_LED_WHITE_EN, True)):
-                _led_white_en = False
-            if not bool(cfg.get(CONF_BEEP_EN,      True)):
-                _beep_en      = False
-
-        # Start the flash in a background task so the SSE handler can still
-        # send keep-alive pings and the flash continues even if the client
-        # disconnects (preventing a half-flashed device).
-        async def _run_flash() -> None:
-            ok, msg, _ = await async_flash_wifi(
-                device_ip,
-                device_port,
-                queue=queue,
-                led_red_en=_led_red_en,
-                led_white_en=_led_white_en,
-                beep_en=_beep_en,
-            )
-            queue.put_nowait({"type": "done", "ok": ok, "message": msg})
-
-        flash_task = asyncio.ensure_future(_run_flash())
-
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
-                except asyncio.TimeoutError:
-                    # Send a keep-alive comment to prevent proxy / browser
-                    # from closing an idle SSE connection.
-                    try:
-                        await resp.write(b": keepalive\n\n")
-                    except Exception:  # noqa: BLE001
-                        break
-                    continue
-
-                try:
-                    await resp.write(
-                        ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
-                    )
-                    await resp.drain()
-                except Exception:  # noqa: BLE001
-                    break
-
-                if event.get("type") == "done":
-                    break
-        except Exception:  # noqa: BLE001
-            pass
-        finally:
-            # Log if the flash task is still running after the SSE connection
-            # closed (e.g. client navigated away).  We intentionally do NOT
-            # cancel it: stopping a firmware upload mid-transfer would leave
-            # the device in an indeterminate state.
-            if not flash_task.done():
-                _LOGGER.info(
-                    "WiFi OTA SSE: client disconnected, flash to %s continues "
-                    "in background",
-                    device_ip,
-                )
-
-        return resp
-
-
 class FreematicsFlasherView(HomeAssistantView):
     """Serve the browser-based serial flasher HTML page.
 
@@ -1073,100 +714,6 @@ class FreematicsPartitionTableView(HomeAssistantView):
                 "Content-Disposition": "attachment; filename=partition_table.bin",
                 "Access-Control-Allow-Origin": "*",
             },
-        )
-
-
-class FreematicsProxyOTAView(HomeAssistantView):
-    """Proxy a WiFi OTA flash request from the panel browser to the device.
-
-    Accessible at POST /api/freematics/wifi_ota.
-
-    Accepts JSON body: {"device_ip": "192.168.x.x", "device_port": 80}
-
-    The browser panel sends this request (with HA auth token).  This view
-    then uses the HA server to push the bundled firmware binary to the device
-    via HTTP multipart upload.  The device must be reachable from the HA
-    server on the specified IP and port.
-
-    requires_auth is True – only authenticated HA users may trigger a flash.
-    """
-
-    url = "/api/freematics/wifi_ota"
-    name = "api:freematics:wifi_ota"
-    requires_auth = True
-
-    async def post(self, request: web.Request) -> web.Response:
-        """Trigger WiFi OTA flash from the HA server to the device."""
-        try:
-            data = await request.json()
-        except (json.JSONDecodeError, ValueError):
-            return web.Response(
-                status=400,
-                body=json.dumps({"ok": False, "message": "Invalid JSON body"}).encode(),
-                content_type="application/json",
-            )
-
-        device_ip = str(data.get("device_ip", "")).strip()
-        try:
-            device_port = int(data.get("device_port", 80))
-        except (TypeError, ValueError):
-            device_port = 80
-
-        if not device_ip:
-            return web.Response(
-                status=400,
-                body=json.dumps({"ok": False, "message": "device_ip is required"}).encode(),
-                content_type="application/json",
-            )
-
-        # Validate that device_ip is a well-formed IP address (not a hostname or
-        # URL) to mitigate SSRF: ipaddress.ip_address rejects anything that is
-        # not a pure IPv4 or IPv6 literal.
-        try:
-            ipaddress.ip_address(device_ip)
-        except ValueError:
-            return web.Response(
-                status=400,
-                body=json.dumps({"ok": False, "message": "device_ip must be a valid IPv4 or IPv6 address"}).encode(),
-                content_type="application/json",
-            )
-
-        from .flash_manager import async_flash_wifi  # noqa: PLC0415
-
-        # Try to find LED/beep settings from a Freematics config entry.
-        # This view lacks a per-device token so we use the first active entry.
-        # If multiple entries exist, use the OTA flasher page instead.
-        #
-        # WiFi OTA preserves the NVS partition, so we must NOT send
-        # LED_RED=1/LED_WHITE=1/BEEP=1: doing so would overwrite a user's
-        # manually-disabled NVS setting (e.g. LED_RED_EN=0 set via
-        # /api/control or a previous serial flash) with the HA default (True).
-        # Only send the "disable" command (False) when the HA config explicitly
-        # disables the setting; pass None (leave NVS untouched) otherwise.
-        hass = request.app["hass"]
-        _led_red_en: bool | None = None
-        _led_white_en: bool | None = None
-        _beep_en: bool | None = None
-        entries = hass.config_entries.async_entries(DOMAIN)
-        if entries:
-            _cfg = {**entries[0].data, **entries[0].options}
-            if not bool(_cfg.get(CONF_LED_RED_EN,   True)):
-                _led_red_en   = False
-            if not bool(_cfg.get(CONF_LED_WHITE_EN, True)):
-                _led_white_en = False
-            if not bool(_cfg.get(CONF_BEEP_EN,      True)):
-                _beep_en      = False
-
-        ok, msg, log_lines = await async_flash_wifi(
-            device_ip,
-            device_port,
-            led_red_en=_led_red_en,
-            led_white_en=_led_white_en,
-            beep_en=_beep_en,
-        )
-        return web.Response(
-            body=json.dumps({"ok": ok, "message": msg, "log": log_lines}).encode("utf-8"),
-            content_type="application/json",
         )
 
 
@@ -1914,6 +1461,42 @@ class FreematicsOtaPullView(HomeAssistantView):
             )
         except OSError as exc:
             return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+
+        # Record the firmware-download event so the debug sensor can show
+        # "OTA firmware downloaded at <time>" to the user.  The device will
+        # flash and reboot shortly; we record the download timestamp here
+        # because the HA side has no direct hook for "flash complete".
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from homeassistant.helpers.dispatcher import async_dispatcher_send  # noqa: PLC0415
+
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Update the diag dict for the owning config entry.
+        for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
+            if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
+                _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
+                # Match by OTA token → entry_id resolved above.
+                if _eid == entry_id:
+                    _diag = _entry_data["diag"]
+                    _diag["ota_last_success"] = now_iso
+                    _diag["ota_last_error"] = None
+                    _diag["ota_last_version"] = FIRMWARE_VERSION
+                    _diag["fw_version"] = FIRMWARE_VERSION
+                    async_dispatcher_send(
+                        hass,
+                        f"{DOMAIN}_{_webhook}_debug",
+                        {
+                            "ota_last_success": now_iso,
+                            "ota_last_error": "Kein Fehler",
+                            "ota_last_version": FIRMWARE_VERSION,
+                            "fw_version": FIRMWARE_VERSION,
+                        },
+                    )
+                    _LOGGER.info(
+                        "Freematics pull-OTA: firmware %s downloaded by device (entry %s)",
+                        FIRMWARE_VERSION,
+                        entry_id,
+                    )
+                    break
 
         return web.Response(
             body=firmware_data,

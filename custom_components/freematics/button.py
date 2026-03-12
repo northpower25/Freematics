@@ -2,7 +2,6 @@
 
 Provides the following button entities:
 - Flash Firmware via Serial   – triggers esptool serial flash
-- Flash Firmware via WiFi OTA – triggers HTTP OTA upload to device
 - Send Config to Device       – pushes stored WiFi/APN settings to running device
 - Restart Device              – sends RESET command via device HTTP API
 - Publish Firmware for Cloud OTA – copies firmware to /config/www/FreematicsONE/{id}/
@@ -27,7 +26,6 @@ from .const import (
     CONF_CELL_APN,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
-    CONF_FLASH_METHOD,
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_SERIAL_PORT,
@@ -36,15 +34,12 @@ from .const import (
     CONF_WIFI_SSID,
     DEFAULT_DEVICE_PORT,
     DOMAIN,
-    FLASH_METHOD_SERIAL,
-    FLASH_METHOD_WIFI,
     FIRMWARE_VERSION,
 )
 from .flash_manager import (
     CONTROL_PATH,
     FIRMWARE_PATH,
     async_flash_serial,
-    async_flash_wifi,
     async_send_config,
 )
 
@@ -71,7 +66,6 @@ async def async_setup_entry(
 
     buttons: list[ButtonEntity] = [
         FlashSerialButton(entry, webhook_id),
-        FlashWifiButton(entry, webhook_id),
         SendConfigButton(entry, webhook_id),
         RestartDeviceButton(entry, webhook_id),
         PublishCloudOtaButton(entry, webhook_id),
@@ -179,48 +173,6 @@ class FlashSerialButton(_FreematicsButton):
                 "/api/freematics/flasher",
                 msg,
             )
-
-
-class FlashWifiButton(_FreematicsButton):
-    """Button that flashes the firmware via WiFi OTA."""
-
-    _attr_name = "Flash Firmware via WiFi OTA"
-    _attr_icon = "mdi:wifi-arrow-up-down"
-
-    def __init__(self, entry: ConfigEntry, webhook_id: str) -> None:
-        super().__init__(entry, webhook_id)
-        self._attr_unique_id = f"freematics_{webhook_id}_flash_wifi"
-
-    async def async_press(self) -> None:
-        """Execute WiFi OTA flash."""
-        device_ip = self._cfg(CONF_DEVICE_IP, "")
-        device_port = self._cfg(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)
-        if not device_ip:
-            _LOGGER.error(
-                "Freematics: no device IP configured. "
-                "Go to Settings → Integrations → Freematics ONE+ → Configure to set it. "
-                "If the device is in AP mode, connect to 'TELELOGGER' WiFi and use IP 192.168.4.1."
-            )
-            return
-        _LOGGER.info("Freematics: starting WiFi OTA flash to %s:%s", device_ip, device_port)
-        cfg = {**self._entry.data, **self._entry.options}
-        # WiFi OTA preserves the NVS partition, so we must NOT actively send
-        # LED_RED=1/LED_WHITE=1/BEEP=1 commands.  Doing so would overwrite a
-        # user's manually-disabled setting (LED_RED_EN=0 set via /api/control
-        # or a previous serial flash) with the HA default (True = on).
-        # Only send the "disable" command (=False) when the HA config explicitly
-        # disables the setting; leave NVS untouched when the setting is True.
-        ok, msg, _log_lines = await async_flash_wifi(
-            device_ip,
-            device_port,
-            led_red_en=None if bool(cfg.get(CONF_LED_RED_EN, True)) else False,
-            led_white_en=None if bool(cfg.get(CONF_LED_WHITE_EN, True)) else False,
-            beep_en=None if bool(cfg.get(CONF_BEEP_EN, True)) else False,
-        )
-        if ok:
-            _LOGGER.info("Freematics WiFi OTA flash: %s", msg)
-        else:
-            _LOGGER.error("Freematics WiFi OTA flash failed: %s", msg)
 
 
 class SendConfigButton(_FreematicsButton):

@@ -231,6 +231,10 @@ class FreematicsDebugSensor(SensorEntity):
             "httpd_errors": _u,
             "ble_configured": _u,
             "ble_active": _u,
+            # OTA pull status – updated by FreematicsOtaPullView after each OTA event
+            "ota_last_success": _u,   # ISO timestamp of last successful OTA flash
+            "ota_last_error": _u,     # Error message from the last failed OTA attempt
+            "ota_last_version": _u,   # Firmware version applied in the last OTA flash
             "raw_data": [],
             "errors": [],
         }
@@ -272,6 +276,10 @@ class FreematicsDebugSensor(SensorEntity):
             # BLE
             "BLE eingestellt": d["ble_configured"],
             "BLE aktiv": d["ble_active"],
+            # OTA pull update status
+            "OTA letzter Erfolg": d["ota_last_success"],
+            "OTA letzter Fehler": d["ota_last_error"],
+            "OTA letzte Version": d["ota_last_version"],
             # Raw debug data
             "raw_data": d["raw_data"],
             "errors": d["errors"],

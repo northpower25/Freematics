@@ -46,7 +46,6 @@ from .const import (
     DEVICE_MODEL_H,
     DOMAIN,
     FLASH_METHOD_SERIAL,
-    FLASH_METHOD_WIFI,
     OPERATING_MODE_DATALOGGER,
     OPERATING_MODE_TELELOGGER,
 )
@@ -288,9 +287,8 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="flash",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_FLASH_METHOD, default=FLASH_METHOD_WIFI): vol.In(
+                    vol.Required(CONF_FLASH_METHOD, default=FLASH_METHOD_SERIAL): vol.In(
                         {
-                            FLASH_METHOD_WIFI: "WiFi OTA (device on same network / AP mode)",
                             FLASH_METHOD_SERIAL: "Serial USB (device connected to HA host)",
                         }
                     ),
@@ -401,9 +399,8 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     ): vol.All(int, vol.Range(min=0, max=3600)),
                     vol.Optional(CONF_DEVICE_IP, default=current.get(CONF_DEVICE_IP, "")): str,
                     vol.Optional(CONF_DEVICE_PORT, default=current.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)): int,
-                    vol.Optional(CONF_FLASH_METHOD, default=current.get(CONF_FLASH_METHOD, FLASH_METHOD_WIFI)): vol.In(
+                    vol.Optional(CONF_FLASH_METHOD, default=current.get(CONF_FLASH_METHOD, FLASH_METHOD_SERIAL)): vol.In(
                         {
-                            FLASH_METHOD_WIFI: "WiFi OTA",
                             FLASH_METHOD_SERIAL: "Serial USB",
                         }
                     ),
