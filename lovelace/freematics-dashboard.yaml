@@ -6,170 +6,326 @@
 # Replace WEBHOOK_ID_SHORT with the first 8 characters of your webhook ID
 # (found in Settings → Integrations → Freematics ONE+).
 # Example: if webhook_id = "a1b2c3d4e5f60718", use "a1b2c3d4"
+#
+# Route tracking: The map card on the "GPS & Route" tab uses hours_to_show to
+# display the driven route for the past 8 hours. This requires the Home Assistant
+# Recorder integration to be active (enabled by default).
 
 title: Freematics ONE+
 views:
-  - title: Vehicle
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Tab 1 – Vehicle overview
+  # ═══════════════════════════════════════════════════════════════════════════
+  - title: Fahrzeug
     icon: mdi:car
     path: freematics
     cards:
-      # ── Main vehicle telemetry card ─────────────────────────────────────
+      # ── Main vehicle telemetry card ─────────────────────────────────────────
       - type: custom:freematics-vehicle-card
-        title: My Car
+        title: Mein Fahrzeug
         # Set entity_prefix to the base entity ID of your sensors.
         # Pattern: sensor.freematics_one_<webhook_id_short>
         # Example: entity_prefix: sensor.freematics_one_a1b2c3d4
         entity_prefix: sensor.freematics_one_WEBHOOK_ID_SHORT
 
-      # ── Location map ────────────────────────────────────────────────────
-      - type: map
-        title: Vehicle Location
-        entities:
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_lat
-        aspect_ratio: "16:9"
+      # ── Speed & RPM gauges ──────────────────────────────────────────────────
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.freematics_one_WEBHOOK_ID_SHORT_speed
+            name: Geschwindigkeit
+            min: 0
+            max: 200
+            needle: true
+            severity:
+              green: 0
+              yellow: 80
+              red: 130
+          - type: gauge
+            entity: sensor.freematics_one_WEBHOOK_ID_SHORT_rpm
+            name: Drehzahl
+            min: 0
+            max: 7000
+            needle: true
+            severity:
+              green: 0
+              yellow: 5000
+              red: 6500
 
-      # ── Live data grid ──────────────────────────────────────────────────
-      - type: entities
-        title: OBD-II Data
+      # ── Engine load & throttle gauges ────────────────────────────────────────
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.freematics_one_WEBHOOK_ID_SHORT_engine_load
+            name: Motorlast
+            min: 0
+            max: 100
+            needle: false
+            severity:
+              green: 0
+              yellow: 70
+              red: 90
+          - type: gauge
+            entity: sensor.freematics_one_WEBHOOK_ID_SHORT_throttle
+            name: Drosselklappe
+            min: 0
+            max: 100
+            needle: false
+            severity:
+              green: 0
+              yellow: 70
+              red: 90
+
+      # ── Temperature gauges ───────────────────────────────────────────────────
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.freematics_one_WEBHOOK_ID_SHORT_coolant_temp
+            name: Kühlmitteltemperatur
+            min: 0
+            max: 130
+            needle: true
+            severity:
+              green: 60
+              yellow: 95
+              red: 110
+          - type: gauge
+            entity: sensor.freematics_one_WEBHOOK_ID_SHORT_intake_temp
+            name: Ansaugtemperatur
+            min: -20
+            max: 80
+            needle: true
+            severity:
+              green: -20
+              yellow: 50
+              red: 70
+
+      # ── Battery voltage gauge ────────────────────────────────────────────────
+      - type: gauge
+        entity: sensor.freematics_one_WEBHOOK_ID_SHORT_battery
+        name: Batteriespannung
+        min: 10
+        max: 16
+        needle: true
+        severity:
+          green: 12.4
+          yellow: 11.5
+          red: 10
+
+      # ── Speed & RPM history graph ────────────────────────────────────────────
+      - type: history-graph
+        title: Geschwindigkeit & Drehzahl – Verlauf (2 h)
+        hours_to_show: 2
         entities:
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_speed
-            name: Speed
-            icon: mdi:speedometer
+            name: Geschwindigkeit (km/h)
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_rpm
-            name: RPM
-            icon: mdi:engine
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_throttle
-            name: Throttle
-            icon: mdi:gas-station
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_engine_load
-            name: Engine Load
-            icon: mdi:gauge
+            name: Drehzahl (rpm)
+
+      # ── Temperature history graph ────────────────────────────────────────────
+      - type: history-graph
+        title: Temperaturen – Verlauf (2 h)
+        hours_to_show: 2
+        entities:
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_coolant_temp
-            name: Coolant Temperature
-            icon: mdi:thermometer
+            name: Kühlmittel (°C)
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_intake_temp
-            name: Intake Temperature
-            icon: mdi:thermometer-lines
+            name: Ansaugluft (°C)
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_device_temp
+            name: Gerät (°C)
+
+      # ── OBD-II detail data ───────────────────────────────────────────────────
+      - type: entities
+        title: OBD-II Detaildaten
+        entities:
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_fuel_pressure
-            name: Fuel Pressure
+            name: Kraftstoffdruck
             icon: mdi:gauge
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_timing_advance
-            name: Timing Advance
+            name: Zündzeitpunkt
             icon: mdi:clock-fast
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_short_fuel_trim_1
+            name: Kurzzeit-Kraftstofftrimm B1
+            icon: mdi:tune
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_long_fuel_trim_1
+            name: Langzeit-Kraftstofftrimm B1
+            icon: mdi:tune-vertical
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_short_fuel_trim_2
+            name: Kurzzeit-Kraftstofftrimm B2
+            icon: mdi:tune
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_long_fuel_trim_2
+            name: Langzeit-Kraftstofftrimm B2
+            icon: mdi:tune-vertical
 
-      # ── GPS data ─────────────────────────────────────────────────────────
-      - type: entities
-        title: GPS Data
+      # ── Device status (signal, temp) ─────────────────────────────────────────
+      - type: glance
+        title: Gerätestatus
+        entities:
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_battery
+            name: Batterie
+            icon: mdi:battery
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_signal
+            name: Signal
+            icon: mdi:signal
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_device_temp
+            name: Gerätetemp.
+            icon: mdi:thermometer-chip
+
+      # ── Accelerometer ────────────────────────────────────────────────────────
+      - type: glance
+        title: Beschleunigungssensor
+        entities:
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_acc_x
+            name: Achse X
+            icon: mdi:axis-x-arrow
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_acc_y
+            name: Achse Y
+            icon: mdi:axis-y-arrow
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_acc_z
+            name: Achse Z
+            icon: mdi:axis-z-arrow
+
+      # ── FWCAM reference ──────────────────────────────────────────────────────
+      - type: markdown
+        title: "🚗 Fahrtenbuch, Tankbuch & Treibstoffpreise"
+        content: |
+          Für ein vollständiges **Fahrtenbuch**, **Tankbuch** sowie aktuelle
+          **Treibstoffpreise** und eine **Tankstellensuche** (aktuell nur Deutschland)
+          empfehlen wir die Zusatzintegration:
+
+          ### [HA Fuel Watcher & Car Advanced Manager (FWCAM)](https://github.com/northpower25/HA-Fuel-Watcher-Car-Advanced-Manager-FWCAM)
+
+          ✅ Vollständiges Fahrtenbuch mit Start-/Endpunkt und Distanz
+          ✅ Tankbuch mit Verbrauchsauswertung
+          ✅ Aktuelle Treibstoffpreise (Deutschland)
+          ✅ Tankstellensuche in der Nähe
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Tab 2 – GPS & Route
+  # ═══════════════════════════════════════════════════════════════════════════
+  - title: GPS & Route
+    icon: mdi:map-marker-path
+    path: freematics-gps
+    cards:
+      # ── Live map with route history ──────────────────────────────────────────
+      # The device_tracker entity is used so HA displays a proper location pin.
+      # hours_to_show renders the driven route of the last 8 hours on the map
+      # (requires the Recorder integration, enabled by default).
+      - type: map
+        title: Fahrzeugposition & Fahrtroute (8 h)
+        entities:
+          - entity: device_tracker.freematics_one_WEBHOOK_ID_SHORT_standort
+            color: "#2196f3"
+        hours_to_show: 8
+        aspect_ratio: "16:9"
+
+      # ── GPS status glance ────────────────────────────────────────────────────
+      - type: glance
+        title: GPS-Status
         entities:
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_lat
-            name: Latitude
+            name: Breitengrad
             icon: mdi:latitude
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_lng
-            name: Longitude
+            name: Längengrad
             icon: mdi:longitude
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_alt
-            name: Altitude
+            name: Höhe (m)
             icon: mdi:altimeter
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_gps_speed
-            name: GPS Speed
-            icon: mdi:speedometer-medium
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_heading
-            name: Heading
+            name: Kurs (°)
             icon: mdi:compass
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_satellites
-            name: Satellites
+            name: Satelliten
             icon: mdi:satellite-variant
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_hdop
             name: HDOP
             icon: mdi:crosshairs-gps
 
-      # ── Device status ─────────────────────────────────────────────────────
-      - type: entities
-        title: Device Status
-        entities:
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_battery
-            name: Battery Voltage
-            icon: mdi:battery
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_signal
-            name: Signal Strength
-            icon: mdi:signal
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_device_temp
-            name: Device Temperature
-            icon: mdi:thermometer-chip
-
-      # ── Accelerometer ─────────────────────────────────────────────────────
-      - type: entities
-        title: Accelerometer
-        entities:
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_acc_x
-            name: Accelerometer X
-            icon: mdi:axis-x-arrow
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_acc_y
-            name: Accelerometer Y
-            icon: mdi:axis-y-arrow
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_acc_z
-            name: Accelerometer Z
-            icon: mdi:axis-z-arrow
-
-      # ── History graph ─────────────────────────────────────────────────────
+      # ── GPS speed vs OBD speed history graph ─────────────────────────────────
       - type: history-graph
-        title: Speed & RPM History
-        hours_to_show: 1
+        title: Geschwindigkeit – GPS vs. OBD (2 h)
+        hours_to_show: 2
         entities:
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_gps_speed
+            name: GPS-Geschwindigkeit (km/h)
           - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_speed
-            name: Speed
-          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_rpm
-            name: RPM
+            name: OBD-Geschwindigkeit (km/h)
 
-  # ── Management / Flash tab ────────────────────────────────────────────────
-  - title: Device Management
+      # ── GPS altitude history ─────────────────────────────────────────────────
+      - type: history-graph
+        title: Höhenprofil – Verlauf (2 h)
+        hours_to_show: 2
+        entities:
+          - entity: sensor.freematics_one_WEBHOOK_ID_SHORT_alt
+            name: Höhe (m)
+
+      # ── Route tracking info ──────────────────────────────────────────────────
+      - type: markdown
+        title: "🗺️ Routenverfolgung"
+        content: |
+          Die Karte zeigt die **Fahrtroute der letzten 8 Stunden** automatisch an,
+          sofern die Home Assistant **Recorder**-Integration aktiv ist (Standard).
+
+          **Tipp:** Über die Verlaufsansicht (History) in Home Assistant lässt sich
+          die zurückgelegte Strecke für beliebige Zeiträume nachvollziehen –
+          einfach die Entität `device_tracker.freematics_one_WEBHOOK_ID_SHORT_standort`
+          in der Verlaufssuche eingeben.
+
+          Für eine lückenlose Fahrtaufzeichnung mit Fahrtenbuch empfehlen wir:
+          **[FWCAM – Fuel Watcher & Car Advanced Manager](https://github.com/northpower25/HA-Fuel-Watcher-Car-Advanced-Manager-FWCAM)**
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Tab 3 – Device Management / Flash
+  # ═══════════════════════════════════════════════════════════════════════════
+  - title: Geräteverwaltung
     icon: mdi:cog
     path: freematics-management
     cards:
       - type: entities
-        title: Freematics ONE+ – Device Actions
+        title: Freematics ONE+ – Geräteaktionen
         entities:
           - entity: button.freematics_one_flash_firmware_via_wifi_ota
-            name: Flash Firmware via WiFi OTA
+            name: Firmware via WiFi OTA flashen
             icon: mdi:wifi-arrow-up-down
           - entity: button.freematics_one_flash_firmware_via_serial
-            name: Flash Firmware via Serial USB
+            name: Firmware via Serial USB flashen
             icon: mdi:usb-flash-drive
           - entity: button.freematics_one_send_config_to_device
-            name: Send Config to Device
+            name: Konfiguration senden
             icon: mdi:cog-transfer
           - entity: button.freematics_one_restart_device
-            name: Restart Device
+            name: Gerät neu starten
             icon: mdi:restart
 
       - type: markdown
-        title: Quick Reference – Firmware Setup
+        title: Kurzanleitung – Firmware-Setup
         content: |
-          ## Firmware Configuration
+          ## Firmware-Konfiguration
 
-          After flashing, configure the firmware with these settings:
+          Nach dem Flashen folgende Einstellungen vornehmen:
 
-          | Setting | Value |
+          | Einstellung | Wert |
           |---|---|
           | SERVER_PROTOCOL | 4 (PROTOCOL_HA_WEBHOOK) |
-          | SERVER_HOST | Your HA host |
+          | SERVER_HOST | HA-Hostname |
           | SERVER_PORT | 443 |
-          | HA_WEBHOOK_ID | See Integrations → Freematics ONE+ |
+          | HA_WEBHOOK_ID | Integrationen → Freematics ONE+ |
 
-          ## Flash via WiFi OTA (AP Mode)
-          1. Power on the Freematics ONE+ (factory or freshly flashed device)
-          2. Connect your phone/laptop to WiFi network **TELELOGGER** (password: **PASSWORD**)
-          3. Enter `192.168.4.1` as the **Device IP** in the integration settings
-          4. Press **Flash Firmware via WiFi OTA**
+          ## Via WiFi OTA flashen (AP-Modus)
+          1. Freematics ONE+ einschalten (Werksgerät oder frisch geflashtes Gerät)
+          2. Mit dem WLAN-Netzwerk **TELELOGGER** verbinden (Passwort: **PASSWORD**)
+          3. Die **Geräte-IP** `192.168.4.1` in den Integrationseinstellungen eintragen
+          4. **Firmware via WiFi OTA flashen** drücken
 
-          ## Flash via Serial USB
-          1. Connect Freematics ONE+ to the HA host via USB
-          2. Set the **Serial port** in integration settings (e.g. `/dev/ttyUSB0`)
-          3. Press **Flash Firmware via Serial USB**
+          ## Via Serial USB flashen
+          1. Freematics ONE+ über USB mit dem HA-Host verbinden
+          2. **Seriellen Port** in den Integrationseinstellungen einstellen (z. B. `/dev/ttyUSB0`)
+          3. **Firmware via Serial USB flashen** drücken
 
-          ## Send Config to Running Device
-          1. Ensure the device is running firmware with HTTPD enabled
-          2. Enter the device's current IP in integration settings
-          3. Press **Send Config to Device**
+          ## Konfiguration an laufendes Gerät senden
+          1. Sicherstellen, dass das Gerät mit aktiviertem HTTPD läuft
+          2. Aktuelle Geräte-IP in den Integrationseinstellungen eintragen
+          3. **Konfiguration senden** drücken
 
-          For detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md).
+          Weitere Informationen: [Dokumentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md).

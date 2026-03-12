@@ -10,7 +10,7 @@
  *   entity_prefix: sensor.freematics_one_<webhook_id_short>
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 class FreematicsVehicleCard extends HTMLElement {
   set hass(hass) {
@@ -73,6 +73,11 @@ class FreematicsVehicleCard extends HTMLElement {
     return "#f44336";
   }
 
+  _headingLabel(deg) {
+    const dirs = ["N", "NO", "O", "SO", "S", "SW", "W", "NW"];
+    return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+  }
+
   _render() {
     if (!this._hass || !this._config) return;
 
@@ -83,6 +88,9 @@ class FreematicsVehicleCard extends HTMLElement {
     const signal = this._stateRaw("signal");
     const lat = this._stateRaw("lat");
     const lng = this._stateRaw("lng");
+    const alt = this._stateRaw("alt");
+    const heading = this._stateRaw("heading");
+    const gpsSpeed = this._stateRaw("gps_speed");
     const coolant = this._stateRaw("coolant_temp");
     const engineLoad = this._stateRaw("engine_load");
     const throttle = this._stateRaw("throttle");
@@ -103,6 +111,9 @@ class FreematicsVehicleCard extends HTMLElement {
     const rpmPercent = rpm !== null ? Math.min((rpm / 7000) * 100, 100) : 0;
     const loadPercent = engineLoad !== null ? Math.min(engineLoad, 100) : 0;
     const throttlePercent = throttle !== null ? Math.min(throttle, 100) : 0;
+
+    // Compass direction from heading degrees
+    const headingDir = heading !== null ? this._headingLabel(heading) : null;
 
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
@@ -250,6 +261,7 @@ class FreematicsVehicleCard extends HTMLElement {
           border-radius: 8px;
           font-size: 0.85em;
           color: var(--secondary-text-color);
+          margin-bottom: 10px;
         }
         .gps-row a {
           color: #2196f3;
@@ -257,6 +269,32 @@ class FreematicsVehicleCard extends HTMLElement {
           font-weight: 500;
         }
         .gps-row a:hover { text-decoration: underline; }
+        .gps-detail {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+        .compass-needle {
+          display: inline-block;
+          font-size: 1.1em;
+          transform: rotate(${heading !== null ? heading : 0}deg);
+          transition: transform 0.5s ease;
+        }
+        .fwcam-row {
+          padding: 10px 12px;
+          background: var(--secondary-background-color);
+          border-radius: 8px;
+          font-size: 0.82em;
+          color: var(--secondary-text-color);
+          margin-top: 4px;
+        }
+        .fwcam-row a {
+          color: #2196f3;
+          text-decoration: none;
+          font-weight: 500;
+        }
+        .fwcam-row a:hover { text-decoration: underline; }
         .no-data {
           text-align: center;
           color: var(--secondary-text-color);
@@ -282,28 +320,28 @@ class FreematicsVehicleCard extends HTMLElement {
 
         <div class="gauges">
           <div class="gauge">
-            <div class="gauge-label">RPM</div>
+            <div class="gauge-label">Drehzahl</div>
             <div class="gauge-value">${rpm !== null ? Math.round(rpm) : "—"}</div>
             <div class="bar-container">
               <div class="bar-fill" style="width:${rpmPercent}%;background:#2196f3;"></div>
             </div>
           </div>
           <div class="gauge">
-            <div class="gauge-label">Engine Load</div>
+            <div class="gauge-label">Motorlast</div>
             <div class="gauge-value">${engineLoad !== null ? engineLoad.toFixed(1) + " %" : "—"}</div>
             <div class="bar-container">
               <div class="bar-fill" style="width:${loadPercent}%;background:${loadPercent > 80 ? "#f44336" : "#ff9800"};"></div>
             </div>
           </div>
           <div class="gauge">
-            <div class="gauge-label">Throttle</div>
+            <div class="gauge-label">Drosselklappe</div>
             <div class="gauge-value">${throttle !== null ? throttle.toFixed(1) + " %" : "—"}</div>
             <div class="bar-container">
               <div class="bar-fill" style="width:${throttlePercent}%;background:#9c27b0;"></div>
             </div>
           </div>
           <div class="gauge">
-            <div class="gauge-label">Coolant Temp</div>
+            <div class="gauge-label">Kühlmitteltemp.</div>
             <div class="gauge-value">${coolant !== null ? coolant.toFixed(1) + " °C" : "—"}</div>
             <div class="bar-container">
               <div class="bar-fill" style="width:${coolant !== null ? Math.min((coolant / 120) * 100, 100) : 0}%;background:${coolant !== null && coolant > 100 ? "#f44336" : "#4caf50"};"></div>
@@ -313,15 +351,15 @@ class FreematicsVehicleCard extends HTMLElement {
 
         <div class="info-row">
           <div class="info-item">
-            <div class="info-label">Fuel Press.</div>
+            <div class="info-label">Kraftstoffdruck</div>
             <div class="info-value">${fuelPressure !== null ? fuelPressure.toFixed(0) + " kPa" : "—"}</div>
           </div>
           <div class="info-item">
-            <div class="info-label">GPS Sats</div>
+            <div class="info-label">GPS-Sats</div>
             <div class="info-value">${satellites !== null ? Math.round(satellites) : "—"}</div>
           </div>
           <div class="info-item">
-            <div class="info-label">Acc X/Y/Z</div>
+            <div class="info-label">Beschl. X/Y/Z</div>
             <div class="info-value" style="font-size:0.8em;">
               ${accX !== null ? accX.toFixed(2) : "—"} /
               ${accY !== null ? accY.toFixed(2) : "—"} /
@@ -333,22 +371,32 @@ class FreematicsVehicleCard extends HTMLElement {
         <div class="battery-row">
           <ha-icon class="battery-icon" icon="${this._batteryIcon(battery)}"></ha-icon>
           <span class="battery-value">${battery !== null ? battery.toFixed(2) + " V" : "—"}</span>
-          <span class="battery-label">Battery Voltage</span>
+          <span class="battery-label">Batteriespannung</span>
         </div>
 
         ${hasGps ? `
         <div class="gps-row">
           <ha-icon icon="mdi:map-marker"></ha-icon>
-          Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}
+          ${lat.toFixed(5)}, ${lng.toFixed(5)}
+          ${alt !== null ? `&nbsp;| ${alt.toFixed(0)} m` : ""}
+          ${headingDir !== null ? `&nbsp;| <span class="compass-needle" aria-label="Kurs ${headingDir}">↑</span> ${headingDir} (${Math.round(heading)}°)` : ""}
+          ${gpsSpeed !== null ? `&nbsp;| GPS: ${Math.round(gpsSpeed)} km/h` : ""}
           &nbsp;|&nbsp;
-          <a href="${mapsUrl}" target="_blank" rel="noopener">Open Map ↗</a>
+          <a href="${mapsUrl}" target="_blank" rel="noopener">Karte ↗</a>
         </div>
         ` : `
         <div class="gps-row">
           <ha-icon icon="mdi:map-marker-off"></ha-icon>
-          GPS not available
+          Kein GPS-Signal
         </div>
         `}
+
+        <div class="fwcam-row">
+          <ha-icon icon="mdi:notebook-outline" style="vertical-align:middle;margin-right:4px;"></ha-icon>
+          Fahrtenbuch, Tankbuch &amp; Treibstoffpreise:
+          <a href="https://github.com/northpower25/HA-Fuel-Watcher-Car-Advanced-Manager-FWCAM"
+             target="_blank" rel="noopener">FWCAM-Integration ↗</a>
+        </div>
       </ha-card>
     `;
   }
@@ -360,7 +408,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "freematics-vehicle-card",
   name: "Freematics Vehicle Card",
-  description: "A card displaying live vehicle telemetry from the Freematics ONE+ device.",
+  description: "A card displaying live vehicle telemetry from the Freematics ONE+ device. Includes compass heading, GPS altitude, and FWCAM logbook link.",
   preview: false,
   documentationURL: "https://github.com/northpower25/Freematics",
 });
