@@ -169,11 +169,28 @@ bool enableBeep = true;      // connection beep: short buzz on WiFi/cellular con
 // The telemetry task checks this flag and yields the WiFi to the OTA upload.
 volatile bool s_ota_active = false;
 
+// SD card paths for the two-phase pull-OTA staging mechanism (STORAGE_SD only).
+// Phase 1 (during active telemetry): firmware is downloaded to OTA_PENDING_PATH.
+// Phase 2 (at next standby transition): firmware is flashed from SD to flash.
+// OTA_META_PATH stores the expected byte count so partial downloads can be
+// detected and removed at startup without attempting a corrupt flash.
+#define OTA_PENDING_PATH "/ota_fw.bin"    // staged firmware binary
+#define OTA_META_PATH    "/ota_meta.txt"  // companion: expected byte count (decimal)
+
+// Set by performPullOtaCheck() when a firmware has been fully downloaded to SD.
+// Cleared by performPullOtaFlash() on success or unrecoverable error.
+// Also set at startup when a previously staged file is found on SD.
+static volatile bool s_ota_pending = false;
+
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
 void processMEMS(CBuffer* buffer);
 bool processGPS(CBuffer* buffer);
 void processBLE(int timeout);
+#if STORAGE == STORAGE_SD && ENABLE_WIFI
+// Forward declaration: defined in the Pull-OTA section below.
+static bool performPullOtaFlash();
+#endif
 
 class State {
 public:
@@ -646,6 +663,49 @@ void initialize()
       logger.logEvent(diag);
 #endif
       logger.flush();
+    }
+  }
+#endif
+
+#if STORAGE == STORAGE_SD && ENABLE_WIFI
+  // Startup check: detect a firmware staged by a previous session.
+  // If /ota_meta.txt exists, read the expected byte count and compare
+  // against the actual /ota_fw.bin file size.  A match means the download
+  // completed successfully; set s_ota_pending so the flash happens at the
+  // next standby transition.  Any mismatch means a partial download —
+  // clean up both files to avoid a corrupt flash attempt.
+  if (state.check(STATE_STORAGE_READY)) {
+    if (SD.exists(OTA_META_PATH)) {
+      unsigned long expectedSize = 0;
+      {
+        File mf = SD.open(OTA_META_PATH, FILE_READ);
+        if (mf) {
+          char buf[16] = {0};
+          mf.readBytesUntil('\n', buf, sizeof(buf) - 1);
+          mf.close();
+          expectedSize = strtoul(buf, nullptr, 10);
+        }
+      }
+      bool stagingValid = false;
+      if (expectedSize >= PULL_OTA_MIN_FW_SIZE && SD.exists(OTA_PENDING_PATH)) {
+        File ff = SD.open(OTA_PENDING_PATH, FILE_READ);
+        unsigned long actual = ff ? (unsigned long)ff.size() : 0UL;
+        if (ff) ff.close();
+        stagingValid = (actual == expectedSize);
+      }
+      if (stagingValid) {
+        s_ota_pending = true;
+        Serial.println("[OTA-PULL] Staged firmware found on SD — will flash at next standby");
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL PENDING_RESUME");
+      } else {
+        SD.remove(OTA_PENDING_PATH);
+        SD.remove(OTA_META_PATH);
+        Serial.println("[OTA-PULL] Stale/incomplete SD staging files removed");
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL STALE_REMOVED");
+      }
+    } else if (SD.exists(OTA_PENDING_PATH)) {
+      // Firmware file without companion meta — can't verify, remove it.
+      SD.remove(OTA_PENDING_PATH);
     }
   }
 #endif
@@ -1283,6 +1343,11 @@ void telemetry(void* inst)
       // Periodic pull-OTA check: runs only when WiFi is connected, the device
       // is actively transmitting, and OTA_TOKEN + OTA_INTERVAL are provisioned.
       // The check is rate-limited by otaCheckIntervalS; 0 means disabled.
+      //
+      // For STORAGE_SD: performPullOtaCheck() downloads the binary to SD and
+      // returns false (no reboot yet).  The flash happens in standby().
+      // For other storage: returns true when direct flash has started (reboot
+      // imminent) so the caller blocks here waiting for the reboot timer.
 #if ENABLE_WIFI
       if (otaToken[0] && otaCheckIntervalS > 0 && state.check(STATE_WIFI_CONNECTED)) {
         static uint32_t lastOtaCheckMs = 0;
@@ -1291,8 +1356,8 @@ void telemetry(void* inst)
           lastOtaCheckMs = nowMs;
           Serial.println("[OTA-PULL] Checking for firmware update...");
           if (performPullOtaCheck()) {
-            // Firmware download started; device will reboot shortly.
-            // Block here so the loop doesn't continue transmitting.
+            // Direct-flash path: firmware flash started; device will reboot
+            // shortly.  Block here so the loop doesn't continue transmitting.
             while (true) delay(1000);
           }
         }
@@ -1331,6 +1396,26 @@ void telemetry(void* inst)
 void standby()
 {
   state.set(STATE_STANDBY);
+
+#if STORAGE == STORAGE_SD && ENABLE_WIFI
+  // Apply any pending pull-OTA update BEFORE closing the log file so that
+  // success/failure events can still be written.  This is the right moment:
+  // the device is no longer actively collecting or transmitting data, yet
+  // storage is still open.  s_ota_active is set so the telemetry task
+  // yields and does not compete for the SD card or flash hardware.
+  if (s_ota_pending && state.check(STATE_STORAGE_READY)) {
+    s_ota_active = true;
+    delay(1000); // give the telemetry task one scheduling cycle to yield
+    if (performPullOtaFlash()) {
+      // Flash succeeded; reboot timer is running — block here until it fires.
+      while (true) delay(1000);
+    }
+    // Flash failed: clear flags and fall through to normal standby.
+    s_ota_active = false;
+    s_ota_pending = false;
+  }
+#endif
+
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
     logger.end();
@@ -1633,11 +1718,212 @@ void loadConfig()
 // in milliseconds; this generous timeout guards against brief pauses.
 #define PULL_OTA_CHUNK_TIMEOUT_MS 30000U  // 30 s
 
+// Shared chunk buffer used by both the download (to SD) and flash (from SD)
+// phases.  Declared here so both functions share the same static allocation
+// and the buffer is not duplicated on the heap.
+static uint8_t s_otaChunkBuf[PULL_OTA_CHUNK_SIZE];
+
+#if STORAGE == STORAGE_SD && ENABLE_WIFI
+// ---------------------------------------------------------------------------
+// performPullOtaFlash()
+//
+// Reads the firmware binary staged on the SD card (/ota_fw.bin) and writes
+// it to the OTA flash partition using the Arduino Update library.  Called by
+// standby() at the next power-down / sleep transition — NEVER during active
+// telemetry — so no live data is lost.
+//
+// Pre-conditions (checked here):
+//   • s_ota_pending == true  (set by performPullOtaCheck() after download)
+//   • OTA_META_PATH exists on SD and contains the expected byte count
+//   • OTA_PENDING_PATH exists on SD and its size matches OTA_META_PATH
+//
+// Returns true if the flash succeeded and the reboot timer is running.
+// On any error, staging files are cleaned up and false is returned so that
+// standby() can clear s_ota_pending and continue normally.
+// ---------------------------------------------------------------------------
+static bool performPullOtaFlash()
+{
+  // --- Verify staging files ------------------------------------------------
+  if (!SD.exists(OTA_PENDING_PATH)) {
+    Serial.println("[OTA-PULL] Staged firmware not found on SD");
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_NOT_FOUND");
+#endif
+    SD.remove(OTA_META_PATH);
+    return false;
+  }
+
+  // Read expected size from companion meta file.
+  unsigned long expectedSize = 0;
+  {
+    File mf = SD.open(OTA_META_PATH, FILE_READ);
+    if (mf) {
+      char buf[16] = {0};
+      mf.readBytesUntil('\n', buf, sizeof(buf) - 1);
+      mf.close();
+      expectedSize = strtoul(buf, nullptr, 10);
+    }
+  }
+  {
+    File ff = SD.open(OTA_PENDING_PATH, FILE_READ);
+    unsigned long actual = ff ? (unsigned long)ff.size() : 0UL;
+    if (ff) ff.close();
+    if (expectedSize < PULL_OTA_MIN_FW_SIZE || actual != expectedSize) {
+      Serial.printf("[OTA-PULL] SD staging size mismatch: file=%lu expected=%lu — removing\n",
+                    actual, expectedSize);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_SIZE");
+#endif
+      SD.remove(OTA_PENDING_PATH);
+      SD.remove(OTA_META_PATH);
+      return false;
+    }
+  }
+
+  size_t fwSize = (size_t)expectedSize;
+  Serial.printf("[OTA-PULL] Flashing staged firmware from SD: %u bytes\n", (unsigned)fwSize);
+#if STORAGE != STORAGE_NONE
+  if (state.check(STATE_STORAGE_READY)) {
+    char diag[48];
+    snprintf(diag, sizeof(diag), "OTA-PULL FLASH START SIZE=%u", (unsigned)fwSize);
+    logger.logEvent(diag);
+  }
+#endif
+
+  if (!Update.begin(fwSize)) {
+    Serial.printf("[OTA-PULL] Update.begin failed: %s\n", Update.errorString());
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=UPD_BEGIN");
+#endif
+    return false;
+  }
+
+  File fwFile = SD.open(OTA_PENDING_PATH, FILE_READ);
+  if (!fwFile) {
+    Serial.println("[OTA-PULL] Cannot open staged firmware for reading");
+    Update.abort();
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_OPEN_READ");
+#endif
+    return false;
+  }
+
+  size_t written = 0;
+  uint32_t t0 = millis();
+  size_t lastLogAt = 0;
+
+  while (written < fwSize) {
+    int toRead = (int)(fwSize - written);
+    if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+    int n = fwFile.read(s_otaChunkBuf, toRead);
+    if (n <= 0) {
+      Serial.printf("[OTA-PULL] SD read error at offset %u\n", (unsigned)written);
+      Update.abort();
+      fwFile.close();
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_READ");
+#endif
+      return false;
+    }
+    size_t w = Update.write(s_otaChunkBuf, (size_t)n);
+    if (w != (size_t)n) {
+      Serial.printf("[OTA-PULL] Flash write error at offset %u\n", (unsigned)written);
+      Update.abort();
+      fwFile.close();
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FLASH_WRITE");
+#endif
+      return false;
+    }
+    written += (size_t)n;
+
+    // Log progress every 10%.
+    if (written - lastLogAt >= fwSize / 10) {
+      lastLogAt = written;
+      Serial.printf("[OTA-PULL] Flash %u / %u bytes (%.0f%%) in %u ms\n",
+                    (unsigned)written, (unsigned)fwSize,
+                    100.0f * written / fwSize, (unsigned)(millis() - t0));
+    }
+  }
+  fwFile.close();
+
+  if (!Update.end()) {
+    Serial.printf("[OTA-PULL] Update.end failed: %s\n", Update.errorString());
+    SD.remove(OTA_PENDING_PATH);
+    SD.remove(OTA_META_PATH);
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=UPD_END");
+#endif
+    return false;
+  }
+
+  // --- Flash successful: clean up SD, log, schedule reboot -----------------
+  SD.remove(OTA_PENDING_PATH);
+  SD.remove(OTA_META_PATH);
+
+  Serial.printf("[OTA-PULL] Flash from SD successful: %u bytes in %u ms — rebooting in 1.5 s\n",
+                (unsigned)written, (unsigned)(millis() - t0));
+#if STORAGE != STORAGE_NONE
+  if (state.check(STATE_STORAGE_READY)) {
+    char diag[64];
+    snprintf(diag, sizeof(diag), "OTA-PULL FLASH OK FW=%s SIZE=%u",
+             FIRMWARE_VERSION, (unsigned)written);
+    logger.logEvent(diag);
+    logger.flush();  // ensure log entry survives the reboot
+  }
+#endif
+
+  // s_ota_active remains true; device reboots shortly.
+  static esp_timer_handle_t s_ota_flash_timer = NULL;
+  if (!s_ota_flash_timer) {
+    esp_timer_create_args_t args = {};
+    args.callback        = [](void*) { esp_restart(); };
+    args.dispatch_method = ESP_TIMER_TASK;
+    args.name            = "ota_flash_reboot";
+    esp_timer_create(&args, &s_ota_flash_timer);
+  } else {
+    esp_timer_stop(s_ota_flash_timer);
+  }
+  esp_timer_start_once(s_ota_flash_timer, 1500000);
+  return true;
+}
+#endif  // STORAGE == STORAGE_SD && ENABLE_WIFI
+
 #if ENABLE_WIFI
+// ---------------------------------------------------------------------------
+// performPullOtaCheck()
+//
+// Fetches the pull-OTA metadata endpoint and, when a newer firmware version is
+// available, downloads it.
+//
+// For STORAGE == STORAGE_SD (the default) the binary is saved to the SD card
+// staging file (OTA_PENDING_PATH) and the flash is DEFERRED to the next
+// standby transition.  This way active data collection is never interrupted by
+// an OTA operation.  s_ota_pending is set to true on a successful download so
+// that standby() knows to call performPullOtaFlash().
+//
+// For other storage configurations (STORAGE_NONE / STORAGE_SPIFFS) there is no
+// staging area large enough for the firmware binary, so the old direct-flash
+// path is used as a fallback: the binary is streamed from the network directly
+// into the OTA flash partition.
+//
+// Returns true only when the direct-flash path has started (reboot imminent).
+// Returns false in all other cases, including the SD-staging success case
+// (caller must NOT block waiting for a reboot when false is returned).
+// ---------------------------------------------------------------------------
 bool performPullOtaCheck()
 {
   if (!otaToken[0] || !otaHost[0]) return false;
   if (!WiFi.isConnected()) return false;
+
+#if STORAGE == STORAGE_SD
+  // If a firmware is already staged on SD, skip the meta-check and download:
+  // there is nothing to do here — the flash will happen at the next standby.
+  if (s_ota_pending) {
+    Serial.println("[OTA-PULL] Firmware already staged on SD, waiting for standby to flash");
+    return false;
+  }
+#endif
 
   // ---- Step 1: Fetch metadata JSON ----------------------------------------
   // Build the metadata path: /api/freematics/ota_pull/{token}/meta.json
@@ -1732,15 +2018,168 @@ bool performPullOtaCheck()
 #endif
   teleClient.wifi.close();
 
-  // ---- Step 2: Download and flash firmware ----------------------------------
+  // ---- Step 2: Download firmware ------------------------------------------
+  char fwPath[384];
+  snprintf(fwPath, sizeof(fwPath),
+           "/api/freematics/ota_pull/%s/firmware.bin", otaToken);
+
+#if STORAGE == STORAGE_SD
+  // --- SD-staging path (default): download to /ota_fw.bin, flash at standby -
+  // This leaves active telemetry running; no data is lost.  s_ota_active is
+  // NOT set here because we are not calling Update.begin() yet: the WiFi
+  // connection is used solely for file download (no flash partition locked).
+  //
+  // Steps:
+  //   a. Remove any leftover staging files from a previous (possibly partial)
+  //      download attempt.
+  //   b. Open /ota_fw.bin for writing.
+  //   c. Stream firmware chunks from the socket to the SD file.
+  //   d. On success: write expected size to /ota_meta.txt and set s_ota_pending.
+  //   e. standby() will call performPullOtaFlash() at the next sleep transition.
+  if (state.check(STATE_STORAGE_READY)) {
+    // a. Clean up any leftover files.
+    SD.remove(OTA_PENDING_PATH);
+    SD.remove(OTA_META_PATH);
+
+    File fwFile = SD.open(OTA_PENDING_PATH, FILE_WRITE);
+    if (!fwFile) {
+      Serial.println("[OTA-PULL] Cannot create SD staging file");
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_OPEN");
+#endif
+      return false;
+    }
+
+    if (!teleClient.wifi.open(otaHost, otaPort)) {
+      Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
+      fwFile.close();
+      SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
+#endif
+      return false;
+    }
+
+    if (!teleClient.wifi.send(METHOD_GET, fwPath)) {
+      Serial.println("[OTA-PULL] FW send failed");
+      teleClient.wifi.close();
+      fwFile.close();
+      SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_SEND");
+#endif
+      return false;
+    }
+
+    int contentLength = 0;
+    int httpCode = teleClient.wifi.receiveHeaders(&contentLength);
+    if (httpCode != 200) {
+      Serial.printf("[OTA-PULL] FW HTTP %d\n", httpCode);
+      teleClient.wifi.close();
+      fwFile.close();
+      SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) {
+        char _ota_diag[48];
+        snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=FW_HTTP%d", httpCode);
+        logger.logEvent(_ota_diag);
+      }
+#endif
+      return false;
+    }
+    if (contentLength > 0 && (size_t)contentLength != fwSize) {
+      // Content-Length overrides the size from meta.json (server is authoritative).
+      Serial.printf("[OTA-PULL] FW size mismatch: meta=%u header=%d\n",
+                    (unsigned)fwSize, contentLength);
+      fwSize = (size_t)contentLength;
+    }
+
+    WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
+    size_t written = 0;
+    uint32_t dlStart = millis();
+    size_t lastLogAt = 0;
+    bool dlOk = true;
+
+    while (written < fwSize) {
+      uint32_t chunkStart = millis();
+      while (!rawSock.available() && millis() - chunkStart < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
+      if (!rawSock.available()) {
+        Serial.printf("[OTA-PULL] Recv timeout at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_TIMEOUT");
+#endif
+        dlOk = false;
+        break;
+      }
+      int toRead = (int)(fwSize - written);
+      if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+      int n = rawSock.read(s_otaChunkBuf, toRead);
+      if (n <= 0) {
+        Serial.printf("[OTA-PULL] Read error at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_READ");
+#endif
+        dlOk = false;
+        break;
+      }
+      if ((size_t)fwFile.write(s_otaChunkBuf, (size_t)n) != (size_t)n) {
+        Serial.printf("[OTA-PULL] SD write error at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_WRITE");
+#endif
+        dlOk = false;
+        break;
+      }
+      written += (size_t)n;
+      if (written - lastLogAt >= fwSize / 10) {
+        lastLogAt = written;
+        Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
+                      (unsigned)written, (unsigned)fwSize,
+                      100.0f * written / fwSize, (unsigned)(millis() - dlStart));
+      }
+    }
+    fwFile.close();
+    teleClient.wifi.close();
+
+    if (!dlOk || written != fwSize) {
+      Serial.printf("[OTA-PULL] Download incomplete (%u / %u bytes) — staging file removed\n",
+                    (unsigned)written, (unsigned)fwSize);
+      SD.remove(OTA_PENDING_PATH);
+      return false;
+    }
+
+    // Write companion meta file: expected byte count for integrity check at
+    // boot and in performPullOtaFlash().
+    {
+      File metaFile = SD.open(OTA_META_PATH, FILE_WRITE);
+      if (metaFile) {
+        char metaBufOut[16];
+        snprintf(metaBufOut, sizeof(metaBufOut), "%u\n", (unsigned)fwSize);
+        metaFile.print(metaBufOut);
+        metaFile.close();
+      }
+    }
+
+    s_ota_pending = true;
+    Serial.printf("[OTA-PULL] Download complete: %u bytes in %u ms\n"
+                  "[OTA-PULL] Firmware staged on SD (%s) — will flash at next standby\n",
+                  (unsigned)written, (unsigned)(millis() - dlStart), OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+    if (state.check(STATE_STORAGE_READY)) {
+      char _ota_diag[64];
+      snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL DL OK SIZE=%u", (unsigned)fwSize);
+      logger.logEvent(_ota_diag);
+    }
+#endif
+    return false;  // deferred: flash happens at standby, not now
+  }
+#endif  // STORAGE == STORAGE_SD
+
+  // ---- Fallback: stream directly to flash (STORAGE_NONE / STORAGE_SPIFFS) --
   // Signal the telemetry task to pause WiFi I/O (closes TLS connections and
   // frees mbedTLS heap) before the Update library allocates flash buffers.
   s_ota_active = true;
   delay(1500);
-
-  char fwPath[384];
-  snprintf(fwPath, sizeof(fwPath),
-           "/api/freematics/ota_pull/%s/firmware.bin", otaToken);
 
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
@@ -1798,7 +2237,6 @@ bool performPullOtaCheck()
   // rawClient() exposes the underlying WiFiClientSecure so we can read the
   // body directly after receiveHeaders() has consumed the header block.
   WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
-  static uint8_t otaRecvBuf[PULL_OTA_CHUNK_SIZE];
   size_t written = 0;
   uint32_t dlStart = millis();
   size_t lastLogAt = 0;  // reset per-OTA; tracks progress-log threshold
@@ -1820,7 +2258,7 @@ bool performPullOtaCheck()
 
     int toRead = (int)(fwSize - written);
     if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
-    int n = rawSock.read(otaRecvBuf, toRead);
+    int n = rawSock.read(s_otaChunkBuf, toRead);
     if (n <= 0) {
       Serial.printf("[OTA-PULL] Read error at offset %u\n", (unsigned)written);
       Update.abort();
@@ -1832,7 +2270,7 @@ bool performPullOtaCheck()
       return false;
     }
 
-    size_t w = Update.write(otaRecvBuf, (size_t)n);
+    size_t w = Update.write(s_otaChunkBuf, (size_t)n);
     if (w != (size_t)n) {
       Serial.printf("[OTA-PULL] Flash write error at offset %u\n", (unsigned)written);
       Update.abort();
