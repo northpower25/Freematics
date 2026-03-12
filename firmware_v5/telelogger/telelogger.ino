@@ -1729,7 +1729,9 @@ void setup()
   // init LED pin
 #ifdef PIN_LED
   pinMode(PIN_LED, OUTPUT);
-  if (enableLedRed) digitalWrite(PIN_LED, HIGH);
+  // Explicitly drive the pin so the LED state is deterministic regardless of
+  // the GPIO output register value retained from a previous run.
+  digitalWrite(PIN_LED, enableLedRed ? HIGH : LOW);
 #endif
 
   // generate unique device ID
