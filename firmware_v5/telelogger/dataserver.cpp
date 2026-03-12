@@ -61,6 +61,7 @@ int handlerLiveData(UrlHandlerParam* param);
 
 extern nvs_handle_t nvs;
 extern void loadConfig();
+extern bool enableLedRed;  // read here to apply LED state immediately in handlerControl
 // Set to true while an OTA flash is in progress so the telemetry task yields
 // the WiFi radio to the upload (defined in telelogger.ino).
 extern volatile bool s_ota_active;
@@ -368,6 +369,11 @@ int handlerControl(UrlHandlerParam* param)
             nvs_set_u8(nvs, "LED_RED_EN", v) == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
+        // Apply the new state immediately so the LED turns off (or on) right
+        // away rather than waiting until the next reboot.
+#ifdef PIN_LED
+        digitalWrite(PIN_LED, enableLedRed ? HIGH : LOW);
+#endif
     } else if (!strncmp(cmd, "LED_WHITE=", 10)) {
         // Set white/network LED enable (0=off, 1=on).  Written to NVS key LED_WHITE_EN.
         uint8_t v = (uint8_t)atoi(cmd + 10);
