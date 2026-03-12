@@ -1,0 +1,188 @@
+name: "⚡ Flash / Firmware Issue"
+description: Report a problem with flashing firmware to the Freematics ONE+ device
+title: "[Flash]: "
+labels: ["firmware", "flash", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Firmware / Flash Issue Report
+
+        Use this form for problems specifically related to flashing firmware:
+        WiFi OTA, Browser Serial (Web Serial), Serial USB via HA Server, or manual esptool flashing.
+
+        Before submitting, please check:
+        - 📖 [Firmware Flashing Guide](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing)
+        - ❓ [Flash Troubleshooting FAQ](https://github.com/northpower25/Freematics/blob/master/docs/README.md#faq--howto)
+
+  - type: checkboxes
+    id: not_duplicate
+    attributes:
+      label: "Duplicate check"
+      options:
+        - label: "I have read the flash troubleshooting section in the documentation"
+          required: true
+        - label: "I have searched existing issues and this is not a duplicate"
+          required: true
+
+  - type: dropdown
+    id: flash_method
+    attributes:
+      label: "Flash Method Used"
+      description: "Which flash method did you try?"
+      options:
+        - "Method A: WiFi OTA (via HA server)"
+        - "Method B: Browser Serial (Web Serial API, Chrome/Edge)"
+        - "Method C: Serial USB via HA Server"
+        - "Manual: esptool command line"
+        - "Manual: PlatformIO / VS Code"
+        - "Multiple methods"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "Problem Description"
+      description: "What happens when you try to flash? Include any error messages."
+      placeholder: "The flash process starts but fails with error: ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: "Steps to Reproduce"
+      placeholder: |
+        1. Opened the Freematics panel
+        2. Clicked '...'
+        3. Error message appeared: '...'
+    validations:
+      required: true
+
+  - type: input
+    id: integration_version
+    attributes:
+      label: "Integration Version"
+      placeholder: "e.g. 0.0.96"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: "Home Assistant Version"
+      placeholder: "e.g. 2025.3.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ha_installation_type
+    attributes:
+      label: "Home Assistant Installation Type"
+      options:
+        - "Home Assistant OS (HAOS)"
+        - "Home Assistant Container (Docker)"
+        - "Home Assistant Supervised"
+        - "Home Assistant Core"
+        - "Other"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: device_model
+    attributes:
+      label: "Freematics ONE+ Model"
+      options:
+        - "Model A (WiFi + BT, no cellular)"
+        - "Model B (WiFi + BT + 4G)"
+        - "Model H (WiFi + BT + 4G)"
+        - "Unknown / Other"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: "Operating System (of the flashing machine)"
+      description: "For Browser Serial / esptool: what OS are you using?"
+      options:
+        - "Windows 10 / 11"
+        - "macOS"
+        - "Linux"
+        - "Not applicable (WiFi OTA / HA Server)"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: "Browser (for Browser Serial / Method B)"
+      options:
+        - "Google Chrome"
+        - "Microsoft Edge"
+        - "Firefox (not supported)"
+        - "Other"
+        - "Not applicable"
+    validations:
+      required: false
+
+  - type: input
+    id: usb_chip
+    attributes:
+      label: "USB-Serial Chip (if known)"
+      description: "CP210x (Silicon Labs), CH340 (WCH), or other?"
+      placeholder: "e.g. CP2102, CH340"
+    validations:
+      required: false
+
+  - type: textarea
+    id: ha_logs
+    attributes:
+      label: "Home Assistant Logs"
+      description: |
+        Paste relevant HA log output here. Enable debug logging:
+        ```yaml
+        logger:
+          logs:
+            custom_components.freematics: debug
+        ```
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: browser_console
+    attributes:
+      label: "Browser Console Output (for Browser Serial)"
+      description: "Press F12 → Console and paste any relevant output here."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: esptool_output
+    attributes:
+      label: "esptool Output (for manual flash)"
+      description: "Paste the full esptool command output here."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: "Additional Context"
+      description: "Any other information, screenshots, or context."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: "Final Checklist"
+      options:
+        - label: "I have provided the integration version and HA version"
+          required: true
+        - label: "I have described which flash method I used and what error occurred"
+          required: true

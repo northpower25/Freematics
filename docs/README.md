@@ -21,7 +21,8 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
 9. [Changing Settings After Initial Setup](#changing-settings-after-initial-setup)
 10. [Entities Reference](#entities-reference)
 11. [Troubleshooting](#troubleshooting)
-12. [Technical Background](#technical-background)
+12. [FAQ & HowTo](#faq--howto)
+13. [Technical Background](#technical-background)
 
 ---
 
@@ -29,7 +30,7 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
 
 - **Home Assistant** 2023.1 or newer
 - **HACS** installed ([see HACS docs](https://hacs.xyz/docs/setup/download))
-- Freematics ONE+ Model A or Model B
+- Freematics ONE+ Model A, Model B, or Model H
 - WiFi network, SIM card, or both for device internet connectivity
 - (Optional) USB cable to flash the device from the HA host
 
@@ -108,6 +109,13 @@ Choose how the device should operate after flashing:
 **BLE (Bluetooth SPP server)** — independent of the mode selection. Enable only if you use the Freematics Controller App over Bluetooth. Keeping BLE off is strongly recommended for Telelogger mode because the BLE stack uses ~100 KB of heap.
 
 **Intervals** — leave at `0` to keep firmware defaults (~1000 ms data interval, 120 s sync interval).
+
+**LED & Buzzer settings** *(Advanced)*:
+- **Red LED** (`LED_RED_EN`) — lights up while the device is powered on / in standby. Enable/disable to reduce cabin light pollution.
+- **White LED** (`LED_WHITE_EN`) — lights up during each data transmission. Enable/disable independently.
+- **Buzzer** (`BEEP_EN`) — emits a short beep on each successful WiFi or cellular connection. Disable to suppress in-cabin noise.
+
+**Cellular Debug** (`CELL_DEBUG`) — enables verbose AT-command logging on the serial monitor. Useful when diagnosing SIM/cellular connection problems. Leave off for normal operation.
 
 > **Note:** The firmware always logs data to the SD card regardless of mode. "Telelogger" and "Datalogger" describe how data is *transmitted*, not whether it is stored locally.
 
@@ -523,7 +531,151 @@ If you prefer an IDE workflow:
 
 ---
 
-## Technical Background
+## FAQ & HowTo
+
+A quick reference for the most common questions and problems. Each answer links to the relevant full section for more detail.
+
+---
+
+### ❓ Q: My device never sends any data to Home Assistant. Where do I start?
+
+**A:** Work through this checklist:
+
+1. **Is the device powered?** — Plug the Freematics ONE+ into the OBD-II port. The LEDs should light up briefly.
+2. **Is the device connected to the internet?** — For WiFi: check that the SSID and password are correct. For cellular: check the APN.
+3. **Is the Webhook ID correct?** — Compare the `HA_WEBHOOK_ID` in the firmware (baked in during flash) with the Webhook ID shown in the integration settings.
+4. **Is `SERVER_HOST` correct?** — It must match your Home Assistant external URL (e.g. `your-ha.duckdns.org` or your Nabu Casa subdomain).
+5. **Is `SERVER_PROTOCOL` = `4`?** — This selects the HA webhook protocol.
+6. **Are there errors in HA logs?** — Go to **Settings → System → Logs** and filter for `freematics`.
+
+> 💡 The fastest fix is usually to re-flash with the correct settings and then check the serial monitor output.
+
+---
+
+### ❓ Q: I see `SSL - Memory allocation failed` in the serial monitor. What does this mean?
+
+**A:** This is `MBEDTLS_ERR_SSL_ALLOC_FAILED` — the ESP32 cannot allocate enough contiguous heap for the TLS handshake. Most commonly caused by BLE or HTTPD consuming memory.
+
+**Fix:**
+1. Go to **Settings → Integrations → Freematics ONE+ → Configure**
+2. Set **Enable BLE** → ❌ Off
+3. Set **Enable HTTPD** → ❌ Off  *(HTTPD is re-enabled automatically for WiFi OTA when you need it)*
+4. Re-flash the device
+
+Disabling BLE frees ~100 KB of heap — usually enough for the TLS connection to succeed.
+
+---
+
+### ❓ Q: WiFi OTA flash fails with "Connection refused" or "Unable to connect". What should I check?
+
+**A:**
+- Make sure the device is powered on and reachable at the configured IP address (ping it).
+- If using AP mode: your computer must be connected to the **`TELELOGGER`** WiFi (password: `PASSWORD`) before starting the OTA flash from HA.
+- The device must be running firmware with `ENABLE_HTTPD=1` to accept OTA uploads.
+- `192.168.4.1` is the correct IP when the device is in AP mode.
+- If you see **"Connection reset by peer"**: the device restarted after a *successful* flash — this is normal. Wait ~30 seconds and check if the device connects to HA.
+
+---
+
+### ❓ Q: Browser Serial flash (Method B) doesn't work — I don't see a "Connect & Flash" button or the progress bar gets stuck.
+
+**A:**
+- You must use **Google Chrome** or **Microsoft Edge** version 89 or later. Firefox does not support the Web Serial API.
+- Your HA instance must be served over **HTTPS**. The Web Serial API is blocked on plain HTTP (local IP without a certificate). Use Nabu Casa, a Let's Encrypt certificate, or fall back to Method A (WiFi OTA) or the manual esptool method.
+- Install the USB-Serial driver for your device:
+  - [CP210x driver (Silicon Labs)](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
+  - [CH340 driver (WCH)](https://www.wch-ic.com/downloads/CH341SER_EXE.html)
+- Try a different USB cable or port.
+- If the progress bar freezes immediately after port selection: close the browser tab, reload, and try again.
+- As a last resort, use the [Manual Flash Fallback (esptool)](#manual-flash-fallback-esptool) method.
+
+---
+
+### ❓ Q: Serial USB flash via HA Server (Method C) fails. The button does nothing or I see a permission error.
+
+**A:**
+- Ensure the Freematics ONE+ is connected to the **HA host** via USB — not to your own computer.
+- Find the correct port: run `dmesg | tail` on the HA host right after plugging in the USB cable.
+- Fix permissions: `sudo chmod 666 /dev/ttyUSB0` (replace with your actual port).
+- `esptool` is installed automatically by this integration. If it is still missing, run `pip install esptool` on the HA host.
+- Try Method B (Browser Serial) if your device is connected to your own computer instead of the HA server.
+
+---
+
+### ❓ Q: I changed the WiFi password. How do I update the device without reflashing?
+
+**A:** If the device is running and on the network:
+1. Update the WiFi password in **Settings → Integrations → Freematics ONE+ → Configure**
+2. Make sure the **Device IP** is set correctly
+3. Press **Send Config to Device** — this pushes the new SSID/password to the device's NVS over HTTP
+4. Restart the device (button or OBD unplug/replug)
+
+If the device is not reachable (e.g. it has already lost WiFi), you must re-flash with the correct credentials.
+
+---
+
+### ❓ Q: The LEDs in my car are annoying at night. How do I turn them off?
+
+**A:** Go to **Settings → Integrations → Freematics ONE+ → Configure** → **Advanced Firmware Settings**:
+- **Red LED** (`LED_RED_EN`) → disable to turn off the power/standby LED
+- **White LED** (`LED_WHITE_EN`) → disable to turn off the transmission LED
+- **Buzzer** (`BEEP_EN`) → disable to silence the connection beep
+
+Re-flash after saving. The settings are written to the device's NVS at flash time.
+
+---
+
+### ❓ Q: The device connects via cellular but I'm having intermittent connection drops or TLS errors.
+
+**A:**
+1. Enable **Cellular Debug** (`CELL_DEBUG`) in **Configure → Advanced Firmware Settings** and re-flash. This adds verbose AT-command logging to the serial monitor so you can see exactly what's happening.
+2. Check the APN — try leaving it empty to let the device auto-detect, or set it explicitly to your provider's value.
+3. If you see `AT+CCHOPEN` errors: the SIM7600 firmware on your device may require a specific SSL context ID. The firmware tries both `ssl_ctx_id=0` and `ssl_ctx_id=1` automatically. If neither works, check that the SIM has data connectivity (try inserting in a phone first).
+4. Check signal strength via the `sensor.…_signal` entity in HA (should be above −95 dBm for reliable data transfer).
+
+---
+
+### ❓ Q: How do I update the firmware after a new integration release?
+
+**A:**
+1. In HACS, go to **Integrations → Freematics ONE+** and click **Update**.
+2. Restart Home Assistant.
+3. Open the **Freematics panel** (sidebar → *Freematics ONE+*).
+4. Flash the device again using your preferred method (WiFi OTA or Browser Serial).
+
+Your device settings (WiFi, webhook, APN, etc.) are preserved in Home Assistant and automatically embedded in the new `flash_image.bin`. You do **not** need to re-run the setup wizard.
+
+---
+
+### ❓ Q: I want to reset the device to factory defaults and start over.
+
+**A:**
+1. In HA go to **Settings → Devices & Services**, find the Freematics ONE+ integration, and click **Delete**.
+2. Add it again (**Add Integration → Freematics ONE+**) and run the setup wizard from scratch.
+3. Flash the device with the new settings.
+
+To erase the ESP32's NVS partition manually (complete wipe):
+```bash
+python -m esptool --chip esp32 --port COM3 erase_flash
+```
+After this the device will not boot until you flash the full `flash_image.bin` again.
+
+---
+
+### ❓ Q: The Lovelace card shows no data / entities are "unavailable".
+
+**A:**
+- Entities are only created when the first webhook payload arrives from the device. Until the device has sent at least one message, the entities do not exist in HA.
+- Check that the device is running, connected to the internet, and that the Webhook ID and SERVER_HOST are correct.
+- Verify the `entity_prefix` in the Lovelace card YAML matches the actual entity names. The prefix should be `sensor.freematics_one_<first-8-chars-of-webhook-id>`.
+
+---
+
+### ❓ Q: I installed the integration but do not see a "Freematics ONE+" entry in the sidebar.
+
+**A:** The Lovelace panel is registered automatically, but you may need to **clear your browser cache** (Ctrl+F5 / Cmd+Shift+R) or **hard-reload** the HA frontend after installing. Also make sure you restarted Home Assistant after the HACS installation.
+
+---
 
 ### Data Flow
 
@@ -589,6 +741,7 @@ Eine HACS-kompatible Home Assistant Integration für das **Freematics ONE+** OBD
 9. [Einstellungen nach der Ersteinrichtung ändern](#einstellungen-nach-der-ersteinrichtung-ändern)
 10. [Entitäten-Übersicht](#entitäten-übersicht)
 11. [Fehlerbehebung](#fehlerbehebung)
+12. [FAQ & HowTo (Deutsch)](#faq--howto-deutsch)
 
 ---
 
@@ -596,7 +749,7 @@ Eine HACS-kompatible Home Assistant Integration für das **Freematics ONE+** OBD
 
 - **Home Assistant** 2023.1 oder neuer
 - **HACS** installiert ([HACS-Dokumentation](https://hacs.xyz/docs/setup/download))
-- Freematics ONE+ Modell A oder Modell B
+- Freematics ONE+ Modell A, Modell B oder Modell H
 - WLAN-Netzwerk, SIM-Karte oder beides für die Internet-Konnektivität des Geräts
 - (Optional) USB-Kabel zum Flashen des Geräts vom HA-Host
 
@@ -621,23 +774,28 @@ Eine HACS-kompatible Home Assistant Integration für das **Freematics ONE+** OBD
 
 1. Gehen Sie zu **Einstellungen → Geräte & Dienste → Integration hinzufügen**
 2. Suchen Sie nach **Freematics ONE+** und klicken Sie darauf
-3. Folgen Sie dem 5-stufigen Assistenten:
+3. Folgen Sie dem 7-stufigen Assistenten:
 
 ### Schritt 1 – Verbindungsart
 
 Wählen Sie aus, wie Ihr Gerät mit dem Internet verbunden wird:
-- **Nur WLAN**: Das Gerät nutzt ein WLAN-Netzwerk
-- **Nur Mobilfunk/SIM**: Das Gerät nutzt eine SIM-Karte
-- **WLAN + Mobilfunk-Fallback**: WLAN bevorzugt; Mobilfunk als Fallback
 
-### Schritt 2 – WLAN-Zugangsdaten
+| Option | Beschreibung |
+|---|---|
+| **Nur WLAN** | Das Gerät nutzt ein WLAN-Netzwerk (Hotspot oder Heimrouter) |
+| **Nur Mobilfunk/SIM** | Das Gerät nutzt eine SIM-Karte |
+| **WLAN + Mobilfunk-Fallback** | WLAN bevorzugt; Mobilfunk als Fallback wenn WLAN nicht verfügbar |
 
-Geben Sie **SSID** und **Passwort** des WLAN-Netzwerks ein.
+### Schritt 2 – WLAN-Zugangsdaten *(nur bei WLAN/Beides)*
 
-### Schritt 3 – Mobilfunk/SIM
+Geben Sie **SSID** und **Passwort** des WLAN-Netzwerks ein, mit dem sich das Gerät verbinden soll.
 
-- **APN**: Der APN Ihres Mobilfunkanbieters (z.B. `internet`, `web.de`)
-- **SIM-PIN**: Nur erforderlich, wenn Ihre SIM-Karte einen PIN-Schutz hat
+> Sie können auch den mobilen Hotspot Ihres Smartphones verwenden.
+
+### Schritt 3 – Mobilfunk/SIM *(nur bei Mobilfunk/Beides)*
+
+- **APN**: Der APN Ihres Mobilfunkanbieters (z.B. `internet`, `data.t-mobile.com`). Leer lassen für automatische Erkennung.
+- **SIM-PIN**: Nur erforderlich, wenn Ihre SIM-Karte einen PIN-Schutz hat.
 
 ### Schritt 4 – Webhook / Firmware-Einstellungen
 
@@ -650,11 +808,48 @@ Eine eindeutige Webhook-ID wird automatisch generiert. **Kopieren Sie diese Wert
 | `SERVER_PORT` | `443` |
 | `HA_WEBHOOK_ID` | Im Formular angezeigt |
 
-### Schritt 5 – Flash-Methode
+Die Webhook-ID kann angepasst werden oder der automatisch generierte Wert übernommen werden.
 
-Wählen Sie die Flash-Methode:
-- **WLAN OTA**: Firmware über WLAN hochladen
-- **Seriell USB**: Firmware über USB-Kabel flashen
+### Schritt 5 – Gerätemodell
+
+Wählen Sie Ihr Freematics ONE+ Hardwaremodell (A, B oder H).
+
+### Schritt 6 – Betriebsmodus
+
+Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll:
+
+| Modus | Beschreibung |
+|---|---|
+| **Telelogger – Webhook → Home Assistant** *(empfohlen)* | Sendet Telemetriedaten direkt an den HA-Webhook. HTTPD und BLE werden automatisch deaktiviert, wodurch ~104 KB Heap freigegeben werden — **erforderlich** für eine erfolgreiche TLS-Verbindung. |
+| **Datalogger – Lokale HTTP-API (HTTPD)** | Aktiviert den eingebauten HTTP-Server auf Port 80 für lokalen Netzwerkzugriff. |
+
+**BLE (Bluetooth SPP-Server)** — unabhängig von der Moduswahl. Nur aktivieren, wenn Sie die Freematics Controller App über Bluetooth nutzen. Für den Telelogger-Modus wird BLE-Deaktivierung dringend empfohlen (spart ~100 KB Heap).
+
+**Intervalle** — bei `0` belassen, um die Firmware-Standardwerte zu verwenden (~1000 ms Datenintervall, 120 s Synchronisationsintervall).
+
+**LED- & Buzzer-Einstellungen** *(Erweitert)*:
+- **Rote LED** (`LED_RED_EN`) — leuchtet wenn das Gerät eingeschaltet/im Standby ist. Deaktivierbar zur Reduzierung von Licht im Fahrzeuginnenraum.
+- **Weiße LED** (`LED_WHITE_EN`) — leuchtet bei jeder Datenübertragung. Unabhängig deaktivierbar.
+- **Buzzer** (`BEEP_EN`) — kurzer Piepton bei erfolgreicher WLAN- oder Mobilfunkverbindung. Deaktivierbar zur Geräuschreduktion.
+
+**Mobilfunk-Debug** (`CELL_DEBUG`) — aktiviert ausführliches AT-Befehls-Logging auf dem seriellen Monitor. Nützlich bei der Fehlersuche. Im Normalbetrieb deaktiviert lassen.
+
+> **Hinweis:** Die Firmware schreibt Daten immer auf die SD-Karte, unabhängig vom Modus. "Telelogger" und "Datalogger" beschreiben die *Übertragungsart*, nicht ob Daten lokal gespeichert werden.
+
+### Schritt 7 – Flash-Methode
+
+Wählen Sie die Methode zum Flashen der Firmware:
+
+| Methode | Beschreibung |
+|---|---|
+| **WLAN OTA** | Firmware über WLAN auf ein Gerät im Netzwerk oder im AP-Modus hochladen |
+| **Seriell USB** | Flashen über USB-Kabel, das am HA-Host angeschlossen ist |
+
+- **Geräte-IP**: IP-Adresse des laufenden Geräts (oder `192.168.4.1` im AP-Modus)
+- **HTTP-Port**: Normalerweise `80`
+- **Serieller Port**: z.B. `/dev/ttyUSB0` (Linux) oder `COM3` (Windows)
+
+Klicken Sie auf **Weiter**, um die Einrichtung abzuschließen. Verwenden Sie anschließend die **Firmware flashen**-Schaltflächen, um den Flash-Vorgang zu starten.
 
 ---
 
@@ -820,7 +1015,7 @@ Wählen Sie die für Ihre Situation passende Methode:
 Öffnen Sie das **Freematics-Panel** (Seitenleiste → *Freematics ONE+*) und flashen Sie über den Browser-Flash oder den manuellen Flash. Das Panel erstellt `flash_image.bin` immer aus den *aktuellen* Einstellungen — die neu gespeicherten Werte werden automatisch eingebettet.
 
 - **Browser-Flash (Chrome/Edge):** Das Panel verwendet automatisch das aktualisierte Manifest — klicken Sie einfach erneut auf den Flash-Button.
-- **Manuelles Flashen (esptool / Freematics Builder):** Laden Sie die Datei im Panel erneut herunter, um eine frisch generierte `flash_image.bin` zu erhalten, und flashen Sie sie wie gewohnt bei Offset `0x9000`.
+- **Manuelles Flashen (esptool / Freematics Builder):** Laden Sie die Datei im Panel erneut herunter, um eine frisch generierte `flash_image.bin` zu erhalten, und flashen Sie sie wie gewohnt bei Offset `0x1000`.
 
 #### Option B – WLAN/APN ohne Reflash übertragen (nur für laufendes Gerät)
 
@@ -840,9 +1035,44 @@ Wenn das Gerät bereits läuft, im Netzwerk erreichbar ist und die Firmware mit 
 Sensor-Entitäten werden automatisch erstellt, sobald das Gerät Daten sendet.
 Schaltflächen-Entitäten stehen sofort nach der Einrichtung zur Verfügung.
 
+### Sensor-Entitäten
+
+| Entität | Beschreibung | Einheit |
+|---|---|---|
+| `sensor.…_speed` | Fahrzeuggeschwindigkeit (OBD) | km/h |
+| `sensor.…_rpm` | Motordrehzahl | U/min |
+| `sensor.…_throttle` | Drosselklappenstellung | % |
+| `sensor.…_engine_load` | Motorlast | % |
+| `sensor.…_coolant_temp` | Kühlmitteltemperatur | °C |
+| `sensor.…_intake_temp` | Ansauglufttemperatur | °C |
+| `sensor.…_fuel_pressure` | Kraftstoffdruck | kPa |
+| `sensor.…_timing_advance` | Zündzeitpunkt-Vorverstellung | ° |
+| `sensor.…_lat` | GPS-Breitengrad | ° |
+| `sensor.…_lng` | GPS-Längengrad | ° |
+| `sensor.…_alt` | GPS-Höhe | m |
+| `sensor.…_gps_speed` | GPS-Geschwindigkeit | km/h |
+| `sensor.…_heading` | GPS-Kursrichtung | ° |
+| `sensor.…_satellites` | GPS-Satellitenanzahl | — |
+| `sensor.…_hdop` | GPS-HDOP | — |
+| `sensor.…_acc_x` | Beschleunigung X | m/s² |
+| `sensor.…_acc_y` | Beschleunigung Y | m/s² |
+| `sensor.…_acc_z` | Beschleunigung Z | m/s² |
+| `sensor.…_battery` | Batteriespannung | V |
+| `sensor.…_signal` | Signalstärke | dBm |
+| `sensor.…_device_temp` | Gerätetemperatur | °C |
+
+### Schaltflächen-Entitäten
+
+| Entität | Beschreibung |
+|---|---|
+| `button.…_flash_firmware_via_serial` | Firmware via USB-Seriell flashen |
+| `button.…_flash_firmware_via_wifi_ota` | Firmware via WLAN OTA flashen |
+| `button.…_send_config_to_device` | WLAN/APN-Konfiguration ans Gerät senden |
+| `button.…_restart_device` | Gerät neu starten |
+
 Entitätsnamen folgen dem Muster:
-- Sensoren: `sensor.freematics_one_<webhook_id>_<messgrösse>`
-- Schaltflächen: `button.freematics_one_<aktion>`
+- Sensoren: `sensor.freematics_one_<webhook_id_kurz>_<messgröße>`
+- Schaltflächen: `button.freematics_one_<webhook_id_kurz>_<aktion>`
 
 ---
 
@@ -892,7 +1122,7 @@ pip install esptool
 
 **Schritt 3 – `flash_image.bin` herunterladen**
 
-Das **Freematics-Panel** in Home Assistant öffnen (Seitenleiste → *Freematics ONE+*) und den Link `flash_image.bin` herunterladen. Diese Datei enthält NVS-Einstellungen und Firmware in einer einzigen Binärdatei, die bei Offset `0x9000` geflasht wird.
+Das **Freematics-Panel** in Home Assistant öffnen (Seitenleiste → *Freematics ONE+*) und den Link `flash_image.bin` herunterladen. Diese Datei enthält Bootloader, Partitionstabelle, NVS-Einstellungen und Firmware in einer einzigen Binärdatei, die bei Offset `0x1000` geflasht wird.
 
 **Schritt 4 – COM-Port ermitteln**
 
@@ -903,7 +1133,7 @@ Das **Freematics-Panel** in Home Assistant öffnen (Seitenleiste → *Freematics
 **Schritt 5 – Flashen**
 
 ```bash
-python -m esptool --chip esp32 --port COM3 --baud 921600 write-flash 0x9000 flash_image.bin
+python -m esptool --chip esp32 --port COM3 --baud 921600 write-flash 0x1000 flash_image.bin
 ```
 
 *(COM3 durch den eigenen Port ersetzen, z.B. `/dev/ttyUSB0`)*
@@ -918,4 +1148,150 @@ Nach dem Flashen startet das Gerät neu und verbindet sich mit dem WLAN anhand d
 2. Den Ordner `firmware_v5/telelogger/` in VS Code öffnen.
 3. Einstellungen in `config.h` anpassen (WLAN-Zugangsdaten, Webhook-ID usw.).
 4. Auf **Upload** klicken — PlatformIO kompiliert und flasht automatisch.
+
+---
+
+## FAQ & HowTo (Deutsch)
+
+Häufige Fragen und Probleme auf einen Blick. Jede Antwort verweist auf den entsprechenden Detailabschnitt.
+
+---
+
+### ❓ F: Mein Gerät sendet keine Daten an Home Assistant. Wo fange ich an?
+
+**A:** Folgende Checkliste durchgehen:
+
+1. **Ist das Gerät eingeschaltet?** — Freematics ONE+ in die OBD-II-Buchse stecken. Die LEDs sollten kurz aufleuchten.
+2. **Hat das Gerät Internet-Konnektivität?** — Bei WLAN: SSID und Passwort prüfen. Bei Mobilfunk: APN prüfen.
+3. **Stimmt die Webhook-ID?** — Die in der Firmware gespeicherte `HA_WEBHOOK_ID` muss mit der Webhook-ID in den Integrationseinstellungen übereinstimmen.
+4. **Stimmt `SERVER_HOST`?** — Er muss Ihrer externen HA-URL entsprechen (z.B. `ihr-name.duckdns.org` oder Ihre Nabu-Casa-Subdomain).
+5. **Ist `SERVER_PROTOCOL` = `4`?** — Dieser Wert wählt das HA-Webhook-Protokoll.
+6. **Gibt es Fehler in den HA-Logs?** — **Einstellungen → System → Protokolle** öffnen und nach `freematics` filtern.
+
+> 💡 Die schnellste Lösung ist meist ein erneutes Flashen mit den korrekten Einstellungen, anschließend den seriellen Monitor-Output prüfen.
+
+---
+
+### ❓ F: Im seriellen Monitor erscheint `SSL - Memory allocation failed`. Was bedeutet das?
+
+**A:** Dies ist `MBEDTLS_ERR_SSL_ALLOC_FAILED` — der ESP32 kann keinen ausreichend großen zusammenhängenden Heap-Speicher für den TLS-Handshake reservieren. Häufigste Ursache: BLE oder HTTPD belegen Speicher.
+
+**Lösung:**
+1. **Einstellungen → Integrationen → Freematics ONE+ → Konfigurieren**
+2. **BLE aktivieren** → ❌ Aus
+3. **HTTPD aktivieren** → ❌ Aus *(HTTPD wird für WLAN-OTA automatisch wieder aktiviert)*
+4. Gerät neu flashen
+
+BLE-Deaktivierung gibt ~100 KB Heap frei — in der Regel genug für eine erfolgreiche TLS-Verbindung.
+
+---
+
+### ❓ F: WLAN OTA schlägt mit „Connection refused" oder „Unable to connect" fehl.
+
+**A:**
+- Sicherstellen, dass das Gerät eingeschaltet und unter der konfigurierten IP-Adresse erreichbar ist (Ping-Test).
+- Im AP-Modus: Ihr Computer muss mit dem **`TELELOGGER`**-WLAN (Passwort: `PASSWORD`) verbunden sein, bevor der OTA-Flash aus HA gestartet wird.
+- Das Gerät muss Firmware mit `ENABLE_HTTPD=1` ausführen, um OTA-Uploads anzunehmen.
+- Im AP-Modus ist `192.168.4.1` die korrekte IP-Adresse.
+- Bei **„Connection reset by peer"**: Das Gerät hat nach einem *erfolgreichen* Flash neu gestartet — das ist normal. ~30 Sekunden warten und prüfen, ob sich das Gerät mit HA verbindet.
+
+---
+
+### ❓ F: Der Browser-Flasher (Methode B) funktioniert nicht — kein „Connect & Flash"-Button sichtbar oder Fortschrittsbalken hängt.
+
+**A:**
+- **Google Chrome** oder **Microsoft Edge** ab Version 89 verwenden. Firefox unterstützt Web Serial nicht.
+- HA muss über **HTTPS** erreichbar sein. Web Serial funktioniert nicht über plain HTTP (lokale IP ohne Zertifikat). Nabu Casa, Let's Encrypt oder den manuellen esptool-Weg nutzen.
+- USB-Seriell-Treiber installieren:
+  - [CP210x-Treiber (Silicon Labs)](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
+  - [CH340-Treiber (WCH)](https://www.wch-ic.com/downloads/CH341SER_EXE.html)
+- Anderen USB-Port oder ein anderes Kabel ausprobieren.
+- Falls der Fortschrittsbalken sofort einfriert: Browser-Tab schließen, neu laden und erneut versuchen.
+- Als letzten Ausweg: [Manuelles Flashen als Fallback (esptool)](#manuelles-flashen-als-fallback-esptool) nutzen.
+
+---
+
+### ❓ F: Serieller USB-Flash via HA-Server (Methode C) schlägt fehl.
+
+**A:**
+- Sicherstellen, dass der Freematics ONE+ per USB am **HA-Host** angeschlossen ist — nicht am eigenen Computer.
+- Richtigen Port ermitteln: `dmesg | tail` auf dem HA-Host direkt nach dem Einstecken des USB-Kabels ausführen.
+- Berechtigungen korrigieren: `sudo chmod 666 /dev/ttyUSB0` (Port durch den tatsächlichen ersetzen).
+- `esptool` wird durch diese Integration automatisch installiert. Falls es fehlt: `pip install esptool` auf dem HA-Host ausführen.
+- Wenn das Gerät am eigenen Computer angeschlossen ist: stattdessen Methode B (Browser-Seriell) verwenden.
+
+---
+
+### ❓ F: Ich habe das WLAN-Passwort geändert. Wie aktualisiere ich das Gerät ohne Reflash?
+
+**A:** Wenn das Gerät läuft und im Netzwerk erreichbar ist:
+1. Passwort unter **Einstellungen → Integrationen → Freematics ONE+ → Konfigurieren** aktualisieren
+2. Sicherstellen, dass die **Geräte-IP** korrekt eingetragen ist
+3. **Konfiguration an Gerät senden** drücken — überträgt die neue SSID/das neue Passwort per HTTP in den NVS
+4. Gerät neu starten (Schaltfläche oder OBD-Stecker ab- und wieder anstecken)
+
+Wenn das Gerät nicht erreichbar ist (z.B. WLAN bereits verloren), muss die Firmware neu geflasht werden.
+
+---
+
+### ❓ F: Die LEDs im Auto stören mich nachts. Wie deaktiviere ich sie?
+
+**A:** **Einstellungen → Integrationen → Freematics ONE+ → Konfigurieren → Erweiterte Firmware-Einstellungen**:
+- **Rote LED** (`LED_RED_EN`) → deaktivieren, um die Betriebs-/Standby-LED auszuschalten
+- **Weiße LED** (`LED_WHITE_EN`) → deaktivieren, um die Übertragungs-LED auszuschalten
+- **Buzzer** (`BEEP_EN`) → deaktivieren, um den Verbindungs-Piepton zu unterdrücken
+
+Nach dem Speichern neu flashen. Die Einstellungen werden beim Flash in den NVS des Geräts geschrieben.
+
+---
+
+### ❓ F: Das Gerät verbindet sich über Mobilfunk, aber die Verbindung bricht immer wieder ab.
+
+**A:**
+1. **Mobilfunk-Debug** (`CELL_DEBUG`) unter **Konfigurieren → Erweiterte Firmware-Einstellungen** aktivieren und neu flashen. Dies fügt ausführliches AT-Befehls-Logging hinzu, mit dem der genaue Fehler sichtbar wird.
+2. Den APN prüfen — leer lassen für automatische Erkennung oder den APN Ihres Anbieters explizit eintragen.
+3. Signalstärke über die Entität `sensor.…_signal` prüfen (sollte über −95 dBm liegen).
+4. SIM-Karte in einem Smartphone testen, um grundlegende Mobilfunkkonnektivität sicherzustellen.
+
+---
+
+### ❓ F: Wie aktualisiere ich die Firmware nach einem neuen Integrations-Release?
+
+**A:**
+1. In HACS: **Integrationen → Freematics ONE+** → **Aktualisieren**
+2. Home Assistant neu starten
+3. **Freematics-Panel** öffnen (Seitenleiste → *Freematics ONE+*)
+4. Gerät erneut mit der bevorzugten Methode flashen (WLAN OTA oder Browser-Seriell)
+
+Geräteeinstellungen (WLAN, Webhook, APN usw.) bleiben in HA erhalten und werden automatisch in die neue `flash_image.bin` eingebettet. Der Setup-Assistent muss **nicht** erneut durchlaufen werden.
+
+---
+
+### ❓ F: Ich möchte das Gerät auf Werkseinstellungen zurücksetzen und neu beginnen.
+
+**A:**
+1. In HA: **Einstellungen → Geräte & Dienste**, Freematics ONE+-Integration auswählen und **Löschen**.
+2. Integration erneut hinzufügen (**Integration hinzufügen → Freematics ONE+**) und den Setup-Assistenten erneut durchlaufen.
+3. Gerät mit den neuen Einstellungen neu flashen.
+
+Zum vollständigen Löschen des ESP32-Flash (NVS-Partition):
+```bash
+python -m esptool --chip esp32 --port COM3 erase_flash
+```
+Danach startet das Gerät nicht mehr, bis `flash_image.bin` erneut geflasht wird.
+
+---
+
+### ❓ F: Die Lovelace-Karte zeigt keine Daten / Entitäten sind „nicht verfügbar".
+
+**A:**
+- Entitäten werden nur erstellt, wenn die erste Webhook-Nutzlast vom Gerät eingetroffen ist. Bis dahin existieren die Entitäten in HA nicht.
+- Prüfen, ob das Gerät läuft, mit dem Internet verbunden ist und Webhook-ID sowie SERVER_HOST korrekt sind.
+- Das `entity_prefix` in der Lovelace-Karten-YAML prüfen: es muss `sensor.freematics_one_<erste-8-Zeichen-der-Webhook-ID>` entsprechen.
+
+---
+
+### ❓ F: Die Integration wurde installiert, aber ich sehe keinen „Freematics ONE+"-Eintrag in der Seitenleiste.
+
+**A:** Das Lovelace-Panel wird automatisch registriert, aber möglicherweise muss der **Browser-Cache geleert** werden (Strg+F5 / Cmd+Shift+R) oder das HA-Frontend **neu geladen** werden. Außerdem sicherstellen, dass Home Assistant nach der HACS-Installation neu gestartet wurde.
 
