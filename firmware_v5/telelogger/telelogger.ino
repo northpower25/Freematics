@@ -29,6 +29,9 @@
 #if ENABLE_OLED
 #include "FreematicsOLED.h"
 #endif
+#if ENABLE_WIFI
+#include <Update.h>
+#endif
 
 // states
 #define STATE_STORAGE_READY 0x1
@@ -181,6 +184,26 @@ volatile bool s_ota_active = false;
 // Cleared by performPullOtaFlash() on success or unrecoverable error.
 // Also set at startup when a previously staged file is found on SD.
 static volatile bool s_ota_pending = false;
+
+// Pull-OTA constants used in initialize(), standby(), performPullOtaFlash(),
+// and performPullOtaCheck().  Defined here (before any function body) so that
+// all translation-unit uses see them regardless of source order.
+// Minimum plausible firmware binary size — rejects short error pages returned
+// instead of the real binary.
+#define PULL_OTA_MIN_FW_SIZE       65536U   // 64 KB
+// Chunk size for SD download and SD→flash write loops.
+#define PULL_OTA_CHUNK_SIZE        4096U    // 4 KB
+// Per-chunk receive timeout when streaming from the network socket.
+#define PULL_OTA_CHUNK_TIMEOUT_MS  30000U   // 30 s
+// Delay after setting s_ota_active to let the telemetry task yield its SSL
+// connections before Update.begin() allocates flash partition memory.
+#define OTA_TELEMETRY_YIELD_DELAY_MS 1000U
+
+// Shared chunk buffer used by the download (to SD) and flash (from SD) phases.
+// File-scope static so both functions share one allocation.
+#if ENABLE_WIFI
+static uint8_t s_otaChunkBuf[PULL_OTA_CHUNK_SIZE];
+#endif
 
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
@@ -1705,27 +1728,10 @@ void loadConfig()
 // reboot shortly after), false otherwise.
 // ---------------------------------------------------------------------------
 
-// Minimum plausible firmware binary size in bytes.  Files smaller than this
-// are rejected to guard against a server returning a short error page instead
-// of the real firmware when the Content-Type or size is unexpected.
-#define PULL_OTA_MIN_FW_SIZE     65536U   // 64 KB
-
-// Size of the heap-allocated chunk buffer used when streaming the firmware
-// download to flash.  Larger chunks = fewer write calls but more heap usage.
-#define PULL_OTA_CHUNK_SIZE      4096U    // 4 KB
-
-// Per-chunk socket receive timeout (ms).  On a local WiFi network data arrives
-// in milliseconds; this generous timeout guards against brief pauses.
-#define PULL_OTA_CHUNK_TIMEOUT_MS 30000U  // 30 s
-
-// How long to wait after setting s_ota_active before starting the flash,
-// giving the telemetry task one FreeRTOS scheduling cycle to yield.
-#define OTA_TELEMETRY_YIELD_DELAY_MS 1000U
-
 // Shared chunk buffer used by both the download (to SD) and flash (from SD)
-// phases.  Declared here so both functions share the same static allocation
-// and the buffer is not duplicated on the heap.
-static uint8_t s_otaChunkBuf[PULL_OTA_CHUNK_SIZE];
+// phases.  See the declaration near the top of the file (after s_ota_pending).
+// PULL_OTA_MIN_FW_SIZE / PULL_OTA_CHUNK_SIZE / PULL_OTA_CHUNK_TIMEOUT_MS /
+// OTA_TELEMETRY_YIELD_DELAY_MS are also defined near the top.
 
 #if STORAGE == STORAGE_SD && ENABLE_WIFI
 // ---------------------------------------------------------------------------
