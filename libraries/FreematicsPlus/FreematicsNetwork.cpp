@@ -54,6 +54,26 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   return header;
 }
 
+String HTTPClient::genHeaderWithAuth(HTTP_METHOD method, const char* path,
+                                     const char* payload, int payloadSize,
+                                     const char* bearerToken)
+{
+  // Build a standard header first, then splice in the Authorization line just
+  // before the final empty line.  genHeader() ends with "\r\n\r\n"; we strip
+  // the trailing CRLF, append the Authorization header, then re-add CRLF-CRLF.
+  String header = genHeader(method, path, payload, payloadSize);
+  if (bearerToken && bearerToken[0]) {
+    // Remove the trailing "\r\n" (last 2 chars) added by genHeader().
+    if (header.endsWith("\r\n\r\n")) {
+      header.remove(header.length() - 2); // now ends with "\r\n"
+      header += "Authorization: Bearer ";
+      header += bearerToken;
+      header += "\r\n\r\n";
+    }
+  }
+  return header;
+}
+
 /*******************************************************************************
   Implementation for WiFi (on top of Arduino WiFi library)
 *******************************************************************************/
@@ -242,6 +262,65 @@ char* WifiHTTP::receive(char* buffer, int bufsize, int* pbytes, unsigned int tim
   if (pbytes) *pbytes = contentBytes;
   if (!keepAlive) close();
   return content;
+}
+
+int WifiHTTP::receiveHeaders(int* contentLength, unsigned int timeout)
+{
+  // Read bytes from the socket until the HTTP header block ends ("\r\n\r\n").
+  // Parse the HTTP status code and Content-Length header along the way.
+  // Returns the HTTP status code (e.g. 200) on success, or -1 on failure.
+  // The socket is left positioned at the first byte of the response body.
+  // *contentLength is set to the value of the Content-Length header (or 0
+  // if the header is absent).
+  if (contentLength) *contentLength = 0;
+  int code = -1;
+
+  // Use a fixed-size line buffer to parse headers without heap allocation.
+  // HTTP headers are typically < 4 KB; 1 KB is enough for all common cases.
+  char hdrBuf[1024];
+  int hdrLen = 0;
+  bool foundEndOfHeaders = false;
+
+  for (uint32_t t = millis(); millis() - t < timeout; ) {
+    if (!client.available()) {
+      delay(1);
+      continue;
+    }
+    char c = (char)client.read();
+    if (hdrLen < (int)(sizeof(hdrBuf) - 1)) {
+      hdrBuf[hdrLen++] = c;
+      hdrBuf[hdrLen]   = '\0';
+    }
+    // Detect end of HTTP headers.
+    if (hdrLen >= 4 &&
+        hdrBuf[hdrLen - 4] == '\r' && hdrBuf[hdrLen - 3] == '\n' &&
+        hdrBuf[hdrLen - 2] == '\r' && hdrBuf[hdrLen - 1] == '\n') {
+      foundEndOfHeaders = true;
+      break;
+    }
+  }
+
+  if (!foundEndOfHeaders) {
+    m_state = HTTP_ERROR;
+    return -1;
+  }
+
+  // Parse status code from "HTTP/1.x NNN ..."
+  char* p = strstr(hdrBuf, "HTTP/1.");
+  if (p) {
+    code = atoi(p + 9);
+    m_code = (uint16_t)code;
+  }
+
+  // Parse Content-Length
+  if (contentLength) {
+    char* cl = strstr(hdrBuf, "Content-Length: ");
+    if (!cl) cl = strstr(hdrBuf, "Content-length: ");
+    if (cl) *contentLength = atoi(cl + 16);
+  }
+
+  m_state = (code >= 200 && code < 300) ? HTTP_CONNECTED : HTTP_ERROR;
+  return code;
 }
 
 /*******************************************************************************

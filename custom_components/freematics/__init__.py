@@ -56,6 +56,8 @@ from .views import (
     FreematicsFlashImageView,
     FreematicsFlasherView,
     FreematicsOtaFlasherView,
+    FreematicsOtaPullView,
+    FreematicsOtaTokenView,
     FreematicsPartitionTableView,
     FreematicsPersonalisedManifestView,
     FreematicsProvisioningTokenView,
@@ -160,6 +162,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(FreematicsFlashImageView())
     hass.http.register_view(FreematicsOtaFlasherView())
     hass.http.register_view(FreematicsWifiOtaSseView())
+    hass.http.register_view(FreematicsOtaTokenView())
+    hass.http.register_view(FreematicsOtaPullView())
 
     # Serve the www/ directory so the panel JS and custom card are reachable.
     await hass.http.async_register_static_paths(

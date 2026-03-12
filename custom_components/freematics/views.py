@@ -70,6 +70,8 @@ from .const import (
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
+    CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_TOKEN,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
@@ -1295,6 +1297,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     beep_en = bool(cfg.get(CONF_BEEP_EN, True))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
+    # Pull-OTA configuration (Variant 1: authenticated HA endpoint).
+    ota_token = cfg.get(CONF_OTA_TOKEN, "")
+    ota_check_interval_s = int(cfg.get(CONF_OTA_CHECK_INTERVAL_S, 0))
 
     # Determine the operating mode.  New entries use the operating_mode selector;
     # legacy pre-existing entries fall back to the old enable_httpd boolean.
@@ -1484,6 +1489,35 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                 server_host,
             )
 
+    # Step 3 – resolve OTA pull host/port.  The pull-OTA endpoint lives on the
+    # HA instance itself, not on hooks.nabu.casa.  When Nabu Casa cloud is
+    # active, server_host is already set to hooks.nabu.casa (for the telemetry
+    # webhook); OTA_HOST must point to the actual HA server that serves
+    # /api/freematics/ota_pull/…  Use get_url(prefer_external=True) for this
+    # so that the device can reach the OTA endpoint from outside the home
+    # network when it is away from home (e.g., using the NabuCasa Remote UI
+    # URL *.ui.nabu.casa or a user-configured external URL).
+    ota_host = ""
+    ota_port = 443
+    if ota_token:
+        try:
+            from homeassistant.helpers.network import get_url  # noqa: PLC0415
+            _ota_base = get_url(hass, prefer_external=True)
+            _ota_parsed = urlparse(_ota_base)
+            ota_host = _ota_parsed.hostname or ""
+            if _ota_parsed.port:
+                ota_port = _ota_parsed.port
+            elif _ota_parsed.scheme == "https":
+                ota_port = 443
+            else:
+                ota_port = 80
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Freematics: cannot resolve HA external URL for pull-OTA; "
+                "OTA_HOST will not be provisioned in NVS.  Configure an external "
+                "URL or Nabu Casa cloud for pull-OTA to work."
+            )
+
     return {
         "wifi_ssid": wifi_ssid,
         "wifi_password": wifi_password,
@@ -1503,6 +1537,10 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "beep_en": beep_en,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
+        "ota_token": ota_token,
+        "ota_host": ota_host,
+        "ota_port": ota_port,
+        "ota_check_interval_s": ota_check_interval_s,
     }
 
 
@@ -1564,6 +1602,13 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs["cell_server_port"],
             kwargs["cell_webhook_path"],
             kwargs["cell_debug"],
+            kwargs.get("led_red_en", True),
+            kwargs.get("led_white_en", True),
+            kwargs.get("beep_en", True),
+            kwargs.get("ota_token", ""),
+            kwargs.get("ota_host", ""),
+            kwargs.get("ota_port", 443),
+            kwargs.get("ota_check_interval_s", 0),
         )
 
         if nvs_data is None:
@@ -1658,6 +1703,13 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs["cell_server_port"],
             kwargs["cell_webhook_path"],
             kwargs["cell_debug"],
+            kwargs.get("led_red_en", True),
+            kwargs.get("led_white_en", True),
+            kwargs.get("beep_en", True),
+            kwargs.get("ota_token", ""),
+            kwargs.get("ota_host", ""),
+            kwargs.get("ota_port", 443),
+            kwargs.get("ota_check_interval_s", 0),
         )
 
         if nvs_data is None:
@@ -1683,5 +1735,181 @@ class FreematicsFlashImageView(HomeAssistantView):
             headers={
                 "Content-Disposition": "attachment; filename=flash_image.bin",
                 "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pull-OTA endpoints (Variant 1: authenticated token-in-URL endpoint)
+# ---------------------------------------------------------------------------
+
+class FreematicsOtaTokenView(HomeAssistantView):
+    """Issue or retrieve the long-lived pull-OTA token for the caller's device.
+
+    Accessible at GET /api/freematics/ota_token.
+
+    Requires HA authentication (requires_auth = True).  Returns the device's
+    pull-OTA token, creating and persisting a new one if none exists yet.  The
+    token is embedded as a path component in the pull-OTA endpoint URL so that
+    the device can download firmware without a session token.
+
+    Response JSON:
+      {
+        "token": "<64-char hex>",
+        "meta_url": "/api/freematics/ota_pull/<token>/meta.json",
+        "firmware_url": "/api/freematics/ota_pull/<token>/firmware.bin",
+        "ota_check_interval_s": <int>
+      }
+    """
+
+    url = "/api/freematics/ota_token"
+    name = "api:freematics:ota_token"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return the pull-OTA token for the authenticated user's config entry."""
+        hass = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        entry = entries[0] if entries else None
+        if entry is None:
+            return web.Response(
+                status=404,
+                text="No Freematics config entry found",
+            )
+
+        cfg = {**entry.data, **entry.options}
+        token = cfg.get(CONF_OTA_TOKEN, "")
+
+        # Generate and persist a new token if one doesn't exist yet.
+        if not token:
+            token = secrets.token_hex(32)
+            try:
+                hass.config_entries.async_update_entry(
+                    entry,
+                    options={**entry.options, CONF_OTA_TOKEN: token},
+                )
+                _LOGGER.info(
+                    "Freematics: generated new pull-OTA token for entry %s",
+                    entry.entry_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: could not persist pull-OTA token: %s", exc
+                )
+
+        # Cache in hass.data for fast token→entry_id lookup from the pull view.
+        ota_store = hass.data.setdefault(DOMAIN, {}).setdefault("_ota_tokens", {})
+        ota_store[token] = entry.entry_id
+
+        ota_check_interval_s = int(cfg.get(CONF_OTA_CHECK_INTERVAL_S, 0))
+
+        return web.Response(
+            body=json.dumps({
+                "token": token,
+                "meta_url": f"/api/freematics/ota_pull/{token}/meta.json",
+                "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                "ota_check_interval_s": ota_check_interval_s,
+            }).encode("utf-8"),
+            content_type="application/json",
+        )
+
+
+class FreematicsOtaPullView(HomeAssistantView):
+    """Serve pull-OTA metadata or the firmware binary, authenticated by URL token.
+
+    Accessible at GET /api/freematics/ota_pull/{token}/{filename}.
+
+    Path parameters:
+      token    – Long-lived device-specific OTA token (issued by ota_token view).
+      filename – ``meta.json`` or ``firmware.bin``.
+
+    ``meta.json`` response (JSON):
+      {
+        "available": true|false,
+        "version": "5.0",
+        "size": <int>,
+        "sha256": "<hex>",
+        "firmware_url": "/api/freematics/ota_pull/<token>/firmware.bin"
+      }
+
+    ``firmware.bin`` response: raw binary firmware bytes.
+
+    requires_auth is False – authentication is via the secret token in the
+    URL path, which the device has stored in its NVS partition.
+    """
+
+    url = "/api/freematics/ota_pull/{token}/{filename}"
+    name = "api:freematics:ota_pull"
+    requires_auth = False
+
+    async def get(
+        self, request: web.Request, token: str, filename: str
+    ) -> web.Response:
+        """Return firmware metadata or binary for the authenticated device."""
+        hass = request.app["hass"]
+
+        # Validate token: check the fast in-memory cache first, then fall back
+        # to scanning config entries (survives HA restart when cache is cold).
+        ota_store = hass.data.get(DOMAIN, {}).get("_ota_tokens", {})
+        entry_id = ota_store.get(token)
+        if entry_id is None:
+            # Cold-start: rebuild cache from all config entries.
+            for _entry in hass.config_entries.async_entries(DOMAIN):
+                _t = (_entry.options or {}).get(CONF_OTA_TOKEN) or \
+                     (_entry.data or {}).get(CONF_OTA_TOKEN, "")
+                if _t:
+                    ota_store[_t] = _entry.entry_id
+                    if _t == token:
+                        entry_id = _entry.entry_id
+
+        if not token or entry_id is None:
+            return web.Response(status=401, text="Invalid or unknown OTA token")
+
+        if filename not in ("meta.json", "firmware.bin"):
+            return web.Response(status=404, text="Not found")
+
+        if not FIRMWARE_PATH.exists():
+            return web.Response(status=503, text="Firmware binary not found")
+
+        if filename == "meta.json":
+            # Compute SHA-256 of the bundled firmware in a thread executor so
+            # the event loop is not blocked for the ~50 ms hash calculation.
+            import hashlib  # noqa: PLC0415
+
+            def _compute_meta() -> tuple[int, str]:
+                data = FIRMWARE_PATH.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()
+                return len(data), digest
+
+            try:
+                fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta)
+            except OSError as exc:
+                return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+
+            return web.Response(
+                body=json.dumps({
+                    "available": True,
+                    "version": "5.0",
+                    "size": fw_size,
+                    "sha256": fw_sha256,
+                    "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        # filename == "firmware.bin"
+        try:
+            firmware_data: bytes = await hass.async_add_executor_job(
+                FIRMWARE_PATH.read_bytes
+            )
+        except OSError as exc:
+            return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+
+        return web.Response(
+            body=firmware_data,
+            content_type="application/octet-stream",
+            headers={
+                "Content-Disposition": "attachment; filename=telelogger.bin",
+                "Cache-Control": "no-store",
             },
         )

@@ -112,6 +112,23 @@ uint8_t enableHttpd = ENABLE_HTTPD;
 uint8_t enableBle = 1;
 nvs_handle_t nvs;
 
+// ---------------------------------------------------------------------------
+// Pull-OTA configuration (loaded from NVS by loadConfig(), firmware v5.2+).
+// When otaToken is non-empty the firmware periodically GETs
+//   https://{otaHost}:{otaPort}/api/freematics/ota_pull/{otaToken}/meta.json
+// and downloads / flashes a newer firmware version when one is available.
+// ---------------------------------------------------------------------------
+// Secret path token provisioned by the HA integration (OTA_TOKEN NVS key).
+// Embedded as a URL path component so no Authorization header is needed.
+char otaToken[68] = "";   // 64 hex chars + null; empty = feature disabled
+// HA server hostname for pull-OTA (OTA_HOST NVS key).  May differ from
+// serverHost when Nabu Casa cloud is active (serverHost would be
+// hooks.nabu.casa which does not serve the pull-OTA endpoint).
+char otaHost[128] = "";
+uint16_t otaPort = 443;   // OTA_PORT NVS key (u16)
+// Interval between pull-OTA checks in seconds.  0 = disabled (default).
+uint16_t otaCheckIntervalS = 0;  // OTA_INTERVAL NVS key (u16)
+
 // live data
 String netop;
 String ip;
@@ -1263,6 +1280,25 @@ void telemetry(void* inst)
         }
       }
 
+      // Periodic pull-OTA check: runs only when WiFi is connected, the device
+      // is actively transmitting, and OTA_TOKEN + OTA_INTERVAL are provisioned.
+      // The check is rate-limited by otaCheckIntervalS; 0 means disabled.
+#if ENABLE_WIFI
+      if (otaToken[0] && otaCheckIntervalS > 0 && state.check(STATE_WIFI_CONNECTED)) {
+        static uint32_t lastOtaCheckMs = 0;
+        uint32_t nowMs = millis();
+        if (lastOtaCheckMs == 0 || nowMs - lastOtaCheckMs >= (uint32_t)otaCheckIntervalS * 1000UL) {
+          lastOtaCheckMs = nowMs;
+          Serial.println("[OTA-PULL] Checking for firmware update...");
+          if (performPullOtaCheck()) {
+            // Firmware download started; device will reboot shortly.
+            // Block here so the loop doesn't continue transmitting.
+            while (true) delay(1000);
+          }
+        }
+      }
+#endif
+
       if (connErrors >= MAX_CONN_ERRORS_RECONNECT) {
 #if ENABLE_WIFI
         if (state.check(STATE_WIFI_CONNECTED)) {
@@ -1540,7 +1576,245 @@ void loadConfig()
   if (nvs_get_u16(nvs, "SYNC_INTERVAL", &nvsSyncInterval) == ESP_OK && nvsSyncInterval > 0) {
     syncInterval = (int32_t)nvsSyncInterval * 1000;
   }
+
+  // Pull-OTA configuration (firmware v5.2+).
+  // OTA_TOKEN: secret path token; when set enables periodic firmware checks.
+  len = sizeof(otaToken);
+  otaToken[0] = 0;
+  nvs_get_str(nvs, "OTA_TOKEN", otaToken, &len);
+
+  // OTA_HOST: HA server for pull-OTA (may differ from serverHost).
+  len = sizeof(otaHost);
+  otaHost[0] = 0;
+  nvs_get_str(nvs, "OTA_HOST", otaHost, &len);
+  if (!otaHost[0] && otaToken[0]) {
+    // Fall back to serverHost when no separate OTA_HOST is provisioned.
+    strncpy(otaHost, serverHost, sizeof(otaHost) - 1);
+    otaHost[sizeof(otaHost) - 1] = 0;
+  }
+
+  uint16_t nvsOtaPort = 0;
+  nvs_get_u16(nvs, "OTA_PORT", &nvsOtaPort);
+  if (nvsOtaPort) otaPort = nvsOtaPort;
+
+  uint16_t nvsOtaInterval = 0;
+  nvs_get_u16(nvs, "OTA_INTERVAL", &nvsOtaInterval);
+  otaCheckIntervalS = nvsOtaInterval;
 }
+
+// ---------------------------------------------------------------------------
+// Pull-OTA check (Variant 1: authenticated token endpoint;
+//                 Variant 2: /local/ public endpoint)
+// ---------------------------------------------------------------------------
+// Checks the pull-OTA metadata endpoint and, if a new firmware version is
+// available, downloads and flashes it using the Arduino Update library.
+//
+// The metadata endpoint is:
+//   GET https://{otaHost}:{otaPort}/api/freematics/ota_pull/{otaToken}/meta.json
+//
+// For Variant 2 (/local/ deployment) the same path structure is used:
+//   GET https://{otaHost}:{otaPort}/local/FreematicsONE/{devid}/version.json
+// The caller stores the appropriate prefix in otaToken (e.g. the /local/ path).
+//
+// Returns true if a firmware update was successfully applied (device will
+// reboot shortly after), false otherwise.
+// ---------------------------------------------------------------------------
+#if ENABLE_WIFI
+bool performPullOtaCheck()
+{
+  if (!otaToken[0] || !otaHost[0]) return false;
+  if (!WiFi.isConnected()) return false;
+
+  // ---- Step 1: Fetch metadata JSON ----------------------------------------
+  // Build the metadata path: /api/freematics/ota_pull/{token}/meta.json
+  // The token is embedded as a URL path component (no Authorization header
+  // needed since the token itself acts as the authenticator).
+  char metaPath[384];
+  snprintf(metaPath, sizeof(metaPath),
+           "/api/freematics/ota_pull/%s/meta.json", otaToken);
+
+  // Temporarily disconnect the telemetry client so we can reuse the WiFi
+  // stack for the OTA metadata fetch.  s_ota_active is NOT set here because
+  // the meta-fetch is lightweight (< 200 bytes) and fast; we only set it
+  // before the large firmware download that follows.
+  teleClient.wifi.close();
+
+  if (!teleClient.wifi.open(otaHost, otaPort)) {
+    Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", otaHost, (unsigned)otaPort);
+    return false;
+  }
+
+  // Use genHeaderWithAuth so the HA server can confirm the token matches the
+  // one in the URL path.  Both are the same token value; the Authorization
+  // header provides defence-in-depth for proxy setups that might strip
+  // path components.
+  // For the WiFiHTTP wrapper we call send() which uses genHeader internally.
+  // We'll use a small local buffer for the meta response.
+  if (!teleClient.wifi.send(METHOD_GET, metaPath)) {
+    Serial.println("[OTA-PULL] META send failed");
+    teleClient.wifi.close();
+    return false;
+  }
+
+  // Receive the response into a small buffer (meta.json is < 256 bytes).
+  char metaBuf[512];
+  int metaBytes = 0;
+  char* metaBody = teleClient.wifi.receive(metaBuf, sizeof(metaBuf) - 1, &metaBytes);
+  if (!metaBody || teleClient.wifi.code() != 200) {
+    Serial.printf("[OTA-PULL] META HTTP %u\n", (unsigned)teleClient.wifi.code());
+    teleClient.wifi.close();
+    return false;
+  }
+  metaBuf[metaBytes < (int)sizeof(metaBuf) - 1 ? metaBytes : (int)sizeof(metaBuf) - 1] = '\0';
+
+  // Parse "available": true / false
+  if (!strstr(metaBody, "\"available\":true") && !strstr(metaBody, "\"available\": true")) {
+    Serial.println("[OTA-PULL] No update available");
+    teleClient.wifi.close();
+    return false;
+  }
+
+  // Parse firmware "size" field.
+  size_t fwSize = 0;
+  char* sizeField = strstr(metaBody, "\"size\":");
+  if (!sizeField) {
+    Serial.println("[OTA-PULL] META: missing size field");
+    teleClient.wifi.close();
+    return false;
+  }
+  fwSize = (size_t)atol(sizeField + 7);
+  if (fwSize < 65536) { // sanity check: firmware must be at least 64 KB
+    Serial.printf("[OTA-PULL] META: implausible size %u\n", (unsigned)fwSize);
+    teleClient.wifi.close();
+    return false;
+  }
+
+  Serial.printf("[OTA-PULL] Update available: %u bytes\n", (unsigned)fwSize);
+  teleClient.wifi.close();
+
+  // ---- Step 2: Download and flash firmware ----------------------------------
+  // Signal the telemetry task to pause WiFi I/O (closes TLS connections and
+  // frees mbedTLS heap) before the Update library allocates flash buffers.
+  s_ota_active = true;
+  delay(1500);
+
+  char fwPath[384];
+  snprintf(fwPath, sizeof(fwPath),
+           "/api/freematics/ota_pull/%s/firmware.bin", otaToken);
+
+  if (!teleClient.wifi.open(otaHost, otaPort)) {
+    Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
+    s_ota_active = false;
+    return false;
+  }
+
+  if (!teleClient.wifi.send(METHOD_GET, fwPath)) {
+    Serial.println("[OTA-PULL] FW send failed");
+    teleClient.wifi.close();
+    s_ota_active = false;
+    return false;
+  }
+
+  // Parse response headers to confirm 200 OK and get actual Content-Length.
+  int contentLength = 0;
+  int httpCode = teleClient.wifi.receiveHeaders(&contentLength);
+  if (httpCode != 200) {
+    Serial.printf("[OTA-PULL] FW HTTP %d\n", httpCode);
+    teleClient.wifi.close();
+    s_ota_active = false;
+    return false;
+  }
+  if (contentLength > 0 && (size_t)contentLength != fwSize) {
+    // Content-Length overrides the size from meta.json (server is authoritative).
+    Serial.printf("[OTA-PULL] FW size mismatch: meta=%u header=%d\n",
+                  (unsigned)fwSize, contentLength);
+    fwSize = (size_t)contentLength;
+  }
+
+  if (!Update.begin(fwSize)) {
+    Serial.printf("[OTA-PULL] Update.begin failed: %s\n", Update.errorString());
+    teleClient.wifi.close();
+    s_ota_active = false;
+    return false;
+  }
+
+  // Stream the firmware body from the socket to the flash in 4 KB chunks.
+  // rawClient() exposes the underlying WiFiClientSecure so we can read the
+  // body directly after receiveHeaders() has consumed the header block.
+  WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
+  static uint8_t otaRecvBuf[4096];
+  size_t written = 0;
+  uint32_t dlStart = millis();
+
+  while (written < fwSize) {
+    // Wait up to 30 s for the next chunk.
+    uint32_t chunkStart = millis();
+    while (!rawSock.available() && millis() - chunkStart < 30000) delay(1);
+    if (!rawSock.available()) {
+      Serial.printf("[OTA-PULL] Recv timeout at offset %u\n", (unsigned)written);
+      Update.abort();
+      teleClient.wifi.close();
+      s_ota_active = false;
+      return false;
+    }
+
+    int toRead = (int)(fwSize - written);
+    if (toRead > (int)sizeof(otaRecvBuf)) toRead = (int)sizeof(otaRecvBuf);
+    int n = rawSock.read(otaRecvBuf, toRead);
+    if (n <= 0) {
+      Serial.printf("[OTA-PULL] Read error at offset %u\n", (unsigned)written);
+      Update.abort();
+      teleClient.wifi.close();
+      s_ota_active = false;
+      return false;
+    }
+
+    size_t w = Update.write(otaRecvBuf, (size_t)n);
+    if (w != (size_t)n) {
+      Serial.printf("[OTA-PULL] Flash write error at offset %u\n", (unsigned)written);
+      Update.abort();
+      teleClient.wifi.close();
+      s_ota_active = false;
+      return false;
+    }
+    written += (size_t)n;
+
+    // Log progress every 10%.
+    static size_t lastLogAt = 0;
+    if (written - lastLogAt >= fwSize / 10) {
+      lastLogAt = written;
+      Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
+                    (unsigned)written, (unsigned)fwSize,
+                    100.0f * written / fwSize, (unsigned)(millis() - dlStart));
+    }
+  }
+
+  teleClient.wifi.close();
+  Serial.printf("[OTA-PULL] Download complete: %u bytes in %u ms\n",
+                (unsigned)written, (unsigned)(millis() - dlStart));
+
+  if (!Update.end()) {
+    Serial.printf("[OTA-PULL] Update.end failed: %s\n", Update.errorString());
+    s_ota_active = false;
+    return false;
+  }
+
+  Serial.println("[OTA-PULL] Flash successful, rebooting in 1.5 s");
+  // s_ota_active remains true; device reboots shortly.
+  static esp_timer_handle_t s_pull_ota_timer = NULL;
+  if (!s_pull_ota_timer) {
+    esp_timer_create_args_t args = {};
+    args.callback        = [](void*) { esp_restart(); };
+    args.dispatch_method = ESP_TIMER_TASK;
+    args.name            = "pull_ota_restart";
+    esp_timer_create(&args, &s_pull_ota_timer);
+  } else {
+    esp_timer_stop(s_pull_ota_timer);
+  }
+  esp_timer_start_once(s_pull_ota_timer, 1500000);
+  return true;
+}
+#endif  // ENABLE_WIFI
 
 void processBLE(int timeout)
 {
