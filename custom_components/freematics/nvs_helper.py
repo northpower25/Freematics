@@ -107,16 +107,35 @@ _PT_MAGIC = b"\xaa\x50"
 _PT_MD5_MAGIC = b"\xeb\xeb"
 _PT_ENTRY_SIZE = 32
 
-# huge_app partition layout (matches arduino-esp32 hardware/espressif/esp32/
-# tools/partitions/huge_app.csv):
-#   nvs      data/nvs      0x9000   0x5000
-#   otadata  data/ota      0xE000   0x2000
-#   app0     app/ota_0     0x10000  0x300000
-_HUGE_APP_PARTITIONS = [
+# Dual-OTA partition layout – required for WiFi OTA updates to work.
+#
+# Background: huge_app.csv (the previous layout) only had a single OTA app
+# partition (app0/ota_0).  When an OTA update is attempted, ESP-IDF calls
+# esp_ota_get_next_update_partition() which cycles through available OTA slots.
+# With only one slot it returns ota_0 – the currently running partition.
+# esp_ota_begin() then fails with ESP_ERR_OTA_PARTITION_CONFLICT (you cannot
+# write OTA to the partition you are executing from), and the Arduino Update
+# library responds by calling abort(), crashing the device mid-upload.
+#
+# This layout adds a second slot (app1/ota_1) so that:
+#   – First OTA writes to ota_1 while running from ota_0
+#   – Subsequent OTAs alternate between ota_0 and ota_1
+#
+# Layout (all offsets / sizes in hex):
+#   nvs      data/nvs      0x9000   0x5000   (20 KB  – NVS key/value store)
+#   otadata  data/ota      0xE000   0x2000   ( 8 KB  – OTA selection record)
+#   app0     app/ota_0     0x10000  0x1F0000 (~1.94 MB – initial slot)
+#   app1     app/ota_1     0x200000 0x1F0000 (~1.94 MB – first OTA target)
+#
+# Total used: 0x3F0000 ≈ 3.94 MB.  Both slots comfortably hold the current
+# firmware binary (~1.75 MB) and the layout fits on 4 MB flash devices while
+# leaving the upper portion of 16 MB devices free.
+_FREEMATICS_PARTITIONS = [
     # (name, type, subtype, offset, size)
-    ("nvs",     0x01, 0x02, 0x9000,  0x5000),
-    ("otadata", 0x01, 0x00, 0xE000,  0x2000),
-    ("app0",    0x00, 0x10, 0x10000, 0x300000),
+    ("nvs",     0x01, 0x02, 0x9000,   0x5000),
+    ("otadata", 0x01, 0x00, 0xE000,   0x2000),
+    ("app0",    0x00, 0x10, 0x10000,  0x1F0000),
+    ("app1",    0x00, 0x11, 0x200000, 0x1F0000),
 ]
 
 
@@ -134,13 +153,18 @@ def _make_partition_entry(
 
 
 def generate_partition_table() -> bytes:
-    """Return a 4 096-byte ESP32 partition-table binary for the huge_app scheme.
+    """Return a 4 096-byte ESP32 partition-table binary (dual-OTA layout).
 
-    The table contains an MD5 checksum entry (compatible with ESP-IDF v4.x+)
-    and is padded to PARTITION_TABLE_SIZE with 0xFF bytes.
+    The table contains two OTA app partitions (ota_0 at 0x10000 and ota_1 at
+    0x200000, each 1.94 MB) so that WiFi OTA updates work correctly: the
+    first OTA writes to ota_1 while the device runs from ota_0, avoiding the
+    ESP_ERR_OTA_PARTITION_CONFLICT abort that occurs with a single-slot layout.
+
+    Includes an MD5 checksum entry (compatible with ESP-IDF v4.x+) and is
+    padded to PARTITION_TABLE_SIZE with 0xFF bytes.
     """
     entries = b"".join(
-        _make_partition_entry(*p) for p in _HUGE_APP_PARTITIONS
+        _make_partition_entry(*p) for p in _FREEMATICS_PARTITIONS
     )
     md5_hash = hashlib.md5(entries).digest()
     md5_entry = _PT_MD5_MAGIC + b"\xff" * 14 + md5_hash
@@ -376,7 +400,7 @@ def generate_flash_image(nvs_data: bytes, firmware_path: Path, bootloader_path: 
     Memory layout of the returned image (all offsets relative to 0x1000):
       0x0000 – bootloader_size  Second-stage bootloader (DIO/40 MHz)
       [padding to 0x7000]       0xFF (reserved)
-      0x7000 – 0x7FFF : Partition table (huge_app scheme, 4 KB)
+      0x7000 – 0x7FFF : Partition table (dual-OTA scheme, 4 KB)
       0x8000 – 0xCFFF : NVS partition   (20 KB, your WiFi/server settings)
       0xD000 – 0xEFFF : 0xFF padding    (otadata region, written as erased)
       0xF000 – end    : Application firmware (telelogger.bin, flash mode

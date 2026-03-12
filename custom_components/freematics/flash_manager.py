@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .nvs_helper import generate_partition_table
+
 _LOGGER = logging.getLogger(__name__)
 
 FIRMWARE_PATH = Path(__file__).parent / "firmware" / "telelogger.bin"
@@ -38,6 +40,9 @@ _STANDBY_SETTLE_S = 4
 
 # Report upload progress this often (seconds).
 _PROGRESS_INTERVAL_S = 20
+
+# Partition table flash offset (ESP32 always reads the partition table here)
+_PARTITION_TABLE_OFFSET = "0x8000"
 
 # NVS partition flash offset (must match the partition table used by the firmware)
 _NVS_PARTITION_OFFSET = "0x9000"
@@ -76,18 +81,42 @@ async def async_flash_serial(
             "esptool not found. Install it with: pip install esptool\n"
             f"Then flash manually:\n"
             f"  esptool.py --chip esp32 --port {serial_port} --baud {baud} "
-            f"write_flash 0x10000 {FIRMWARE_PATH}"
+            f"write_flash "
+            f"{_PARTITION_TABLE_OFFSET} <partitions.bin> "
+            f"{_NVS_PARTITION_OFFSET} <nvs.bin> "
+            f"0x10000 {FIRMWARE_PATH}"
         )
 
-    # Build the write_flash argument list.  When NVS data is provided, write
-    # it at 0x9000 before the firmware at 0x10000 so both are applied in a
-    # single esptool invocation.
+    # Build the write_flash argument list.
+    # Always write the partition table binary at 0x8000 so that a previous
+    # huge_app.csv (single-OTA) layout is replaced with the dual-OTA layout
+    # required for WiFi OTA updates to work.  Without this, the device
+    # continues to boot with only one OTA partition (ota_0) and any OTA
+    # attempt crashes with abort() because esp_ota_begin() rejects writing
+    # to the currently running partition.
+    #
+    # Write order: partitions → nvs → firmware (low → high address)
     flash_args = [
         "--flash_mode", "dio",
         "--flash_size", "detect",
     ]
+
+    # Generate the dual-OTA partition table binary and write to a temp file.
+    # Using generate_partition_table() (the same function used by the browser
+    # flasher and esp-web-tools manifest) ensures all flash paths write an
+    # identical, MD5-validated partition table.
+    pt_data = generate_partition_table()
+    pt_tmp: Any = None
     nvs_tmp: Any = None  # Will be a NamedTemporaryFile when NVS data is given
     try:
+        pt_tmp = tempfile.NamedTemporaryFile(
+            suffix=".bin", delete=False, prefix="freematics_pt_"
+        )
+        pt_tmp.write(pt_data)
+        pt_tmp.flush()
+        pt_tmp.close()
+        flash_args += [_PARTITION_TABLE_OFFSET, pt_tmp.name]
+
         if nvs_data:
             # Write NVS to a temp file; esptool needs a path on disk.
             nvs_tmp = tempfile.NamedTemporaryFile(
@@ -130,12 +159,13 @@ async def async_flash_serial(
         except Exception as exc:  # noqa: BLE001
             return False, f"Flash failed: {exc}"
     finally:
-        # Clean up the temporary NVS file even if an exception occurred.
-        if nvs_tmp is not None:
-            try:
-                os.unlink(nvs_tmp.name)
-            except OSError:
-                pass
+        # Clean up the temporary partition table and NVS files.
+        for tmp in (pt_tmp, nvs_tmp):
+            if tmp is not None:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
 
 
 async def async_flash_wifi(
@@ -422,17 +452,27 @@ async def async_flash_wifi(
         msg = f"OTA flash failed after {elapsed:.1f} s: {exc}"
         _log("error", msg)
         # Provide an actionable hint when the device resets the connection.
-        # This typically happens because the device's telemetry task is still
-        # making SSL connections during the upload, exhausting the ESP32 heap.
+        # This can happen for two distinct reasons:
+        # 1. The partition table has only one OTA slot (ota_0 only, e.g. the
+        #    factory huge_app.csv layout).  esp_ota_begin() then fails with
+        #    ESP_ERR_OTA_PARTITION_CONFLICT and the Arduino Update library calls
+        #    abort(), crashing the device and resetting the TCP connection.
+        #    Fix: flash the latest firmware via serial — the serial flash now
+        #    writes the dual-OTA partition table (partitions.bin) at 0x8000,
+        #    giving the device both ota_0 and ota_1 slots.  OTA will then write
+        #    to ota_1 while running from ota_0.
+        # 2. The telemetry task is still holding SSL/TLS heap during the OTA
+        #    upload, exhausting available heap.  Fix: the latest firmware
+        #    supports cmd=OFF to pause telemetry before flashing (s_ota_active).
         if isinstance(exc, ConnectionResetError) or "[Errno 104]" in exc_str:
             _log(
                 "error",
                 "The device reset the TCP connection mid-upload. "
-                "This usually means the telemetry task was still running SSL "
-                "connections during the OTA, exhausting available heap memory. "
-                "To fix: flash the latest firmware via serial once — subsequent "
-                "OTA updates will then pause telemetry automatically (s_ota_active / "
-                "cmd=OFF support).",
+                "Most likely cause: the partition table only has one OTA slot "
+                "(ota_0), so esp_ota_begin() fails and the device crashes. "
+                "Fix: flash the latest firmware via serial — the serial flash "
+                "now writes a dual-OTA partition table (ota_0 + ota_1) at "
+                "0x8000 so subsequent WiFi OTA updates work correctly.",
             )
         return False, msg, log
 
