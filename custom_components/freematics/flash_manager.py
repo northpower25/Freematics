@@ -182,10 +182,18 @@ async def async_flash_wifi(
     endpoint at /api/ota that accepts a raw binary POST
     (Content-Type: application/octet-stream).
 
+    WiFi OTA preserves the NVS partition (unlike serial flash), so callers
+    should only pass led_red_en=False (or led_white_en/beep_en=False) when
+    the user has *explicitly disabled* the setting in the HA config.  Passing
+    True would overwrite a user's manually-disabled NVS key (e.g.
+    LED_RED_EN=0 set via /api/control) with the HA default.  When a parameter
+    is None no /api/control command is sent and the existing NVS value is
+    preserved intact across the OTA reboot.
+
     Args:
-        led_red_en: When provided, applies the LED_RED= setting via
-            /api/control before the OTA so the setting is persisted in NVS
-            and survives the reboot that follows the firmware flash.
+        led_red_en: When False, sends LED_RED=0 via /api/control before the
+            OTA so the red LED stays off after the firmware reboot.  Pass
+            None (default) to leave the existing NVS value untouched.
         led_white_en: Same as led_red_en but for the white/network LED.
         beep_en: Same as led_red_en but for the connection beep.
 
