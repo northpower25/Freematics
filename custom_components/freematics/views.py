@@ -56,6 +56,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     CONF_CELL_APN,
@@ -79,6 +80,7 @@ from .const import (
     CONF_WIFI_SSID,
     DEFAULT_DEVICE_PORT,
     DOMAIN,
+    FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
 )
 
@@ -1501,7 +1503,10 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     ota_port = 443
     if ota_token:
         try:
-            from homeassistant.helpers.network import get_url  # noqa: PLC0415
+            from homeassistant.helpers.network import (  # noqa: PLC0415
+                NoURLAvailableError,
+                get_url,
+            )
             _ota_base = get_url(hass, prefer_external=True)
             _ota_parsed = urlparse(_ota_base)
             ota_host = _ota_parsed.hostname or ""
@@ -1511,11 +1516,16 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                 ota_port = 443
             else:
                 ota_port = 80
-        except Exception:  # noqa: BLE001
+        except NoURLAvailableError:
             _LOGGER.warning(
                 "Freematics: cannot resolve HA external URL for pull-OTA; "
                 "OTA_HOST will not be provisioned in NVS.  Configure an external "
                 "URL or Nabu Casa cloud for pull-OTA to work."
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Freematics: unexpected error resolving HA external URL for pull-OTA; "
+                "OTA_HOST will not be provisioned in NVS."
             )
 
     return {
@@ -1792,7 +1802,7 @@ class FreematicsOtaTokenView(HomeAssistantView):
                     "Freematics: generated new pull-OTA token for entry %s",
                     entry.entry_id,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except (HomeAssistantError, ValueError) as exc:
                 _LOGGER.warning(
                     "Freematics: could not persist pull-OTA token: %s", exc
                 )
@@ -1889,7 +1899,7 @@ class FreematicsOtaPullView(HomeAssistantView):
             return web.Response(
                 body=json.dumps({
                     "available": True,
-                    "version": "5.0",
+                    "version": FIRMWARE_VERSION,
                     "size": fw_size,
                     "sha256": fw_sha256,
                     "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",

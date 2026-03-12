@@ -1619,6 +1619,20 @@ void loadConfig()
 // Returns true if a firmware update was successfully applied (device will
 // reboot shortly after), false otherwise.
 // ---------------------------------------------------------------------------
+
+// Minimum plausible firmware binary size in bytes.  Files smaller than this
+// are rejected to guard against a server returning a short error page instead
+// of the real firmware when the Content-Type or size is unexpected.
+#define PULL_OTA_MIN_FW_SIZE     65536U   // 64 KB
+
+// Size of the heap-allocated chunk buffer used when streaming the firmware
+// download to flash.  Larger chunks = fewer write calls but more heap usage.
+#define PULL_OTA_CHUNK_SIZE      4096U    // 4 KB
+
+// Per-chunk socket receive timeout (ms).  On a local WiFi network data arrives
+// in milliseconds; this generous timeout guards against brief pauses.
+#define PULL_OTA_CHUNK_TIMEOUT_MS 30000U  // 30 s
+
 #if ENABLE_WIFI
 bool performPullOtaCheck()
 {
@@ -1683,7 +1697,7 @@ bool performPullOtaCheck()
     return false;
   }
   fwSize = (size_t)atol(sizeField + 7);
-  if (fwSize < 65536) { // sanity check: firmware must be at least 64 KB
+  if (fwSize < PULL_OTA_MIN_FW_SIZE) { // sanity check: firmware must be at least 64 KB
     Serial.printf("[OTA-PULL] META: implausible size %u\n", (unsigned)fwSize);
     teleClient.wifi.close();
     return false;
@@ -1738,18 +1752,18 @@ bool performPullOtaCheck()
     return false;
   }
 
-  // Stream the firmware body from the socket to the flash in 4 KB chunks.
+  // Stream the firmware body from the socket to the flash in PULL_OTA_CHUNK_SIZE chunks.
   // rawClient() exposes the underlying WiFiClientSecure so we can read the
   // body directly after receiveHeaders() has consumed the header block.
   WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
-  static uint8_t otaRecvBuf[4096];
+  static uint8_t otaRecvBuf[PULL_OTA_CHUNK_SIZE];
   size_t written = 0;
   uint32_t dlStart = millis();
 
   while (written < fwSize) {
-    // Wait up to 30 s for the next chunk.
+    // Wait up to PULL_OTA_CHUNK_TIMEOUT_MS for the next chunk.
     uint32_t chunkStart = millis();
-    while (!rawSock.available() && millis() - chunkStart < 30000) delay(1);
+    while (!rawSock.available() && millis() - chunkStart < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
     if (!rawSock.available()) {
       Serial.printf("[OTA-PULL] Recv timeout at offset %u\n", (unsigned)written);
       Update.abort();
@@ -1759,7 +1773,7 @@ bool performPullOtaCheck()
     }
 
     int toRead = (int)(fwSize - written);
-    if (toRead > (int)sizeof(otaRecvBuf)) toRead = (int)sizeof(otaRecvBuf);
+    if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
     int n = rawSock.read(otaRecvBuf, toRead);
     if (n <= 0) {
       Serial.printf("[OTA-PULL] Read error at offset %u\n", (unsigned)written);

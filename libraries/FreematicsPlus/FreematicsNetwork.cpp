@@ -59,17 +59,17 @@ String HTTPClient::genHeaderWithAuth(HTTP_METHOD method, const char* path,
                                      const char* bearerToken)
 {
   // Build a standard header first, then splice in the Authorization line just
-  // before the final empty line.  genHeader() ends with "\r\n\r\n"; we strip
-  // the trailing CRLF, append the Authorization header, then re-add CRLF-CRLF.
+  // before the final empty line.  genHeader() ends with "\r\n\r\n".  Remove
+  // the terminal blank line (2 bytes), append the Authorization header, then
+  // re-add the blank line to close the header block.
   String header = genHeader(method, path, payload, payloadSize);
-  if (bearerToken && bearerToken[0]) {
-    // Remove the trailing "\r\n" (last 2 chars) added by genHeader().
-    if (header.endsWith("\r\n\r\n")) {
-      header.remove(header.length() - 2); // now ends with "\r\n"
-      header += "Authorization: Bearer ";
-      header += bearerToken;
-      header += "\r\n\r\n";
-    }
+  if (bearerToken && bearerToken[0] && header.endsWith("\r\n\r\n")) {
+    // Strip the trailing blank line (last 2 bytes of the 4-byte "\r\n\r\n"),
+    // leaving the header ending with a single CRLF after the last field.
+    header.remove(header.length() - 2);  // "\r\n\r\n" → "\r\n"
+    header += "Authorization: Bearer ";
+    header += bearerToken;
+    header += "\r\n\r\n";
   }
   return header;
 }

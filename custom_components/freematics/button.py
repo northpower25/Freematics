@@ -55,6 +55,10 @@ _LOGGER = logging.getLogger(__name__)
 # its webhook_id to avoid collisions when multiple devices are registered.
 _CLOUD_OTA_WWW_BASE = "FreematicsONE"
 
+# Filenames published into the /local/ directory for Variant 2 Cloud OTA.
+_CLOUD_OTA_FIRMWARE_FILENAME = "firmware.bin"
+_CLOUD_OTA_VERSION_FILENAME = "version.json"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -349,7 +353,7 @@ class PublishCloudOtaButton(_FreematicsButton):
                 fw_sha256 = hashlib.sha256(fw_data).hexdigest()
 
                 # Write firmware binary.
-                fw_dest = target_dir / "firmware.bin"
+                fw_dest = target_dir / _CLOUD_OTA_FIRMWARE_FILENAME
                 fw_dest.write_bytes(fw_data)
 
                 # Write version metadata.
@@ -359,9 +363,9 @@ class PublishCloudOtaButton(_FreematicsButton):
                     "size": fw_size,
                     "sha256": fw_sha256,
                     # Relative filename within the same /local/ directory.
-                    "filename": "firmware.bin",
+                    "filename": _CLOUD_OTA_FIRMWARE_FILENAME,
                 }
-                version_dest = target_dir / "version.json"
+                version_dest = target_dir / _CLOUD_OTA_VERSION_FILENAME
                 version_dest.write_text(
                     json.dumps(version_meta, indent=2), encoding="utf-8"
                 )
