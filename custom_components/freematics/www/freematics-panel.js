@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.22.0";
+const PANEL_VERSION = "1.23.0";
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper

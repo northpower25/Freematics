@@ -40,7 +40,7 @@
       },
       "advanced": {
         "title": "Freematics ONE+ – Operating Mode & OTA",
-        "description": "Choose how the device should operate after flashing. This controls which firmware features are enabled.\n\n**Telelogger** *(recommended for Home Assistant users)*: Pushes telemetry to the HA webhook. Keep HTTPD and BLE *disabled* to free ~104 KB of heap for the TLS connection — this prevents the `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error.\n\n**Datalogger**: Enables the built-in HTTP server (HTTPD) on port 80, exposing `/api/live`, `/api/info`, and related REST endpoints for local network access. Useful without Home Assistant or alongside a local dashboard.\n\n**BLE** is independent of both modes. Enable it only if you use the Freematics Controller App over Bluetooth.\n\n**Cellular debug logging**: Enable to print verbose cellular diagnostics (TX-Preview, hex-dump, AT+CCHSTATUS? and incoming-data notifications) to the serial console. Use only for troubleshooting; disable in normal operation.\n\n**LED settings**: The red/power LED lights up while the device is on or in standby. The white/network LED flashes briefly during each data transmission over WiFi or cellular. Both can be disabled independently to reduce light in the vehicle cabin.\n\n**Beep**: The buzzer emits a short beep each time a WiFi or cellular connection is established. Disable to suppress in-cabin noise.\n\n**Intervals**: leave at `0` to keep firmware defaults (~1000 ms / 120 s).\n\n---\n\n**Over-the-Air (OTA) firmware updates**\n\nTwo variants are available:\n\n- **Variant 1 – Pull-OTA**: The device automatically downloads and installs any firmware bundled with this integration as soon as the OTA check interval elapses. No manual step needed after initial provisioning — ideal for fully automatic updates.\n- **Variant 2 – Cloud OTA**: The device only downloads firmware after you explicitly press the **Publish Firmware for Cloud OTA** button on the device page. Gives you full control over when the device receives an update.\n\nBoth variants use the same authenticated HA endpoint (`/api/freematics/ota_pull/…`). A secret token is generated automatically and written to device NVS during flashing.\n\nSet **OTA Check Interval** to `0` to disable polling even when a variant is selected (useful for temporarily pausing OTA without changing the mode).",
+        "description": "Choose how the device should operate after flashing. This controls which firmware features are enabled.\n\n**Telelogger** *(recommended for Home Assistant users)*: Pushes telemetry to the HA webhook. Keep HTTPD and BLE *disabled* to free ~104 KB of heap for the TLS connection — this prevents the `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error.\n\n**Datalogger**: Enables the built-in HTTP server (HTTPD) on port 80, exposing `/api/live`, `/api/info`, and related REST endpoints for local network access. Useful without Home Assistant or alongside a local dashboard.\n\n**BLE** is independent of both modes. Enable it only if you use the Freematics Controller App over Bluetooth.\n\n**Cellular debug logging**: Enable to print verbose cellular diagnostics (TX-Preview, hex-dump, AT+CCHSTATUS? and incoming-data notifications) to the serial console. Use only for troubleshooting; disable in normal operation.\n\n**LED settings**: The red/power LED lights up while the device is on or in standby. The white/network LED flashes briefly during each data transmission over WiFi or cellular. Both can be disabled independently to reduce light in the vehicle cabin.\n\n**Beep**: The buzzer emits a short beep each time a WiFi or cellular connection is established. Disable to suppress in-cabin noise.\n\n**Intervals**: leave at `0` to keep firmware defaults (~1000 ms / 120 s).",
         "data": {
           "operating_mode": "Operating mode",
           "enable_ble": "Enable BLE (Bluetooth SPP server)",
@@ -52,14 +52,18 @@
           "sync_interval_s": "Server-sync interval (s, 0 = default 120)",
           "ota_mode": "OTA firmware update mode",
           "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)"
+        },
+        "data_description": {
+          "ota_mode": "**Disabled** – no OTA. **Variant 1 (Pull-OTA)** – device automatically downloads the latest bundled firmware on every interval. **Variant 2 (Cloud OTA)** – only downloads after you press **Publish Firmware for Cloud OTA**. Both variants use a secret token written to device NVS during flashing.",
+          "ota_check_interval_s": "How often the device checks for updates. Set to 0 to disable polling. The OTA token and interval are written to NVS during flashing — re-flash after changing these settings."
         }
       },
       "flash": {
         "title": "Freematics ONE+ – Flash Method",
-        "description": "Choose how to flash the firmware onto the device.\n\n**WiFi OTA** *(recommended)*: The device must be powered on and reachable on your network, or in AP mode (connect to WiFi network **{ap_ssid}** with password **{ap_password}**, then enter `192.168.4.1` as Device IP). Works regardless of where Home Assistant is hosted.\n\n**Serial USB (HA server)**: Runs `esptool` on the Home Assistant server. Only works if the Freematics ONE+ is connected via USB **directly to the HA server**.\n\n**Serial USB (your computer)**: If the device is connected to the computer where your browser is running, use the [Browser Flasher]({flasher_url}) instead. It uses the Web Serial API (Chrome/Edge 89+) and requires no installation.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.\n\nFor detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
+        "description": "Choose how to flash the firmware onto the device.\n\n**Browser Flasher** *(recommended)*: Uses the Web Serial API (Chrome/Edge 89+) and runs directly in your browser. The device must be connected via USB to the computer where your browser is running — not to the HA server. Open the [Browser Flasher]({flasher_url}) from the Freematics sidebar panel. All settings (WiFi, server, OTA token) are embedded automatically.\n\n**Serial USB (HA server)**: Runs `esptool` on the Home Assistant server. Only works if the Freematics ONE+ is connected via USB **directly to the HA server**. All settings including OTA token and interval are written to NVS automatically.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.\n\nFor detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
         "data": {
           "flash_method": "Flash method",
-          "device_ip": "Device IP address (for WiFi OTA)",
+          "device_ip": "Device IP address",
           "device_port": "Device HTTP port (default: 80)",
           "serial_port": "Serial port (e.g. /dev/ttyUSB0)"
         }
@@ -73,7 +77,7 @@
     "step": {
       "init": {
         "title": "Freematics ONE+ – Update Settings",
-        "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.\n\n**OTA firmware update mode**\n- **Disabled**: no automatic updates.\n- **Variant 1 – Pull-OTA**: device polls HA and downloads the latest firmware automatically on every check interval.\n- **Variant 2 – Cloud OTA**: device polls HA but only downloads after you press **Publish Firmware for Cloud OTA** on the device page.\n\nAfter changing the OTA mode or interval, re-provision the device (re-flash NVS) to apply the new settings.",
+        "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.\n\n⚠️ After changing OTA settings, re-provision the device (re-flash NVS via the Browser Flasher or Serial Flash button) so the new token and interval are written to the device.",
         "data": {
           "wifi_ssid": "WiFi SSID",
           "wifi_password": "WiFi Password",
@@ -94,6 +98,10 @@
           "device_port": "Device HTTP port",
           "flash_method": "Flash method",
           "serial_port": "Serial port"
+        },
+        "data_description": {
+          "ota_mode": "**Disabled** – no automatic updates. **Variant 1 (Pull-OTA)** – device polls HA and automatically downloads the latest firmware on every interval. **Variant 2 (Cloud OTA)** – device polls HA but only downloads after you press **Publish Firmware for Cloud OTA** on the device page.",
+          "ota_check_interval_s": "How often (seconds) the device checks for a new firmware version. Set to 0 to disable polling. Re-provision the device (re-flash) after changes to apply the new interval."
         }
       }
     }

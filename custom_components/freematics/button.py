@@ -19,6 +19,7 @@ from typing import Any
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -133,23 +134,19 @@ class FlashSerialButton(_FreematicsButton):
             serial_port,
         )
 
-        # Generate an NVS partition from the current config entry so that
-        # LED/beep/server settings are applied alongside the firmware flash.
-        # If NVS generation fails (e.g. esp_idf_nvs_partition_gen not installed),
-        # the flash proceeds with firmware-only (NVS settings must be applied
-        # separately via the browser flasher or /api/freematics/config_nvs.bin).
+        hass: HomeAssistant = self.hass  # type: ignore[attr-defined]
+
+        # Generate an NVS partition from the current config entry using the
+        # same full settings as the browser flasher (WiFi, APN, server, webhook,
+        # OTA token/host/interval, LED/beep, etc.).  This ensures the device has
+        # all necessary NVS keys — including OTA_TOKEN and OTA_INTERVAL — after
+        # a serial flash.
         nvs_data: bytes | None = None
         try:
             from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
-            cfg = {**self._entry.data, **self._entry.options}
-            nvs_data = generate_nvs_partition(
-                wifi_ssid=cfg.get(CONF_WIFI_SSID, ""),
-                wifi_password=cfg.get(CONF_WIFI_PASSWORD, ""),
-                led_red_en=bool(cfg.get(CONF_LED_RED_EN, True)),
-                led_white_en=bool(cfg.get(CONF_LED_WHITE_EN, True)),
-                beep_en=bool(cfg.get(CONF_BEEP_EN, True)),
-                enable_httpd=True,
-            )
+            from .views import _build_nvs_kwargs  # noqa: PLC0415
+            nvs_kwargs = await _build_nvs_kwargs(hass, self._entry)
+            nvs_data = generate_nvs_partition(**nvs_kwargs)
             if nvs_data:
                 _LOGGER.info("Freematics: NVS partition generated (%d bytes)", len(nvs_data))
             else:
@@ -168,6 +165,9 @@ class FlashSerialButton(_FreematicsButton):
         ok, msg = await async_flash_serial(serial_port, nvs_data=nvs_data)
         if ok:
             _LOGGER.info("Freematics serial flash: %s", msg)
+            # Update the debug sensor so the FW version and OTA last-flash
+            # timestamp are immediately visible in Home Assistant.
+            await self._record_serial_flash(hass)
         else:
             _LOGGER.error(
                 "Freematics serial flash failed: %s  |  "
@@ -175,6 +175,62 @@ class FlashSerialButton(_FreematicsButton):
                 "/api/freematics/flasher",
                 msg,
             )
+
+    async def _record_serial_flash(self, hass: HomeAssistant) -> None:
+        """Update diagnostic state and clean up published OTA files after a serial flash."""
+        from datetime import datetime, timezone  # noqa: PLC0415
+        import re  # noqa: PLC0415
+
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        webhook_id = self._webhook_id
+
+        # Update the in-memory diag dict so the debug sensor reflects the flash.
+        entry_data = hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        diag = entry_data.get("diag")
+        if diag is not None:
+            diag["fw_version"] = FIRMWARE_VERSION
+            diag["ota_last_success"] = now_iso
+            diag["ota_last_version"] = FIRMWARE_VERSION
+            diag["ota_last_error"] = None
+            async_dispatcher_send(
+                hass,
+                f"{DOMAIN}_{webhook_id}_debug",
+                {
+                    "fw_version": FIRMWARE_VERSION,
+                    "ota_last_success": now_iso,
+                    "ota_last_version": FIRMWARE_VERSION,
+                    "ota_last_error": "No error",
+                },
+            )
+
+        # Mark any published Cloud OTA firmware as no longer available so the
+        # device (which now has the latest firmware) does not re-download it on
+        # the next OTA check interval.
+        device_id = re.sub(r"[^A-Za-z0-9_-]", "", webhook_id[:8])
+        if device_id:
+            version_json = (
+                Path(hass.config.config_dir)
+                / "www"
+                / _CLOUD_OTA_WWW_BASE
+                / device_id
+                / _CLOUD_OTA_VERSION_FILENAME
+            )
+
+            def _mark_not_available() -> None:
+                if not version_json.exists():
+                    return
+                try:
+                    import json  # noqa: PLC0415
+                    data = json.loads(version_json.read_text(encoding="utf-8"))
+                    data["available"] = False
+                    data["flashed_via_serial_at"] = now_iso
+                    version_json.write_text(
+                        json.dumps(data, indent=2), encoding="utf-8"
+                    )
+                except OSError:
+                    pass
+
+            await hass.async_add_executor_job(_mark_not_available)
 
 
 class SendConfigButton(_FreematicsButton):

@@ -285,16 +285,16 @@ views:
       - type: entities
         title: Freematics ONE+ – Geräteaktionen
         entities:
-          - entity: button.freematics_one_flash_firmware_via_wifi_ota
-            name: Firmware via WiFi OTA flashen
-            icon: mdi:wifi-arrow-up-down
-          - entity: button.freematics_one_flash_firmware_via_serial
+          - entity: button.freematics_one_WEBHOOK_ID_SHORT_flash_firmware_via_serial
             name: Firmware via Serial USB flashen
             icon: mdi:usb-flash-drive
-          - entity: button.freematics_one_send_config_to_device
+          - entity: button.freematics_one_WEBHOOK_ID_SHORT_publish_firmware_for_cloud_ota
+            name: Firmware für Cloud OTA veröffentlichen
+            icon: mdi:cloud-upload
+          - entity: button.freematics_one_WEBHOOK_ID_SHORT_send_config_to_device
             name: Konfiguration senden
             icon: mdi:cog-transfer
-          - entity: button.freematics_one_restart_device
+          - entity: button.freematics_one_WEBHOOK_ID_SHORT_restart_device
             name: Gerät neu starten
             icon: mdi:restart
 
@@ -312,20 +312,20 @@ views:
           | SERVER_PORT | 443 |
           | HA_WEBHOOK_ID | Integrationen → Freematics ONE+ |
 
-          ## Via WiFi OTA flashen (AP-Modus)
-          1. Freematics ONE+ einschalten (Werksgerät oder frisch geflashtes Gerät)
-          2. Mit dem WLAN-Netzwerk **TELELOGGER** verbinden (Passwort: **PASSWORD**)
-          3. Die **Geräte-IP** `192.168.4.1` in den Integrationseinstellungen eintragen
-          4. **Firmware via WiFi OTA flashen** drücken
+          ## Via Browser-Flasher flashen (empfohlen)
+          1. Freematics ONE+ über USB mit **Ihrem Computer** (Browser) verbinden
+          2. Im Freematics-Dashboard auf **⚡ Flash Firmware** klicken
+          3. **Connect & Flash Firmware** drücken – WiFi, APN und Servereinstellungen werden automatisch eingebettet
 
-          ## Via Serial USB flashen
-          1. Freematics ONE+ über USB mit dem HA-Host verbinden
+          ## Via Serial USB flashen (HA-Server)
+          1. Freematics ONE+ über USB mit dem **HA-Server** verbinden
           2. **Seriellen Port** in den Integrationseinstellungen einstellen (z. B. `/dev/ttyUSB0`)
           3. **Firmware via Serial USB flashen** drücken
 
-          ## Konfiguration an laufendes Gerät senden
-          1. Sicherstellen, dass das Gerät mit aktiviertem HTTPD läuft
-          2. Aktuelle Geräte-IP in den Integrationseinstellungen eintragen
-          3. **Konfiguration senden** drücken
+          ## Over-the-Air (OTA) Firmware-Update
+          1. OTA-Prüfintervall in den Einstellungen aktivieren (z. B. 3600 Sekunden)
+          2. Gerät neu provisionieren (flashen) damit OTA-Token und Intervall ins NVS geschrieben werden
+          3. **Firmware für Cloud OTA veröffentlichen** drücken
+          4. Das Gerät lädt die Firmware beim nächsten Prüfintervall automatisch herunter und flasht sie
 
           Weitere Informationen: [Dokumentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md).
