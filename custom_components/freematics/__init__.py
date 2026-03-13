@@ -25,8 +25,10 @@ Sidebar panel:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,20 +41,26 @@ from homeassistant.components.webhook import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .const import (
     CONF_CONNECTION_TYPE,
+    CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
     CONF_ENABLE_BLE,
     CONF_OPERATING_MODE,
+    CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_MODE,
+    CONF_OTA_TOKEN,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEBUG_HISTORY_SIZE,
     DEFAULT_DEVICE_PORT,
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
+    OTA_MODE_DISABLED,
     SENSOR_DEFINITIONS,
 )
 from .views import (
@@ -298,6 +306,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Port 80 is the firmware default; CONF_DEVICE_PORT overrides it.
     _httpd_port: int = int(_cfg.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT))
     _ble_enabled: bool = bool(_cfg.get(CONF_ENABLE_BLE, False))
+    # OTA configuration (for displaying in the debug entity so users can
+    # quickly verify that OTA is provisioned correctly in the config entry).
+    _ota_mode: str = _cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
+    _ota_token_set: bool = bool(_cfg.get(CONF_OTA_TOKEN, ""))
+    _ota_interval_s: int = int(_cfg.get(CONF_OTA_CHECK_INTERVAL_S, 0))
+    # Device IP for querying /api/info (SD card info).  May be empty.
+    _device_ip: str = _cfg.get(CONF_DEVICE_IP, "")
     # Datalogger mode: HTTPD is the primary API; telelogger mode: HTTPD is still
     # running (for OTA and /api/control) but not the primary data path.
     _operating_mode = _cfg.get(CONF_OPERATING_MODE)
@@ -327,6 +342,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "obd_errors": 0,
         "last_obd_connection": None,
         "obd_services_seen": set(),
+        # SD card – updated by periodic /api/info query when CONF_DEVICE_IP is set
+        "sd_present": None,
+        "sd_storage": None,
+        "_last_info_query_t": 0.0,  # monotonic timestamp of last /api/info fetch
         # OTA pull – updated by FreematicsOtaPullView when an OTA event occurs
         "ota_last_success": None,
         "ota_last_error": None,
@@ -399,6 +418,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     _build_debug_payload(
                         conn_label, conn_mode, diag, raw_history, error_log, now_iso,
                         _httpd_port, _ble_enabled,
+                        _ota_mode, _ota_token_set, _ota_interval_s,
                     ),
                 )
             return
@@ -436,6 +456,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             diag["last_obd_connection"] = now_iso
             diag["obd_services_seen"].update(obd_keys_present)
 
+        # Rate-limited device info refresh (SD card stats) via /api/info.
+        # Only runs when CONF_DEVICE_IP is configured in the integration.
+        # Uses a 60-second cooldown so every webhook does not trigger an
+        # extra outbound HTTP request to the device.
+        _now_t = time.monotonic()
+        if _device_ip and (_now_t - diag["_last_info_query_t"]) >= 60:
+            diag["_last_info_query_t"] = _now_t
+            hass.async_create_task(_refresh_device_info())
+
         async_dispatcher_send(hass, f"{DOMAIN}_{webhook_id}", data)
 
         # Notify the debug sensor of the current diagnostic state.
@@ -445,8 +474,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _build_debug_payload(
                 conn_label, conn_mode, diag, raw_history, error_log, now_iso,
                 _httpd_port, _ble_enabled,
+                _ota_mode, _ota_token_set, _ota_interval_s,
             ),
         )
+
+    async def _refresh_device_info() -> None:
+        """Query the device's /api/info HTTP endpoint for SD card stats.
+
+        Called at most once per 60 s (rate-limited via diag["_last_info_query_t"])
+        when CONF_DEVICE_IP is configured.  Failures are logged at DEBUG level so
+        they never disrupt normal telemetry processing.
+        """
+        url = f"http://{_device_ip}:{_httpd_port}/api/info"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        info = await resp.json(content_type=None)
+                        _sd = info.get("sd") or {}
+                        total_b = int(_sd.get("total", 0))
+                        used_b = int(_sd.get("used", 0))
+                        if total_b > 0:
+                            total_mb = total_b >> 20  # bytes → MiB
+                            used_mb = used_b >> 20
+                            diag["sd_present"] = "Ja"
+                            diag["sd_storage"] = (
+                                f"{total_mb} MB total, {used_mb} MB verwendet"
+                            )
+                        else:
+                            diag["sd_present"] = "Nein"
+                            diag["sd_storage"] = "0 MB"
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Freematics /api/info query to %s failed: %s", url, exc)
 
     async_register(
         hass,
@@ -471,6 +531,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "initial_debug": _build_debug_payload(
             conn_label, conn_mode, diag, raw_history, error_log, "",
             _httpd_port, _ble_enabled,
+            _ota_mode, _ota_token_set, _ota_interval_s,
         ),
     }
 
@@ -487,11 +548,27 @@ def _build_debug_payload(
     now_iso: str,
     httpd_port: int = 80,
     ble_enabled: bool = False,
+    ota_mode: str = OTA_MODE_DISABLED,
+    ota_token_set: bool = False,
+    ota_interval_s: int = 0,
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
     _JA = "Ja"
     _NEIN = "Nein"
+
+    # SD card presence/storage – populated by _refresh_device_info() when
+    # CONF_DEVICE_IP is configured; stays "Unbekannt" otherwise.
+    _sd_present = diag.get("sd_present") or _UNK
+    _sd_storage = diag.get("sd_storage") or _UNK
+
+    # OTA mode label for display
+    _ota_mode_labels = {
+        "pull": "Variant 1 (Pull-OTA)",
+        "cloud": "Variant 2 (Cloud-OTA)",
+        "disabled": "Deaktiviert",
+    }
+    _ota_mode_label = _ota_mode_labels.get(ota_mode, ota_mode or "Deaktiviert")
 
     return {
         "connection_type": conn_label,
@@ -514,10 +591,10 @@ def _build_debug_payload(
         "obd_errors": diag["obd_errors"],
         "last_obd_connection": diag["last_obd_connection"] or _UNK,
         # SD card – "configured" is always Ja (SD logging is compiled in).
-        # Presence and storage capacity can only be determined from device runtime data.
+        # Presence/storage populated by /api/info query when CONF_DEVICE_IP is set.
         "sd_configured": _JA,
-        "sd_present": _UNK,
-        "sd_storage": _UNK,
+        "sd_present": _sd_present,
+        "sd_storage": _sd_storage,
         # HTTPD – always enabled in NVS (the firmware starts the HTTP server on every boot).
         "httpd_configured": _JA,
         "httpd_active": _JA,
@@ -528,7 +605,13 @@ def _build_debug_payload(
         "ble_active": _JA if ble_enabled else _NEIN,
         # FW version – initialised to the bundled version; updated after OTA.
         "fw_version": diag.get("fw_version") or _UNK,
-        # OTA pull update status
+        # OTA configuration (from HA config entry – reflects what was provisioned
+        # into device NVS at last flash).  Shows the user immediately whether OTA
+        # is set up correctly without needing to check the serial console.
+        "ota_mode": _ota_mode_label,
+        "ota_token_set": _JA if ota_token_set else _NEIN,
+        "ota_interval_s": ota_interval_s if ota_interval_s > 0 else _UNK,
+        # OTA pull runtime status (updated by FreematicsOtaPullView on OTA events)
         "ota_last_success": diag.get("ota_last_success") or _UNK,
         "ota_last_error": diag.get("ota_last_error") or _UNK,
         "ota_last_version": diag.get("ota_last_version") or _UNK,
