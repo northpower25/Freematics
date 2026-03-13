@@ -47,9 +47,11 @@ async def async_setup_entry(
 
     # Debug sensor – shows connection type as state; raw webhook history and
     # error log as attributes.
+    initial_debug = entry_data.get("initial_debug", {})
     debug_sensor = FreematicsDebugSensor(
         webhook_id=webhook_id,
         initial_connection_type=conn_label,
+        initial_debug=initial_debug,
     )
     initial_entities.append(debug_sensor)
 
@@ -188,7 +190,12 @@ class FreematicsDebugSensor(SensorEntity):
 
     _UNK = "Unbekannt"
 
-    def __init__(self, webhook_id: str, initial_connection_type: str) -> None:
+    def __init__(
+        self,
+        webhook_id: str,
+        initial_connection_type: str,
+        initial_debug: dict | None = None,
+    ) -> None:
         """Initialise the debug sensor."""
         device_slug = webhook_id[:8]
         self._webhook_id = webhook_id
@@ -238,6 +245,13 @@ class FreematicsDebugSensor(SensorEntity):
             "raw_data": [],
             "errors": [],
         }
+
+        # Apply known-at-setup values so the sensor is informative even before
+        # the first webhook arrives (e.g. FW version, connection mode, HTTPD/BLE).
+        if initial_debug:
+            for key in self._debug:
+                if key in initial_debug:
+                    self._debug[key] = initial_debug[key]
 
     @property
     def extra_state_attributes(self) -> dict:

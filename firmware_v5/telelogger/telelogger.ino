@@ -179,6 +179,7 @@ volatile bool s_ota_active = false;
 // detected and removed at startup without attempting a corrupt flash.
 #define OTA_PENDING_PATH "/ota_fw.bin"    // staged firmware binary
 #define OTA_META_PATH    "/ota_meta.txt"  // companion: expected byte count (decimal)
+#define OTA_NVS_PATH     "/ota_nvs.bin"   // staged NVS settings binary (optional)
 
 // Set by performPullOtaCheck() when a firmware has been fully downloaded to SD.
 // Cleared by performPullOtaFlash() on success or unrecoverable error.
@@ -723,12 +724,14 @@ void initialize()
       } else {
         SD.remove(OTA_PENDING_PATH);
         SD.remove(OTA_META_PATH);
+        SD.remove(OTA_NVS_PATH);
         Serial.println("[OTA-PULL] Stale/incomplete SD staging files removed");
         if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL STALE_REMOVED");
       }
     } else if (SD.exists(OTA_PENDING_PATH)) {
       // Firmware file without companion meta — can't verify, remove it.
       SD.remove(OTA_PENDING_PATH);
+      SD.remove(OTA_NVS_PATH);
     }
   }
 #endif
@@ -1735,6 +1738,111 @@ void loadConfig()
 
 #if STORAGE == STORAGE_SD && ENABLE_WIFI
 // ---------------------------------------------------------------------------
+// _applyNvsFromSD()
+//
+// Writes a staged NVS partition image (/ota_nvs.bin) directly to the NVS
+// flash partition so that updated settings (WiFi credentials, LED behaviour,
+// BLE, data interval, etc.) take effect on the next boot without requiring a
+// serial re-flash.
+//
+// Called by performPullOtaFlash() AFTER a successful firmware flash, just
+// before the reboot timer fires.  If the NVS staging file does not exist the
+// function returns true immediately (NVS update is optional).
+//
+// On any error the staging file is removed and false is returned; the caller
+// logs the outcome and continues with the reboot (firmware was already
+// flashed successfully, so only the settings update failed).
+// ---------------------------------------------------------------------------
+static bool _applyNvsFromSD()
+{
+  if (!SD.exists(OTA_NVS_PATH)) {
+    return true; // no NVS update staged; not an error
+  }
+
+  File nvsFile = SD.open(OTA_NVS_PATH, FILE_READ);
+  if (!nvsFile) {
+    Serial.println("[OTA-PULL] Cannot open NVS staging file");
+    SD.remove(OTA_NVS_PATH);
+    return false;
+  }
+  size_t nvsSize = nvsFile.size();
+  nvsFile.close();
+
+  // Sanity check: the NVS image must be at least 4 KB and at most the full
+  // partition size (20 KB).  Anything outside that range is corrupt.
+  if (nvsSize < 4096 || nvsSize > 0x5000) {
+    Serial.printf("[OTA-PULL] NVS staging file has invalid size: %u — skipping\n",
+                  (unsigned)nvsSize);
+    SD.remove(OTA_NVS_PATH);
+    return false;
+  }
+
+  const esp_partition_t* nvsPart = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "nvs");
+  if (!nvsPart) {
+    Serial.println("[OTA-PULL] NVS partition not found in partition table");
+    SD.remove(OTA_NVS_PATH);
+    return false;
+  }
+
+  // Deinit the NVS library before touching the underlying flash so no
+  // in-memory pages are written back after we erase the partition.
+  nvs_flash_deinit();
+
+  esp_err_t err = esp_partition_erase_range(nvsPart, 0, nvsPart->size);
+  if (err != ESP_OK) {
+    Serial.printf("[OTA-PULL] NVS partition erase failed: %d\n", (int)err);
+    SD.remove(OTA_NVS_PATH);
+    return false;
+  }
+
+  // Write the NVS image in PULL_OTA_CHUNK_SIZE (4 KB) chunks.
+  nvsFile = SD.open(OTA_NVS_PATH, FILE_READ);
+  if (!nvsFile) {
+    Serial.println("[OTA-PULL] Cannot re-open NVS staging file after erase");
+    SD.remove(OTA_NVS_PATH);
+    return false;
+  }
+  size_t written = 0;
+  bool writeOk = true;
+  while (written < nvsSize) {
+    int toRead = (int)(nvsSize - written);
+    if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+    int n = nvsFile.read(s_otaChunkBuf, toRead);
+    if (n <= 0) {
+      Serial.printf("[OTA-PULL] NVS SD read error at offset %u\n", (unsigned)written);
+      writeOk = false;
+      break;
+    }
+    // esp_partition_write() requires 4-byte aligned size; pad to multiple of 4.
+    size_t aligned = ((size_t)n + 3) & ~3UL;
+    if (aligned > (size_t)n) {
+      memset(s_otaChunkBuf + n, 0xFF, aligned - (size_t)n);
+    }
+    err = esp_partition_write(nvsPart, written, s_otaChunkBuf, aligned);
+    if (err != ESP_OK) {
+      Serial.printf("[OTA-PULL] NVS partition write failed at offset %u: %d\n",
+                    (unsigned)written, (int)err);
+      writeOk = false;
+      break;
+    }
+    written += (size_t)n;
+  }
+  nvsFile.close();
+  SD.remove(OTA_NVS_PATH);
+
+  if (!writeOk) {
+    return false;
+  }
+
+  Serial.printf("[OTA-PULL] NVS settings applied: %u bytes written\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+  if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL NVS OK");
+#endif
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // performPullOtaFlash()
 //
 // Reads the firmware binary staged on the SD card (/ota_fw.bin) and writes
@@ -1867,12 +1975,26 @@ static bool performPullOtaFlash()
     return false;
   }
 
-  // --- Flash successful: clean up SD, log, schedule reboot -----------------
+  // --- Flash successful: clean up SD, log, apply NVS settings if staged -----
   SD.remove(OTA_PENDING_PATH);
   SD.remove(OTA_META_PATH);
 
-  Serial.printf("[OTA-PULL] Flash from SD successful: %u bytes in %u ms — rebooting in 1.5 s\n",
+  Serial.printf("[OTA-PULL] Flash from SD successful: %u bytes in %u ms\n",
                 (unsigned)written, (unsigned)(millis() - t0));
+
+  // Apply NVS settings update if staged.  This is done AFTER a successful
+  // firmware flash so a settings-write failure never prevents the firmware
+  // update.  On failure the device still reboots into the new firmware
+  // (with old NVS settings); the settings will be retried on the next OTA
+  // check interval (the HA side keeps settings_version bumped until NVS
+  // is confirmed applied via the ota_pull_state.json write on firmware.bin
+  // download).
+  if (_applyNvsFromSD()) {
+    Serial.println("[OTA-PULL] Settings (NVS) updated successfully");
+  } else {
+    Serial.println("[OTA-PULL] Settings (NVS) update failed or not staged — rebooting with old NVS");
+  }
+
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
     char diag[64];
@@ -1972,8 +2094,9 @@ bool performPullOtaCheck()
     return false;
   }
 
-  // Receive the response into a small buffer (meta.json is < 256 bytes).
-  char metaBuf[512];
+  // Receive the response into a buffer large enough for the full meta.json
+  // (which now includes nvs_url and the extended effective_version string).
+  char metaBuf[768];
   int metaBytes = 0;
   char* metaBody = teleClient.wifi.receive(metaBuf, sizeof(metaBuf) - 1, &metaBytes);
   if (!metaBody || teleClient.wifi.code() != 200) {
@@ -2026,6 +2149,26 @@ bool performPullOtaCheck()
     logger.logEvent(_ota_diag);
   }
 #endif
+
+  // Parse optional nvs_url field: present when the HA side has NVS settings
+  // to push alongside the firmware update.  The path is extracted from the
+  // JSON string value (simple strstr + quote scan — no JSON library needed).
+  char nvsPath[256] = "";
+  {
+    char* nvsField = strstr(metaBody, "\"nvs_url\":");
+    if (nvsField) {
+      char* start = strchr(nvsField + 10, '"');
+      if (start) {
+        start++;
+        char* end = strchr(start, '"');
+        if (end && (size_t)(end - start) < sizeof(nvsPath) - 1) {
+          memcpy(nvsPath, start, end - start);
+          nvsPath[end - start] = '\0';
+        }
+      }
+    }
+  }
+
   teleClient.wifi.close();
 
   // ---- Step 2: Download firmware ------------------------------------------
@@ -2167,6 +2310,59 @@ bool performPullOtaCheck()
         snprintf(metaBufOut, sizeof(metaBufOut), "%u\n", (unsigned)fwSize);
         metaFile.print(metaBufOut);
         metaFile.close();
+      }
+    }
+
+    // ---- Step 3 (optional): Download NVS settings binary -------------------
+    // Present only when the meta.json response included a "nvs_url" field,
+    // which means HA-side settings (WiFi, LED, BLE, etc.) have changed since
+    // the last flash.  The NVS binary is staged to OTA_NVS_PATH and applied
+    // by performPullOtaFlash() after the firmware is written to flash.
+    // Failure here is non-fatal: the firmware update proceeds, but the device
+    // boots with its existing NVS settings.
+    SD.remove(OTA_NVS_PATH); // clean up any stale file from a previous attempt
+    if (nvsPath[0]) {
+      Serial.printf("[OTA-PULL] Downloading NVS settings from %s\n", nvsPath);
+      if (teleClient.wifi.open(otaHost, otaPort) &&
+          teleClient.wifi.send(METHOD_GET, nvsPath)) {
+        int nvsContentLen = 0;
+        int nvsHttpCode = teleClient.wifi.receiveHeaders(&nvsContentLen);
+        if (nvsHttpCode == 200 && nvsContentLen > 0) {
+          File nvsFile = SD.open(OTA_NVS_PATH, FILE_WRITE);
+          if (nvsFile) {
+            WiFiClientSecure& rawSock2 = teleClient.wifi.rawClient();
+            size_t nvsWritten = 0;
+            size_t nvsExpected = (size_t)nvsContentLen;
+            bool nvsOk = true;
+            while (nvsWritten < nvsExpected) {
+              uint32_t t1 = millis();
+              while (!rawSock2.available() && millis() - t1 < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
+              if (!rawSock2.available()) { nvsOk = false; break; }
+              int toRead = (int)(nvsExpected - nvsWritten);
+              if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+              int nr = rawSock2.read(s_otaChunkBuf, toRead);
+              if (nr <= 0) { nvsOk = false; break; }
+              if ((size_t)nvsFile.write(s_otaChunkBuf, (size_t)nr) != (size_t)nr) { nvsOk = false; break; }
+              nvsWritten += (size_t)nr;
+            }
+            nvsFile.close();
+            if (nvsOk && nvsWritten == nvsExpected) {
+              Serial.printf("[OTA-PULL] NVS staged: %u bytes\n", (unsigned)nvsWritten);
+#if STORAGE != STORAGE_NONE
+              if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL NVS DL OK");
+#endif
+            } else {
+              Serial.println("[OTA-PULL] NVS download incomplete — skipping settings update");
+              SD.remove(OTA_NVS_PATH);
+            }
+          }
+        } else {
+          Serial.printf("[OTA-PULL] NVS HTTP %d — skipping settings update\n", nvsHttpCode);
+        }
+        teleClient.wifi.close();
+      } else {
+        Serial.println("[OTA-PULL] NVS connect/send failed — skipping settings update");
+        teleClient.wifi.close();
       }
     }
 

@@ -33,7 +33,7 @@ CONF_SERIAL_PORT = "serial_port"
 DEFAULT_SERIAL_BAUD = 921600
 
 # Firmware version
-FIRMWARE_VERSION = "5.0"
+FIRMWARE_VERSION = "5.1"
 
 # Signal that carries incoming webhook data
 SIGNAL_DATA_RECEIVED = f"{DOMAIN}_data_received"
@@ -162,6 +162,13 @@ PID_MAP: dict[str, _PidMapping] = {
     "10F": ("intake_temp",        1.0),   # PID_INTAKE_TEMP (°C)
     "111": ("throttle",           1.0),   # PID_THROTTLE (%)
 }
+
+# Settings version: UTC ISO 8601 timestamp of the last config/options save that
+# changed NVS-relevant settings.  Combined with FIRMWARE_VERSION to form the
+# "effective OTA version" used by PULL-OTA so the device re-downloads and
+# re-applies NVS settings whenever the user updates WiFi, LED, BLE, etc.
+# Format example: "2026-03-13T14:23:34+00:00"
+CONF_SETTINGS_VERSION = "settings_version"
 
 # OTA pull update configuration
 # CONF_OTA_TOKEN: long-lived secret token stored in entry.data/options.  Embedded
