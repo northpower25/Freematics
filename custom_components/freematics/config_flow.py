@@ -405,8 +405,15 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                 or self._config_entry.data.get(CONF_OTA_TOKEN, "")
             )
             user_input = dict(user_input)
-            if ota_mode != OTA_MODE_DISABLED and not current_token:
-                user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
+            if ota_mode != OTA_MODE_DISABLED:
+                if current_token:
+                    # Preserve the existing token – the options form does not
+                    # have a token field, so user_input never carries it.
+                    # Without this the token is silently dropped from
+                    # entry.options on every save, breaking pull-OTA.
+                    user_input[CONF_OTA_TOKEN] = current_token
+                else:
+                    user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
 
             # Bump settings_version only when NVS-relevant settings actually
             # changed so the device is not triggered to re-flash on every save.

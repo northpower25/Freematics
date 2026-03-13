@@ -732,6 +732,9 @@ void initialize()
       // Firmware file without companion meta — can't verify, remove it.
       SD.remove(OTA_PENDING_PATH);
       SD.remove(OTA_NVS_PATH);
+    } else {
+      // Normal case: no OTA firmware staged on SD.
+      Serial.println("[OTA] SD:none");
     }
   }
 #endif
@@ -2833,6 +2836,22 @@ if (!state.check(STATE_MEMS_READY)) do {
   if (enableBle) {
     // init BLE
     ble_init("FreematicsPlus");
+  }
+#endif
+
+#if ENABLE_WIFI
+  // Print pull-OTA configuration so users can verify NVS provisioning via the
+  // serial console.  This makes silent failures immediately obvious:
+  // "OTA:disabled" means OTA_TOKEN was not written to NVS (re-flash with the
+  // HA serial-flash button to provision it).  INTERVAL=0 means the check is
+  // disabled even though a token exists.
+  if (otaToken[0]) {
+    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us\n",
+                  otaHost[0] ? otaHost : "(server fallback)",
+                  (unsigned)otaPort,
+                  (unsigned)otaCheckIntervalS);
+  } else {
+    Serial.println("OTA:disabled");
   }
 #endif
 
