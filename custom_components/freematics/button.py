@@ -235,7 +235,7 @@ class FlashSerialButton(_FreematicsButton):
 
 
 class SendConfigButton(_FreematicsButton):
-    """Button that pushes WiFi / APN settings to a running device."""
+    """Button that pushes WiFi / APN / OTA / LED / beep settings to a running device."""
 
     _attr_name = "Send Config to Device"
     _attr_icon = "mdi:cog-transfer"
@@ -262,10 +262,11 @@ class SendConfigButton(_FreematicsButton):
             cfg["wifi_password"] = self._cfg(CONF_WIFI_PASSWORD)
         if self._cfg(CONF_CELL_APN):
             cfg["cell_apn"] = self._cfg(CONF_CELL_APN)
-
-        if not cfg:
-            _LOGGER.warning("Freematics: no config values to send.")
-            return
+        # Push LED / beep settings so they take effect immediately on the
+        # running device, without waiting for a full OTA flash cycle.
+        cfg["led_white"] = bool(self._cfg(CONF_LED_WHITE_EN, True))
+        cfg["led_red"]   = bool(self._cfg(CONF_LED_RED_EN, True))
+        cfg["beep"]      = bool(self._cfg(CONF_BEEP_EN, True))
 
         _LOGGER.info("Freematics: sending config to %s:%s", device_ip, device_port)
         ok, results = await async_send_config(device_ip, device_port, cfg)
@@ -458,5 +459,90 @@ class PublishCloudOtaButton(_FreematicsButton):
                     ota_token[:8],
                     ota_interval,
                 )
+
+            # If the device IP is configured, proactively push the OTA config
+            # (token, host, interval) and the LED/beep settings to the device
+            # via /api/control.  This ensures the device can check for OTA even
+            # if its NVS was flashed without a token (e.g. manual esptool flash
+            # or a browser flash where the provisioning token was not loaded).
+            # After pushing, a RESET is sent so the device reboots and
+            # immediately checks OTA (lastOtaCheckMs=0 on boot → check fires
+            # as soon as WiFi connects).
+            device_ip   = self._cfg(CONF_DEVICE_IP, "")
+            device_port = int(self._cfg(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT))
+            if device_ip and ota_token and ota_interval > 0:
+                _LOGGER.info(
+                    "Freematics Cloud OTA: pushing OTA config + LED/beep settings "
+                    "to device at %s:%s, then sending RESET.",
+                    device_ip,
+                    device_port,
+                )
+                # Resolve the OTA host from the HA external URL so the device
+                # reaches the /api/freematics/ota_pull/… endpoint correctly even
+                # when SERVER_HOST is hooks.nabu.casa (NabuCasa webhook host).
+                from .views import _build_nvs_kwargs  # noqa: PLC0415
+                try:
+                    nvs_kwargs = await _build_nvs_kwargs(hass, self._entry)
+                    ota_host = nvs_kwargs.get("ota_host", "")
+                except Exception as _exc:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Freematics Cloud OTA: could not resolve OTA host URL (%s); "
+                        "device will fall back to serverHost for OTA.",
+                        _exc,
+                    )
+                    ota_host = ""
+
+                push_cfg: dict[str, Any] = {
+                    "ota_token":    ota_token,
+                    "ota_interval": ota_interval,
+                    "led_white":    bool(self._cfg(CONF_LED_WHITE_EN, True)),
+                    "led_red":      bool(self._cfg(CONF_LED_RED_EN, True)),
+                    "beep":         bool(self._cfg(CONF_BEEP_EN, True)),
+                }
+                if ota_host:
+                    push_cfg["ota_host"] = ota_host
+
+                push_ok, push_results = await async_send_config(
+                    device_ip, device_port, push_cfg
+                )
+                for line in push_results:
+                    if push_ok:
+                        _LOGGER.info("Freematics Cloud OTA push: %s", line)
+                    else:
+                        _LOGGER.warning("Freematics Cloud OTA push: %s", line)
+
+                if push_ok:
+                    # Reboot device so the new token/interval take effect
+                    # immediately (lastOtaCheckMs=0 on boot → OTA fires right away).
+                    try:
+                        import aiohttp  # noqa: PLC0415
+                        reset_url = (
+                            f"http://{device_ip}:{device_port}"
+                            f"{CONTROL_PATH}?cmd=RESET"
+                        )
+                        async with aiohttp.ClientSession() as _session:
+                            async with _session.get(
+                                reset_url,
+                                timeout=aiohttp.ClientTimeout(total=5),
+                            ) as _resp:
+                                _LOGGER.info(
+                                    "Freematics Cloud OTA: RESET sent (HTTP %s) — "
+                                    "device will reboot and check OTA immediately.",
+                                    _resp.status,
+                                )
+                    except Exception as _exc:  # noqa: BLE001
+                        # Device may have already rebooted (connection closed) — this is expected.
+                        _LOGGER.info(
+                            "Freematics Cloud OTA: RESET sent — device is rebooting "
+                            "(connection closed: %s).",
+                            _exc,
+                        )
+                else:
+                    _LOGGER.warning(
+                        "Freematics Cloud OTA: could not push OTA config to device at %s "
+                        "(device may be offline or device IP may be wrong). "
+                        "The device will check OTA on its next scheduled interval instead.",
+                        device_ip,
+                    )
         else:
             _LOGGER.error("Freematics Cloud OTA: %s", msg)

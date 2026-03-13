@@ -209,3 +209,14 @@ CMD_UPTIME = "UPTIME"
 CMD_STANDBY = "OFF"
 CMD_RESUME = "ON"
 CMD_STANDBY_QUERY = "ON?"
+# Pull-OTA provisioning commands (firmware v5.1+ with NVS-over-HTTP support).
+# These commands update the device's NVS in real time so OTA can be enabled
+# on a device that was flashed without a provisioned OTA token in NVS.
+CMD_OTA_TOKEN    = "OTA_TOKEN={}"
+CMD_OTA_HOST     = "OTA_HOST={}"
+CMD_OTA_INTERVAL = "OTA_INTERVAL={}"
+# LED / buzzer runtime control.  Values are 1 (enable) or 0 (disable).
+# Changes take effect immediately AND are persisted to NVS so they survive reboot.
+CMD_LED_WHITE = "LED_WHITE={}"
+CMD_LED_RED   = "LED_RED={}"
+CMD_BEEP      = "BEEP={}"
