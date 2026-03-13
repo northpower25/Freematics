@@ -1491,8 +1491,31 @@ class FreematicsOtaPullView(HomeAssistantView):
 
         if filename == "meta.json":
             if _ota_mode == OTA_MODE_PULL:
-                # Variant 1: always serve the latest firmware when the binary exists.
+                # Variant 1: serve the latest firmware only when the device does
+                # not already have the current bundled version.  Track the last
+                # downloaded version in a per-device state file so the device
+                # does not re-download and re-flash on every OTA check interval
+                # (which would cause an infinite reboot loop).
+                _pull_state_file = _www_dir / "ota_pull_state.json"
+
+                def _read_pull_state() -> dict:
+                    try:
+                        return json.loads(_pull_state_file.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        return {}
+
                 if not FIRMWARE_PATH.exists():
+                    return web.Response(
+                        body=json.dumps({
+                            "available": False,
+                            "version": FIRMWARE_VERSION,
+                        }).encode("utf-8"),
+                        content_type="application/json",
+                    )
+
+                pull_state = await hass.async_add_executor_job(_read_pull_state)
+                if pull_state.get("version") == FIRMWARE_VERSION:
+                    # Device already has the current bundled version.
                     return web.Response(
                         body=json.dumps({
                             "available": False,
@@ -1616,7 +1639,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         except OSError as exc:
             return web.Response(status=500, text=f"Cannot read firmware: {exc}")
 
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
         if _ota_mode == OTA_MODE_CLOUD:
             # Mark firmware as downloaded: set "available": false in version.json so
@@ -1628,6 +1651,26 @@ class FreematicsOtaPullView(HomeAssistantView):
                 _write_version_json(data)
 
             await hass.async_add_executor_job(_mark_downloaded)
+        else:
+            # Variant 1 (PULL mode): record the downloaded version so meta.json
+            # can return available=false until the bundled FIRMWARE_VERSION changes.
+            # This prevents the device from re-flashing the same firmware on every
+            # OTA check interval (which would cause an infinite reboot loop).
+            _pull_state_file = _www_dir / "ota_pull_state.json"
+
+            def _write_pull_state() -> None:
+                _www_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    _pull_state_file.write_text(
+                        json.dumps({"version": FIRMWARE_VERSION, "downloaded_at": now_iso}, indent=2),
+                        encoding="utf-8",
+                    )
+                except OSError as _exc:
+                    _LOGGER.warning(
+                        "Freematics pull-OTA: could not write ota_pull_state.json: %s", _exc
+                    )
+
+            await hass.async_add_executor_job(_write_pull_state)
 
         _fw_version = published.get("version", FIRMWARE_VERSION)
 
@@ -1641,7 +1684,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                 if _eid == entry_id:
                     _diag = _entry_data["diag"]
                     _diag["ota_last_success"] = now_iso
-                    _diag["ota_last_error"] = None
+                    _diag["ota_last_error"] = "Kein Fehler"
                     _diag["ota_last_version"] = _fw_version
                     _diag["fw_version"] = _fw_version
                     async_dispatcher_send(
@@ -1649,7 +1692,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                         f"{DOMAIN}_{_webhook}_debug",
                         {
                             "ota_last_success": now_iso,
-                            "ota_last_error": "No error",
+                            "ota_last_error": "Kein Fehler",
                             "ota_last_version": _fw_version,
                             "fw_version": _fw_version,
                         },

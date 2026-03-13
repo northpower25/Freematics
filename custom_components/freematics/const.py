@@ -33,7 +33,7 @@ CONF_SERIAL_PORT = "serial_port"
 DEFAULT_SERIAL_BAUD = 921600
 
 # Firmware version
-FIRMWARE_VERSION = "5.0"
+FIRMWARE_VERSION = "5.1"
 
 # Signal that carries incoming webhook data
 SIGNAL_DATA_RECEIVED = f"{DOMAIN}_data_received"

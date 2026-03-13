@@ -44,9 +44,15 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .const import (
     CONF_CONNECTION_TYPE,
+    CONF_DEVICE_PORT,
+    CONF_ENABLE_BLE,
+    CONF_OPERATING_MODE,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEBUG_HISTORY_SIZE,
+    DEFAULT_DEVICE_PORT,
+    FIRMWARE_VERSION,
+    OPERATING_MODE_DATALOGGER,
     SENSOR_DEFINITIONS,
 )
 from .views import (
@@ -285,6 +291,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         conn_label = "WiFi+LTE"
         conn_mode = 3
 
+    # Determine configured device features from the config entry so the debug
+    # sensor can show accurate "configured" state for HTTPD, BLE, etc.
+    _cfg = {**(entry.data or {}), **(entry.options or {})}
+    # HTTPD is always enabled in the NVS (see views.py enable_httpd = True).
+    # Port 80 is the firmware default; CONF_DEVICE_PORT overrides it.
+    _httpd_port: int = int(_cfg.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT))
+    _ble_enabled: bool = bool(_cfg.get(CONF_ENABLE_BLE, False))
+    # Datalogger mode: HTTPD is the primary API; telelogger mode: HTTPD is still
+    # running (for OTA and /api/control) but not the primary data path.
+    _operating_mode = _cfg.get(CONF_OPERATING_MODE)
+    if _operating_mode is not None:
+        _is_datalogger = (_operating_mode == OPERATING_MODE_DATALOGGER)
+    else:
+        from .const import CONF_ENABLE_HTTPD  # noqa: PLC0415 - legacy compat
+        _is_datalogger = bool(_cfg.get(CONF_ENABLE_HTTPD, False))
+
     # Per-device debug state: rolling history of raw payloads and error log.
     raw_history: deque[str] = deque(maxlen=DEBUG_HISTORY_SIZE)
     error_log: deque[str] = deque(maxlen=DEBUG_HISTORY_SIZE)
@@ -309,8 +331,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "ota_last_success": None,
         "ota_last_error": None,
         "ota_last_version": None,
-        # Firmware version – set after the first successful pull-OTA or from NVS
-        "fw_version": None,
+        # Firmware version – initialised to the bundled version; updated after OTA
+        "fw_version": FIRMWARE_VERSION,
     }
 
     # OBD-II sensor keys (those that require an active OBD2 connection)
@@ -364,7 +386,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if raw_body:
             raw_history.appendleft(raw_body)
 
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
         if not data:
             _LOGGER.debug("Freematics webhook received empty or unparseable payload")
@@ -374,7 +396,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_dispatcher_send(
                     hass,
                     f"{DOMAIN}_{webhook_id}_debug",
-                    _build_debug_payload(conn_label, conn_mode, diag, raw_history, error_log, now_iso),
+                    _build_debug_payload(
+                        conn_label, conn_mode, diag, raw_history, error_log, now_iso,
+                        _httpd_port, _ble_enabled,
+                    ),
                 )
             return
 
@@ -417,7 +442,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_dispatcher_send(
             hass,
             f"{DOMAIN}_{webhook_id}_debug",
-            _build_debug_payload(conn_label, conn_mode, diag, raw_history, error_log, now_iso),
+            _build_debug_payload(
+                conn_label, conn_mode, diag, raw_history, error_log, now_iso,
+                _httpd_port, _ble_enabled,
+            ),
         )
 
     async_register(
@@ -437,6 +465,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "error_log": error_log,
         # Mutable diag dict shared with views so OTA events can update sensor state.
         "diag": diag,
+        # Initial debug payload so the debug sensor shows known values immediately
+        # (e.g. FW version, connection mode, HTTPD/BLE config) before the first
+        # webhook arrives.
+        "initial_debug": _build_debug_payload(
+            conn_label, conn_mode, diag, raw_history, error_log, "",
+            _httpd_port, _ble_enabled,
+        ),
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -450,42 +485,48 @@ def _build_debug_payload(
     raw_history: deque,
     error_log: deque,
     now_iso: str,
+    httpd_port: int = 80,
+    ble_enabled: bool = False,
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
+    _JA = "Ja"
+    _NEIN = "Nein"
 
     return {
         "connection_type": conn_label,
-        "connection_mode": conn_mode,
+        # Show human-readable connection mode text, not the raw integer.
+        "connection_mode": conn_label,
         "connection_errors": diag["conn_errors"],
         "last_wifi_connection": diag["last_wifi_connection"] or _UNK,
         "last_lte_connection": diag["last_lte_connection"] or _UNK,
         "last_packet_time": diag["last_packet_time"] or _UNK,
-        # GPS
-        "gps_configured": "Unbekannt",
+        # GPS – "configured" is always Ja (GPS is compiled into every firmware build).
+        "gps_configured": _JA,
         "gps_active": 1 if diag["gps_active"] else 0,
         "gps_satellites": diag["gps_satellites"] if diag["gps_satellites"] is not None else _UNK,
         "gps_errors": diag["gps_errors"],
         "last_gps_connection": diag["last_gps_connection"] or _UNK,
-        # OBD2
-        "obd_configured": "Unbekannt",
+        # OBD2 – "configured" is always Ja (OBD2 polling is compiled in).
+        "obd_configured": _JA,
         "obd_active": 1 if diag["obd_active"] else 0,
         "obd_services": sorted(diag["obd_services_seen"]) if diag["obd_services_seen"] else _UNK,
         "obd_errors": diag["obd_errors"],
         "last_obd_connection": diag["last_obd_connection"] or _UNK,
-        # SD card – not determinable from webhook alone
-        "sd_configured": _UNK,
+        # SD card – "configured" is always Ja (SD logging is compiled in).
+        # Presence and storage capacity can only be determined from device runtime data.
+        "sd_configured": _JA,
         "sd_present": _UNK,
         "sd_storage": _UNK,
-        # HTTPD – not determinable from webhook alone
-        "httpd_configured": _UNK,
-        "httpd_active": _UNK,
-        "httpd_port": _UNK,
+        # HTTPD – always enabled in NVS (the firmware starts the HTTP server on every boot).
+        "httpd_configured": _JA,
+        "httpd_active": _JA,
+        "httpd_port": httpd_port,
         "httpd_errors": _UNK,
-        # BLE – not determinable from webhook alone
-        "ble_configured": _UNK,
-        "ble_active": _UNK,
-        # FW version – set from diag["fw_version"] when known (e.g. after OTA)
+        # BLE – enabled/disabled via NVS; read from the config entry.
+        "ble_configured": _JA if ble_enabled else _NEIN,
+        "ble_active": _JA if ble_enabled else _NEIN,
+        # FW version – initialised to the bundled version; updated after OTA.
         "fw_version": diag.get("fw_version") or _UNK,
         # OTA pull update status
         "ota_last_success": diag.get("ota_last_success") or _UNK,
