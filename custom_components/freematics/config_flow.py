@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import secrets
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import voluptuous as vol
@@ -32,6 +35,7 @@ from .const import (
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
     CONF_SERIAL_PORT,
+    CONF_SETTINGS_VERSION,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
@@ -66,6 +70,40 @@ _OTA_MODE_OPTIONS: dict[str, str] = {
     OTA_MODE_PULL: "Variant 1 – Pull-OTA: device polls HA; HA always serves latest firmware",
     OTA_MODE_CLOUD: "Variant 2 – Cloud OTA: device polls HA; firmware served only after you press 'Publish'",
 }
+
+# Keys whose values are written into the NVS partition flashed to the device.
+# When any of these change, the settings_version timestamp is bumped so that
+# PULL-OTA knows to re-serve the firmware + NVS to the device.
+_NVS_RELEVANT_KEYS = frozenset({
+    CONF_WIFI_SSID,
+    CONF_WIFI_PASSWORD,
+    CONF_CELL_APN,
+    CONF_SIM_PIN,
+    CONF_ENABLE_BLE,
+    CONF_CELL_DEBUG,
+    CONF_LED_RED_EN,
+    CONF_LED_WHITE_EN,
+    CONF_BEEP_EN,
+    CONF_DATA_INTERVAL_MS,
+    CONF_SYNC_INTERVAL_S,
+    CONF_OTA_MODE,
+    CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OPERATING_MODE,
+})
+
+
+def _nvs_settings_hash(settings: dict) -> str:
+    """Return a short hex digest of the NVS-relevant subset of *settings*.
+
+    Two settings dicts that differ only in keys not listed in
+    ``_NVS_RELEVANT_KEYS`` (e.g. device IP, serial port, flash method) will
+    produce the same hash, so only genuine NVS changes trigger a version bump.
+    """
+    subset = {k: settings.get(k) for k in _NVS_RELEVANT_KEYS}
+    return hashlib.sha256(
+        json.dumps(subset, sort_keys=True, default=str).encode()
+    ).hexdigest()[:16]
+
 
 class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Freematics ONE+.
@@ -306,6 +344,12 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(webhook_id)
             self._abort_if_unique_id_configured()
 
+            # Record the initial settings version so PULL-OTA can detect future
+            # changes.  This timestamp represents "settings as of initial flash".
+            self._data[CONF_SETTINGS_VERSION] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S+00:00"
+            )
+
             return self.async_create_entry(
                 title="Freematics ONE+",
                 data=self._data,
@@ -350,6 +394,8 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         """Manage options."""
+        current = {**self._config_entry.data, **self._config_entry.options}
+
         if user_input is not None:
             # Auto-generate an OTA token when the user enables OTA for the
             # first time (switches away from disabled without a stored token).
@@ -358,12 +404,28 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                 self._config_entry.options.get(CONF_OTA_TOKEN)
                 or self._config_entry.data.get(CONF_OTA_TOKEN, "")
             )
-            if ota_mode != OTA_MODE_DISABLED and not current_token:
-                user_input = dict(user_input)
-                user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
-            return self.async_create_entry(title="", data=user_input)
+            user_input = dict(user_input)
+            if ota_mode != OTA_MODE_DISABLED:
+                if current_token:
+                    # Preserve the existing token – the options form does not
+                    # have a token field, so user_input never carries it.
+                    # Without this the token is silently dropped from
+                    # entry.options on every save, breaking pull-OTA.
+                    user_input[CONF_OTA_TOKEN] = current_token
+                else:
+                    user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
 
-        current = {**self._config_entry.data, **self._config_entry.options}
+            # Bump settings_version only when NVS-relevant settings actually
+            # changed so the device is not triggered to re-flash on every save.
+            if _nvs_settings_hash(user_input) != _nvs_settings_hash(current):
+                user_input[CONF_SETTINGS_VERSION] = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%S+00:00"
+                )
+            else:
+                # Preserve the existing version (no NVS change = no re-flash needed).
+                user_input[CONF_SETTINGS_VERSION] = current.get(CONF_SETTINGS_VERSION, "")
+
+            return self.async_create_entry(title="", data=user_input)
 
         # Derive current operating mode with backwards-compat fallback.
         # Entries created before the operating_mode field was added have an

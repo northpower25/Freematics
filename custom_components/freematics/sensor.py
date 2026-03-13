@@ -47,9 +47,11 @@ async def async_setup_entry(
 
     # Debug sensor – shows connection type as state; raw webhook history and
     # error log as attributes.
+    initial_debug = entry_data.get("initial_debug", {})
     debug_sensor = FreematicsDebugSensor(
         webhook_id=webhook_id,
         initial_connection_type=conn_label,
+        initial_debug=initial_debug,
     )
     initial_entities.append(debug_sensor)
 
@@ -188,7 +190,12 @@ class FreematicsDebugSensor(SensorEntity):
 
     _UNK = "Unbekannt"
 
-    def __init__(self, webhook_id: str, initial_connection_type: str) -> None:
+    def __init__(
+        self,
+        webhook_id: str,
+        initial_connection_type: str,
+        initial_debug: dict | None = None,
+    ) -> None:
         """Initialise the debug sensor."""
         device_slug = webhook_id[:8]
         self._webhook_id = webhook_id
@@ -231,6 +238,10 @@ class FreematicsDebugSensor(SensorEntity):
             "httpd_errors": _u,
             "ble_configured": _u,
             "ble_active": _u,
+            # OTA configuration (from HA config entry)
+            "ota_mode": _u,
+            "ota_token_set": _u,
+            "ota_interval_s": _u,
             # OTA pull status – updated by FreematicsOtaPullView after each OTA event
             "ota_last_success": _u,   # ISO timestamp of last successful OTA flash
             "ota_last_error": _u,     # Error message from the last failed OTA attempt
@@ -238,6 +249,13 @@ class FreematicsDebugSensor(SensorEntity):
             "raw_data": [],
             "errors": [],
         }
+
+        # Apply known-at-setup values so the sensor is informative even before
+        # the first webhook arrives (e.g. FW version, connection mode, HTTPD/BLE).
+        if initial_debug:
+            for key in self._debug:
+                if key in initial_debug:
+                    self._debug[key] = initial_debug[key]
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -276,6 +294,10 @@ class FreematicsDebugSensor(SensorEntity):
             # BLE
             "BLE eingestellt": d["ble_configured"],
             "BLE aktiv": d["ble_active"],
+            # OTA configuration (from HA config entry – what was provisioned at last flash)
+            "OTA Modus": d["ota_mode"],
+            "OTA Token gesetzt": d["ota_token_set"],
+            "OTA Prüfintervall (s)": d["ota_interval_s"],
             # OTA pull update status
             "OTA letzter Erfolg": d["ota_last_success"],
             "OTA letzter Fehler": d["ota_last_error"],
