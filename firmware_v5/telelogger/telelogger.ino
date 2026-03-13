@@ -2046,6 +2046,21 @@ static bool performPullOtaFlash()
 // Returns false in all other cases, including the SD-staging success case
 // (caller must NOT block waiting for a reboot when false is returned).
 // ---------------------------------------------------------------------------
+// Returns a privacy-safe representation of an OTA hostname for serial logging.
+// Shows only the first 8 characters followed by "..." when the hostname is
+// longer than 12 characters, preventing NabuCasa subdomain IDs from appearing
+// verbatim in serial output.
+static String _maskOtaHost(const char* host) {
+  if (!host || !host[0]) return String("(none)");
+  size_t n = strlen(host);
+  if (n > 12) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.8s...", host);
+    return String(buf);
+  }
+  return String(host);
+}
+
 bool performPullOtaCheck()
 {
   if (!otaToken[0] || !otaHost[0]) return false;
@@ -2070,7 +2085,7 @@ bool performPullOtaCheck()
 
   // Log the URL for diagnostics with the token truncated for security.
   Serial.printf("[OTA-PULL] URL: https://%s:%u/api/freematics/ota_pull/%.8s.../meta.json\n",
-                otaHost, (unsigned)otaPort, otaToken);
+                _maskOtaHost(otaHost).c_str(), (unsigned)otaPort, otaToken);
 
   // Temporarily disconnect the telemetry client so we can reuse the WiFi
   // stack for the OTA metadata fetch.  s_ota_active is NOT set here because
@@ -2079,7 +2094,7 @@ bool performPullOtaCheck()
   teleClient.wifi.close();
 
   if (!teleClient.wifi.open(otaHost, otaPort)) {
-    Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", otaHost, (unsigned)otaPort);
+    Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
 #endif
@@ -2211,7 +2226,7 @@ bool performPullOtaCheck()
     }
 
     if (!teleClient.wifi.open(otaHost, otaPort)) {
-      Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
+      Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
       fwFile.close();
       SD.remove(OTA_PENDING_PATH);
 #if STORAGE != STORAGE_NONE
@@ -2409,7 +2424,7 @@ bool performPullOtaCheck()
   delay(1500);
 
   if (!teleClient.wifi.open(otaHost, otaPort)) {
-    Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
+    Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
     s_ota_active = false;
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
@@ -2865,7 +2880,7 @@ if (!state.check(STATE_MEMS_READY)) do {
   // disabled even though a token exists.
   if (otaToken[0]) {
     Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us\n",
-                  otaHost[0] ? otaHost : "(server fallback)",
+                  otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
                   (unsigned)otaPort,
                   (unsigned)otaCheckIntervalS);
   } else {
