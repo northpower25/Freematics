@@ -119,7 +119,7 @@ BOOTLOADER_PATH = Path(__file__).parent / "firmware" / "bootloader.bin"
 # to the dual-OTA layout on their first Web Serial flash.
 _MANIFEST_BASE = {
     "name": "Freematics ONE+ Telelogger",
-    "version": "5.0",
+    "version": FIRMWARE_VERSION,
     "new_install_prompt_erase": False,
     "builds": [
         {
@@ -1394,7 +1394,7 @@ class FreematicsOtaPullView(HomeAssistantView):
     ``meta.json`` response (JSON):
       {
         "available": true|false,
-        "version": "5.0",
+        "version": "<FIRMWARE_VERSION>",
         "size": <int>,
         "sha256": "<hex>",
         "firmware_url": "/api/freematics/ota_pull/<token>/firmware.bin"
@@ -1584,6 +1584,34 @@ class FreematicsOtaPullView(HomeAssistantView):
                         content_type="application/json",
                     )
 
+                # Use the publish_id (a unique per-publish timestamp added by
+                # PublishCloudOtaButton) to track whether the device has already
+                # downloaded this exact publish.  This prevents re-download after a
+                # successful flash while still allowing the user to press "Publish"
+                # again to force a retry after a failed download.
+                # Fall back to the version string for backwards-compat with old
+                # version.json files that do not have a publish_id.
+                _publish_id = published.get("publish_id") or published.get("version", FIRMWARE_VERSION)
+                _cloud_pull_state_file = _www_dir / "ota_pull_state.json"
+
+                def _read_cloud_pull_state() -> dict:
+                    try:
+                        return json.loads(_cloud_pull_state_file.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        return {}
+
+                cloud_pull_state = await hass.async_add_executor_job(_read_cloud_pull_state)
+                if cloud_pull_state.get("version") == _publish_id:
+                    # This publish was already downloaded by the device.  The device
+                    # will have staged the firmware for flashing at its next standby.
+                    return web.Response(
+                        body=json.dumps({
+                            "available": False,
+                            "version": published.get("version", FIRMWARE_VERSION),
+                        }).encode("utf-8"),
+                        content_type="application/json",
+                    )
+
                 if not FIRMWARE_PATH.exists():
                     return web.Response(status=503, text="Firmware binary not found")
 
@@ -1700,7 +1728,27 @@ class FreematicsOtaPullView(HomeAssistantView):
                 return web.Response(
                     status=404,
                     text=(
-                        "Firmware already downloaded or not yet published. "
+                        "Firmware not yet published. "
+                        "Press 'Publish Firmware for Cloud OTA' to make a new version available."
+                    ),
+                )
+            # Also gate on the pull_state: if this exact publish_id was already
+            # served to the device, reject duplicate requests.
+            _pub_id = published.get("publish_id") or published.get("version", FIRMWARE_VERSION)
+            _cloud_ps_file = _www_dir / "ota_pull_state.json"
+
+            def _read_cloud_ps() -> dict:
+                try:
+                    return json.loads(_cloud_ps_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    return {}
+
+            _cloud_ps = await hass.async_add_executor_job(_read_cloud_ps)
+            if _cloud_ps.get("version") == _pub_id:
+                return web.Response(
+                    status=404,
+                    text=(
+                        "Firmware already downloaded for this publish. "
                         "Press 'Publish Firmware for Cloud OTA' to make a new version available."
                     ),
                 )
@@ -1722,15 +1770,27 @@ class FreematicsOtaPullView(HomeAssistantView):
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
         if _ota_mode == OTA_MODE_CLOUD:
-            # Mark firmware as downloaded: set "available": false in version.json so
-            # the device does not re-download the same firmware on the next interval.
-            def _mark_downloaded() -> None:
-                data = dict(published)
-                data["available"] = False
-                data["downloaded_at"] = now_iso
-                _write_version_json(data)
+            # Record that this publish was served so meta.json can return
+            # available=false on subsequent checks (prevents re-download loops).
+            # We write ota_pull_state.json (same file as Pull-OTA) keyed by
+            # publish_id so pressing "Publish" again (which generates a new
+            # publish_id) automatically unblocks a fresh download.
+            # Unlike the old approach (setting version.json "available": false),
+            # version.json stays untouched so users can tell the publish is still
+            # active and simply press "Publish" again to allow a retry.
+            def _write_cloud_pull_state() -> None:
+                _www_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    (_www_dir / "ota_pull_state.json").write_text(
+                        json.dumps({"version": _pub_id, "downloaded_at": now_iso}, indent=2),
+                        encoding="utf-8",
+                    )
+                except OSError as _exc:
+                    _LOGGER.warning(
+                        "Freematics Cloud OTA: could not write ota_pull_state.json: %s", _exc
+                    )
 
-            await hass.async_add_executor_job(_mark_downloaded)
+            await hass.async_add_executor_job(_write_cloud_pull_state)
         else:
             # Variant 1 (PULL mode): record the downloaded version so meta.json
             # can return available=false until the bundled FIRMWARE_VERSION changes.

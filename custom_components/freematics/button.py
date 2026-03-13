@@ -335,6 +335,7 @@ class PublishCloudOtaButton(_FreematicsButton):
 
     async def async_press(self) -> None:
         """Copy firmware binary and version metadata to /config/www/FreematicsONE/{id}/."""
+        from datetime import datetime, timezone  # noqa: PLC0415
         from homeassistant.core import HomeAssistant  # noqa: PLC0415
 
         # Resolve the HA config directory at runtime via the hass object stored
@@ -374,14 +375,25 @@ class PublishCloudOtaButton(_FreematicsButton):
                 fw_dest = target_dir / _CLOUD_OTA_FIRMWARE_FILENAME
                 fw_dest.write_bytes(fw_data)
 
+                # Each press generates a new publish_id (UTC timestamp) so the
+                # OTA endpoint can distinguish this publish from any previous one.
+                # This allows the user to force a fresh download by pressing
+                # "Publish" again, even when the firmware version hasn't changed
+                # (e.g., to re-apply updated NVS settings after a failed download).
+                publish_id = (
+                    f"{FIRMWARE_VERSION}+"
+                    f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+                )
+
                 # Write version metadata with available=true.
                 # The Pull-OTA endpoint reads this file to determine whether a
-                # new firmware is waiting for download.  After the device has
-                # downloaded the binary, the endpoint resets available to false
-                # automatically.
+                # new firmware is waiting for download.  "available" stays true;
+                # the endpoint uses ota_pull_state.json (keyed by publish_id) to
+                # prevent re-download loops without consuming this flag eagerly.
                 version_meta = {
                     "available": True,
                     "version": FIRMWARE_VERSION,
+                    "publish_id": publish_id,
                     "size": fw_size,
                     "sha256": fw_sha256,
                     # Relative filename within the same /local/ directory.
