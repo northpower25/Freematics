@@ -718,9 +718,18 @@ void initialize()
         stagingValid = (actual == expectedSize);
       }
       if (stagingValid) {
-        s_ota_pending = true;
-        Serial.println("[OTA-PULL] Staged firmware found on SD — will flash at next standby");
-        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL PENDING_RESUME");
+        Serial.println("[OTA-PULL] Staged firmware found on SD — flashing at boot");
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL BOOT_FLASH");
+        // Flash immediately at boot: the telemetry task has not started yet so
+        // there is no need for s_ota_active synchronisation.  Flashing at boot
+        // also ensures the update is applied even on devices that never reach
+        // standby naturally (e.g. no OBD / no MEMS stationary timeout).
+        if (performPullOtaFlash()) {
+          // Flash succeeded; reboot timer is running — block here until it fires.
+          while (true) delay(1000);
+        }
+        // Flash failed (corrupt image etc.): staging files already cleaned up
+        // by performPullOtaFlash().  Continue normal boot.
       } else {
         SD.remove(OTA_PENDING_PATH);
         SD.remove(OTA_META_PATH);
@@ -947,6 +956,23 @@ void process()
     deviceTemp = readChipTemperature();
   }
   buffer->add(PID_DEVICE_TEMP, ELEMENT_INT32, &deviceTemp, sizeof(deviceTemp));
+
+  // Report white-LED and beep runtime state so HA can display live IST-Status.
+  // Uses a send-on-change pattern (static sentinel -1 triggers the first send).
+  {
+    static int8_t lastLedWhite = -1;
+    static int8_t lastBeep     = -1;
+    uint8_t lwv = enableLedWhite ? 1 : 0;
+    uint8_t bv  = enableBeep     ? 1 : 0;
+    if ((int8_t)lwv != lastLedWhite) {
+      lastLedWhite = (int8_t)lwv;
+      buffer->add(PID_LED_WHITE_STATE, ELEMENT_UINT8, &lwv, sizeof(lwv));
+    }
+    if ((int8_t)bv != lastBeep) {
+      lastBeep = (int8_t)bv;
+      buffer->add(PID_BEEP_STATE, ELEMENT_UINT8, &bv, sizeof(bv));
+    }
+  }
 
   buffer->timestamp = millis();
   buffer->state = BUFFER_STATE_FILLED;
@@ -2046,6 +2072,21 @@ static bool performPullOtaFlash()
 // Returns false in all other cases, including the SD-staging success case
 // (caller must NOT block waiting for a reboot when false is returned).
 // ---------------------------------------------------------------------------
+// Returns a privacy-safe representation of an OTA hostname for serial logging.
+// Shows only the first 8 characters followed by "..." when the hostname is
+// longer than 12 characters, preventing NabuCasa subdomain IDs from appearing
+// verbatim in serial output.
+static String _maskOtaHost(const char* host) {
+  if (!host || !host[0]) return String("(none)");
+  size_t n = strlen(host);
+  if (n > 12) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.8s...", host);
+    return String(buf);
+  }
+  return String(host);
+}
+
 bool performPullOtaCheck()
 {
   if (!otaToken[0] || !otaHost[0]) return false;
@@ -2070,7 +2111,7 @@ bool performPullOtaCheck()
 
   // Log the URL for diagnostics with the token truncated for security.
   Serial.printf("[OTA-PULL] URL: https://%s:%u/api/freematics/ota_pull/%.8s.../meta.json\n",
-                otaHost, (unsigned)otaPort, otaToken);
+                _maskOtaHost(otaHost).c_str(), (unsigned)otaPort, otaToken);
 
   // Temporarily disconnect the telemetry client so we can reuse the WiFi
   // stack for the OTA metadata fetch.  s_ota_active is NOT set here because
@@ -2079,7 +2120,7 @@ bool performPullOtaCheck()
   teleClient.wifi.close();
 
   if (!teleClient.wifi.open(otaHost, otaPort)) {
-    Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", otaHost, (unsigned)otaPort);
+    Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
 #endif
@@ -2211,7 +2252,7 @@ bool performPullOtaCheck()
     }
 
     if (!teleClient.wifi.open(otaHost, otaPort)) {
-      Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
+      Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
       fwFile.close();
       SD.remove(OTA_PENDING_PATH);
 #if STORAGE != STORAGE_NONE
@@ -2409,7 +2450,7 @@ bool performPullOtaCheck()
   delay(1500);
 
   if (!teleClient.wifi.open(otaHost, otaPort)) {
-    Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", otaHost, (unsigned)otaPort);
+    Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
     s_ota_active = false;
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
@@ -2865,7 +2906,7 @@ if (!state.check(STATE_MEMS_READY)) do {
   // disabled even though a token exists.
   if (otaToken[0]) {
     Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us\n",
-                  otaHost[0] ? otaHost : "(server fallback)",
+                  otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
                   (unsigned)otaPort,
                   (unsigned)otaCheckIntervalS);
   } else {

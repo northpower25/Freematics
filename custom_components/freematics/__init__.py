@@ -50,6 +50,8 @@ from .const import (
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
     CONF_ENABLE_BLE,
+    CONF_BEEP_EN,
+    CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
@@ -306,6 +308,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Port 80 is the firmware default; CONF_DEVICE_PORT overrides it.
     _httpd_port: int = int(_cfg.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT))
     _ble_enabled: bool = bool(_cfg.get(CONF_ENABLE_BLE, False))
+    _led_white_en: bool = bool(_cfg.get(CONF_LED_WHITE_EN, True))
+    _beep_en: bool = bool(_cfg.get(CONF_BEEP_EN, True))
     # OTA configuration (for displaying in the debug entity so users can
     # quickly verify that OTA is provisioned correctly in the config entry).
     _ota_mode: str = _cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
@@ -352,6 +356,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "ota_last_version": None,
         # Firmware version – initialised to the bundled version; updated after OTA
         "fw_version": FIRMWARE_VERSION,
+        # Live device state for white LED and beep – updated when the device reports
+        # PID_LED_WHITE_STATE (0x84) / PID_BEEP_STATE (0x85) in its telemetry.
+        # None means "not yet reported by device".
+        "led_white_device": None,
+        "beep_device": None,
     }
 
     # OBD-II sensor keys (those that require an active OBD2 connection)
@@ -419,6 +428,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         conn_label, conn_mode, diag, raw_history, error_log, now_iso,
                         _httpd_port, _ble_enabled,
                         _ota_mode, _ota_token_set, _ota_interval_s,
+                        _led_white_en, _beep_en,
                     ),
                 )
             return
@@ -456,6 +466,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             diag["last_obd_connection"] = now_iso
             diag["obd_services_seen"].update(obd_keys_present)
 
+        # Live LED/beep device state – firmware sends PID 0x84 (led_white_state)
+        # and 0x85 (beep_state) on first packet and whenever they change.
+        # Values are 1.0 (enabled) or 0.0 (disabled) after PID_MAP scale.
+        if "led_white_state" in data:
+            diag["led_white_device"] = bool(data["led_white_state"])
+        if "beep_state" in data:
+            diag["beep_device"] = bool(data["beep_state"])
+
         # Rate-limited device info refresh (SD card stats) via /api/info.
         # Only runs when CONF_DEVICE_IP is configured in the integration.
         # Uses a 60-second cooldown so every webhook does not trigger an
@@ -475,6 +493,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 conn_label, conn_mode, diag, raw_history, error_log, now_iso,
                 _httpd_port, _ble_enabled,
                 _ota_mode, _ota_token_set, _ota_interval_s,
+                _led_white_en, _beep_en,
             ),
         )
 
@@ -532,6 +551,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             conn_label, conn_mode, diag, raw_history, error_log, "",
             _httpd_port, _ble_enabled,
             _ota_mode, _ota_token_set, _ota_interval_s,
+            _led_white_en, _beep_en,
         ),
     }
 
@@ -551,11 +571,19 @@ def _build_debug_payload(
     ota_mode: str = OTA_MODE_DISABLED,
     ota_token_set: bool = False,
     ota_interval_s: int = 0,
+    led_white_en: bool = True,
+    beep_en: bool = True,
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
     _JA = "Ja"
     _NEIN = "Nein"
+
+    def _opt_bool(value) -> str:
+        """Convert a bool-or-None diag value to Ja/Nein/Unbekannt."""
+        if value is None:
+            return _UNK
+        return _JA if value else _NEIN
 
     # SD card presence/storage – populated by _refresh_device_info() when
     # CONF_DEVICE_IP is configured; stays "Unbekannt" otherwise.
@@ -603,6 +631,17 @@ def _build_debug_payload(
         # BLE – enabled/disabled via NVS; read from the config entry.
         "ble_configured": _JA if ble_enabled else _NEIN,
         "ble_active": _JA if ble_enabled else _NEIN,
+        # White LED and beep tone – configured via HA options flow; provisioned
+        # into device NVS at last flash.  Reflects the desired/provisioned state,
+        # not necessarily what the device is currently doing (no runtime feedback
+        # is available via webhook for these settings).
+        "led_white_configured": _JA if led_white_en else _NEIN,
+        "beep_configured": _JA if beep_en else _NEIN,
+        # Live device state – reported by the device in its telemetry webhook via
+        # PID 0x84 (PID_LED_WHITE_STATE) and 0x85 (PID_BEEP_STATE).
+        # Stays "Unbekannt" until the device sends its first telemetry packet.
+        "led_white_device": _opt_bool(diag.get("led_white_device")),
+        "beep_device": _opt_bool(diag.get("beep_device")),
         # FW version – initialised to the bundled version; updated after OTA.
         "fw_version": diag.get("fw_version") or _UNK,
         # OTA configuration (from HA config entry – reflects what was provisioned
@@ -619,7 +658,6 @@ def _build_debug_payload(
         "raw_data": list(raw_history),
         "errors": list(error_log),
     }
-
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""

@@ -32,6 +32,7 @@ from .const import (
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_TOKEN,
     CONF_SERIAL_PORT,
+    CONF_SETTINGS_VERSION,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
@@ -362,6 +363,18 @@ class PublishCloudOtaButton(_FreematicsButton):
             )
             return
 
+        # Effective version: if NVS-relevant settings have changed since
+        # the last serial flash, CONF_SETTINGS_VERSION holds a timestamp
+        # appended to the firmware version.  This makes the debug sensor's
+        # "OTA letzte Version" attribute informative when only settings
+        # (LED, beep, WiFi, …) changed, not the firmware binary.
+        _settings_ver = self._cfg(CONF_SETTINGS_VERSION, "")
+        effective_version = (
+            f"{FIRMWARE_VERSION}.{_settings_ver}"
+            if _settings_ver
+            else FIRMWARE_VERSION
+        )
+
         def _publish() -> tuple[bool, str]:
             """Blocking file I/O – runs in a thread executor."""
             try:
@@ -392,7 +405,7 @@ class PublishCloudOtaButton(_FreematicsButton):
                 # prevent re-download loops without consuming this flag eagerly.
                 version_meta = {
                     "available": True,
-                    "version": FIRMWARE_VERSION,
+                    "version": effective_version,
                     "publish_id": publish_id,
                     "size": fw_size,
                     "sha256": fw_sha256,
@@ -405,7 +418,7 @@ class PublishCloudOtaButton(_FreematicsButton):
                 )
 
                 return True, (
-                    f"Published firmware v{FIRMWARE_VERSION} ({fw_size} bytes) "
+                    f"Published firmware v{effective_version} ({fw_size} bytes) "
                     f"to {target_dir} — "
                     f"accessible at /local/{_CLOUD_OTA_WWW_BASE}/{device_id}/"
                 )
@@ -441,7 +454,7 @@ class PublishCloudOtaButton(_FreematicsButton):
                     "Freematics Cloud OTA: firmware v%s is now available for the device. "
                     "Pull-OTA endpoint: /api/freematics/ota_pull/%s…/meta.json "
                     "(token masked). The device will check every %d seconds.",
-                    FIRMWARE_VERSION,
+                    effective_version,
                     ota_token[:8],
                     ota_interval,
                 )

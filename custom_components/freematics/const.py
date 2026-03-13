@@ -146,8 +146,10 @@ PID_MAP: dict[str, _PidMapping] = {
     "12":  ("hdop",          1.0),   # PID_GPS_HDOP
     "20":  ("acc",           1.0),   # PID_ACC: x;y;z in g (expanded to acc_x/y/z)
     "24":  ("battery",       0.01),  # PID_BATTERY_VOLTAGE: raw/100 → V
-    "81":  ("signal",        1.0),   # PID_CSQ: signal strength (dBm)
-    "82":  ("device_temp",   1.0),   # PID_DEVICE_TEMP (°C)
+    "81":  ("signal",           1.0),   # PID_CSQ: signal strength (dBm)
+    "82":  ("device_temp",     1.0),   # PID_DEVICE_TEMP (°C)
+    "84":  ("led_white_state", 1.0),   # PID_LED_WHITE_STATE: 1=on, 0=off (runtime enableLedWhite)
+    "85":  ("beep_state",      1.0),   # PID_BEEP_STATE: 1=on, 0=off (runtime enableBeep)
     # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
     "104": ("engine_load",        1.0),   # PID_ENGINE_LOAD (%)
     "105": ("coolant_temp",       1.0),   # PID_COOLANT_TEMP (°C)
