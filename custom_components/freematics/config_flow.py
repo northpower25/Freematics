@@ -28,6 +28,9 @@ from .const import (
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_OPERATING_MODE,
+    CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_MODE,
+    CONF_OTA_TOKEN,
     CONF_SERIAL_PORT,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
@@ -39,6 +42,8 @@ from .const import (
     CONN_TYPE_WIFI,
     DEFAULT_DATA_INTERVAL_MS,
     DEFAULT_DEVICE_PORT,
+    DEFAULT_OTA_CHECK_INTERVAL_S,
+    DEFAULT_OTA_MODE,
     DEFAULT_OPERATING_MODE,
     DEFAULT_SYNC_INTERVAL_S,
     DEVICE_MODEL_A,
@@ -48,8 +53,19 @@ from .const import (
     FLASH_METHOD_SERIAL,
     OPERATING_MODE_DATALOGGER,
     OPERATING_MODE_TELELOGGER,
+    OTA_MODE_CLOUD,
+    OTA_MODE_DISABLED,
+    OTA_MODE_PULL,
 )
 
+# Dropdown options for the OTA mode selector.  Defined once here so the same
+# labels appear in both the initial config flow (advanced step) and the options
+# flow without duplication.
+_OTA_MODE_OPTIONS: dict[str, str] = {
+    OTA_MODE_DISABLED: "Disabled – no automatic firmware updates",
+    OTA_MODE_PULL: "Variant 1 – Pull-OTA: device polls HA; HA always serves latest firmware",
+    OTA_MODE_CLOUD: "Variant 2 – Cloud OTA: device polls HA; firmware served only after you press 'Publish'",
+}
 
 class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Freematics ONE+.
@@ -234,6 +250,12 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Select operating mode and optional firmware tuning."""
         if user_input is not None:
             self._data.update(user_input)
+            # Auto-generate a persistent OTA token when the user enables
+            # pull-OTA or cloud-OTA, so it is embedded in NVS during the
+            # first flash without requiring a separate provisioning step.
+            ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
+            if ota_mode != OTA_MODE_DISABLED and not self._data.get(CONF_OTA_TOKEN):
+                self._data[CONF_OTA_TOKEN] = secrets.token_hex(32)
             return await self.async_step_flash()
 
         return self.async_show_form(
@@ -259,6 +281,12 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(
                         CONF_SYNC_INTERVAL_S, default=DEFAULT_SYNC_INTERVAL_S
                     ): vol.All(int, vol.Range(min=0, max=3600)),
+                    vol.Required(
+                        CONF_OTA_MODE, default=DEFAULT_OTA_MODE
+                    ): vol.In(_OTA_MODE_OPTIONS),
+                    vol.Optional(
+                        CONF_OTA_CHECK_INTERVAL_S, default=DEFAULT_OTA_CHECK_INTERVAL_S
+                    ): vol.All(int, vol.Range(min=0, max=86400)),
                 }
             ),
         )
@@ -323,6 +351,16 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         """Manage options."""
         if user_input is not None:
+            # Auto-generate an OTA token when the user enables OTA for the
+            # first time (switches away from disabled without a stored token).
+            ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
+            current_token = (
+                self._config_entry.options.get(CONF_OTA_TOKEN)
+                or self._config_entry.data.get(CONF_OTA_TOKEN, "")
+            )
+            if ota_mode != OTA_MODE_DISABLED and not current_token:
+                user_input = dict(user_input)
+                user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
             return self.async_create_entry(title="", data=user_input)
 
         current = {**self._config_entry.data, **self._config_entry.options}
@@ -397,6 +435,14 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                         CONF_SYNC_INTERVAL_S,
                         default=current.get(CONF_SYNC_INTERVAL_S, DEFAULT_SYNC_INTERVAL_S),
                     ): vol.All(int, vol.Range(min=0, max=3600)),
+                    vol.Required(
+                        CONF_OTA_MODE,
+                        default=current.get(CONF_OTA_MODE, DEFAULT_OTA_MODE),
+                    ): vol.In(_OTA_MODE_OPTIONS),
+                    vol.Optional(
+                        CONF_OTA_CHECK_INTERVAL_S,
+                        default=current.get(CONF_OTA_CHECK_INTERVAL_S, DEFAULT_OTA_CHECK_INTERVAL_S),
+                    ): vol.All(int, vol.Range(min=0, max=86400)),
                     vol.Optional(CONF_DEVICE_IP, default=current.get(CONF_DEVICE_IP, "")): str,
                     vol.Optional(CONF_DEVICE_PORT, default=current.get(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)): int,
                     vol.Optional(CONF_FLASH_METHOD, default=current.get(CONF_FLASH_METHOD, FLASH_METHOD_SERIAL)): vol.In(

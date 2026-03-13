@@ -28,6 +28,8 @@ from .const import (
     CONF_DEVICE_PORT,
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
+    CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_TOKEN,
     CONF_SERIAL_PORT,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
@@ -316,7 +318,11 @@ class PublishCloudOtaButton(_FreematicsButton):
                 fw_dest = target_dir / _CLOUD_OTA_FIRMWARE_FILENAME
                 fw_dest.write_bytes(fw_data)
 
-                # Write version metadata.
+                # Write version metadata with available=true.
+                # The Pull-OTA endpoint reads this file to determine whether a
+                # new firmware is waiting for download.  After the device has
+                # downloaded the binary, the endpoint resets available to false
+                # automatically.
                 version_meta = {
                     "available": True,
                     "version": FIRMWARE_VERSION,
@@ -341,5 +347,35 @@ class PublishCloudOtaButton(_FreematicsButton):
         ok, msg = await hass.async_add_executor_job(_publish)
         if ok:
             _LOGGER.info("Freematics Cloud OTA: %s", msg)
+
+            # Check whether the OTA pull feature is configured on the device.
+            ota_token = self._cfg(CONF_OTA_TOKEN, "")
+            ota_interval = int(self._cfg(CONF_OTA_CHECK_INTERVAL_S, 0))
+
+            if not ota_token:
+                _LOGGER.warning(
+                    "Freematics Cloud OTA: firmware published, but the device has no "
+                    "OTA token configured (OTA_TOKEN missing from NVS). "
+                    "The device cannot check for updates until you re-flash NVS via "
+                    "the serial flasher or browser provisioning. "
+                    "Set a non-zero OTA check interval in the integration settings first."
+                )
+            elif ota_interval == 0:
+                _LOGGER.warning(
+                    "Freematics Cloud OTA: firmware published, but the OTA check "
+                    "interval is 0 (disabled). The device will not poll for updates. "
+                    "Set a non-zero OTA check interval in Settings → Integrations → "
+                    "Freematics ONE+ → Configure, then re-provision the device "
+                    "(re-flash NVS) to apply the new interval."
+                )
+            else:
+                _LOGGER.info(
+                    "Freematics Cloud OTA: firmware v%s is now available for the device. "
+                    "Pull-OTA endpoint: /api/freematics/ota_pull/%s…/meta.json "
+                    "(token masked). The device will check every %d seconds.",
+                    FIRMWARE_VERSION,
+                    ota_token[:8],
+                    ota_interval,
+                )
         else:
             _LOGGER.error("Freematics Cloud OTA: %s", msg)
