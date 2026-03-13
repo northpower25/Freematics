@@ -2068,6 +2068,10 @@ bool performPullOtaCheck()
   snprintf(metaPath, sizeof(metaPath),
            "/api/freematics/ota_pull/%s/meta.json", otaToken);
 
+  // Log the URL for diagnostics with the token truncated for security.
+  Serial.printf("[OTA-PULL] URL: https://%s:%u/api/freematics/ota_pull/%.8s.../meta.json\n",
+                otaHost, (unsigned)otaPort, otaToken);
+
   // Temporarily disconnect the telemetry client so we can reuse the WiFi
   // stack for the OTA metadata fetch.  s_ota_active is NOT set here because
   // the meta-fetch is lightweight (< 200 bytes) and fast; we only set it
