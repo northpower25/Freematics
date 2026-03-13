@@ -356,6 +356,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "ota_last_version": None,
         # Firmware version – initialised to the bundled version; updated after OTA
         "fw_version": FIRMWARE_VERSION,
+        # Live device state for white LED and beep – updated when the device reports
+        # PID_LED_WHITE_STATE (0x84) / PID_BEEP_STATE (0x85) in its telemetry.
+        # None means "not yet reported by device".
+        "led_white_device": None,
+        "beep_device": None,
     }
 
     # OBD-II sensor keys (those that require an active OBD2 connection)
@@ -460,6 +465,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             diag["obd_active"] = True
             diag["last_obd_connection"] = now_iso
             diag["obd_services_seen"].update(obd_keys_present)
+
+        # Live LED/beep device state – firmware sends PID 0x84 (led_white_state)
+        # and 0x85 (beep_state) on first packet and whenever they change.
+        # Values are 1.0 (enabled) or 0.0 (disabled) after PID_MAP scale.
+        if "led_white_state" in data:
+            diag["led_white_device"] = bool(data["led_white_state"])
+        if "beep_state" in data:
+            diag["beep_device"] = bool(data["beep_state"])
 
         # Rate-limited device info refresh (SD card stats) via /api/info.
         # Only runs when CONF_DEVICE_IP is configured in the integration.
@@ -566,6 +579,12 @@ def _build_debug_payload(
     _JA = "Ja"
     _NEIN = "Nein"
 
+    def _opt_bool(value) -> str:
+        """Convert a bool-or-None diag value to Ja/Nein/Unbekannt."""
+        if value is None:
+            return _UNK
+        return _JA if value else _NEIN
+
     # SD card presence/storage – populated by _refresh_device_info() when
     # CONF_DEVICE_IP is configured; stays "Unbekannt" otherwise.
     _sd_present = diag.get("sd_present") or _UNK
@@ -618,6 +637,11 @@ def _build_debug_payload(
         # is available via webhook for these settings).
         "led_white_configured": _JA if led_white_en else _NEIN,
         "beep_configured": _JA if beep_en else _NEIN,
+        # Live device state – reported by the device in its telemetry webhook via
+        # PID 0x84 (PID_LED_WHITE_STATE) and 0x85 (PID_BEEP_STATE).
+        # Stays "Unbekannt" until the device sends its first telemetry packet.
+        "led_white_device": _opt_bool(diag.get("led_white_device")),
+        "beep_device": _opt_bool(diag.get("beep_device")),
         # FW version – initialised to the bundled version; updated after OTA.
         "fw_version": diag.get("fw_version") or _UNK,
         # OTA configuration (from HA config entry – reflects what was provisioned

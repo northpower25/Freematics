@@ -33,6 +33,10 @@
 #define PID_CSQ 0x81
 #define PID_DEVICE_TEMP 0x82
 #define PID_DEVICE_HALL 0x83
+// Runtime NVS settings reported back in telemetry so HA can track live state.
+// 0 = disabled/off, 1 = enabled/on.
+#define PID_LED_WHITE_STATE 0x84  // enableLedWhite: white/network LED runtime state
+#define PID_BEEP_STATE      0x85  // enableBeep: connection-beep runtime state
 #define PID_EXT_SENSOR1 0x90
 #define PID_EXT_SENSOR2 0x91
 

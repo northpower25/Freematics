@@ -718,9 +718,18 @@ void initialize()
         stagingValid = (actual == expectedSize);
       }
       if (stagingValid) {
-        s_ota_pending = true;
-        Serial.println("[OTA-PULL] Staged firmware found on SD — will flash at next standby");
-        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL PENDING_RESUME");
+        Serial.println("[OTA-PULL] Staged firmware found on SD — flashing at boot");
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL BOOT_FLASH");
+        // Flash immediately at boot: the telemetry task has not started yet so
+        // there is no need for s_ota_active synchronisation.  Flashing at boot
+        // also ensures the update is applied even on devices that never reach
+        // standby naturally (e.g. no OBD / no MEMS stationary timeout).
+        if (performPullOtaFlash()) {
+          // Flash succeeded; reboot timer is running — block here until it fires.
+          while (true) delay(1000);
+        }
+        // Flash failed (corrupt image etc.): staging files already cleaned up
+        // by performPullOtaFlash().  Continue normal boot.
       } else {
         SD.remove(OTA_PENDING_PATH);
         SD.remove(OTA_META_PATH);
@@ -947,6 +956,23 @@ void process()
     deviceTemp = readChipTemperature();
   }
   buffer->add(PID_DEVICE_TEMP, ELEMENT_INT32, &deviceTemp, sizeof(deviceTemp));
+
+  // Report white-LED and beep runtime state so HA can display live IST-Status.
+  // Uses a send-on-change pattern (static sentinel -1 triggers the first send).
+  {
+    static int8_t lastLedWhite = -1;
+    static int8_t lastBeep     = -1;
+    uint8_t lwv = enableLedWhite ? 1 : 0;
+    uint8_t bv  = enableBeep     ? 1 : 0;
+    if ((int8_t)lwv != lastLedWhite) {
+      lastLedWhite = (int8_t)lwv;
+      buffer->add(PID_LED_WHITE_STATE, ELEMENT_UINT8, &lwv, sizeof(lwv));
+    }
+    if ((int8_t)bv != lastBeep) {
+      lastBeep = (int8_t)bv;
+      buffer->add(PID_BEEP_STATE, ELEMENT_UINT8, &bv, sizeof(bv));
+    }
+  }
 
   buffer->timestamp = millis();
   buffer->state = BUFFER_STATE_FILLED;

@@ -241,6 +241,9 @@ class FreematicsDebugSensor(SensorEntity):
             # White LED and beep tone (configured via HA options flow)
             "led_white_configured": _u,
             "beep_configured": _u,
+            # White LED and beep tone live device state (reported by firmware via PID 0x84/0x85)
+            "led_white_device": _u,
+            "beep_device": _u,
             # OTA configuration (from HA config entry)
             "ota_mode": _u,
             "ota_token_set": _u,
@@ -297,10 +300,13 @@ class FreematicsDebugSensor(SensorEntity):
             # BLE
             "BLE eingestellt": d["ble_configured"],
             "BLE aktiv": d["ble_active"],
-            # White LED and beep tone – show what was provisioned into device NVS.
-            # These reflect the HA options-flow setting, not live device feedback.
+            # White LED and beep tone – what was provisioned into device NVS.
             "Weiße LED (Konfig)": d["led_white_configured"],
             "Beep Ton (Konfig)": d["beep_configured"],
+            # White LED and beep tone – live device state reported via telemetry webhook.
+            # "Unbekannt" until the device sends its first telemetry packet with PID 0x84/0x85.
+            "Weiße LED (IST)": d["led_white_device"],
+            "Beep Ton (IST)": d["beep_device"],
             # OTA configuration (from HA config entry – what was provisioned at last flash)
             "OTA Modus": d["ota_mode"],
             "OTA Token gesetzt": d["ota_token_set"],
