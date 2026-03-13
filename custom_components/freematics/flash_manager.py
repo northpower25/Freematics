@@ -160,7 +160,9 @@ async def async_send_config(
 ) -> tuple[bool, list[str]]:
     """Send configuration commands to a running device via /api/control.
 
-    config keys: wifi_ssid, wifi_password, cell_apn
+    config keys: wifi_ssid, wifi_password, cell_apn,
+                 ota_token, ota_host, ota_interval,
+                 led_white, led_red, beep.
     Returns (all_ok, list_of_result_messages).
     """
     try:
@@ -168,7 +170,17 @@ async def async_send_config(
     except ImportError:
         return False, ["aiohttp not available – cannot send config over WiFi."]
 
-    from .const import CMD_APN, CMD_SSID, CMD_WIFI_PWD  # noqa: PLC0415
+    from .const import (  # noqa: PLC0415
+        CMD_APN,
+        CMD_BEEP,
+        CMD_LED_RED,
+        CMD_LED_WHITE,
+        CMD_OTA_HOST,
+        CMD_OTA_INTERVAL,
+        CMD_OTA_TOKEN,
+        CMD_SSID,
+        CMD_WIFI_PWD,
+    )
 
     commands: list[tuple[str, str]] = []
     if "wifi_ssid" in config:
@@ -177,6 +189,18 @@ async def async_send_config(
         commands.append(("WPWD", CMD_WIFI_PWD.format(config["wifi_password"])))
     if "cell_apn" in config:
         commands.append(("APN", CMD_APN.format(config["cell_apn"] or "DEFAULT")))
+    if "ota_token" in config:
+        commands.append(("OTA_TOKEN", CMD_OTA_TOKEN.format(config["ota_token"] or "-")))
+    if "ota_host" in config:
+        commands.append(("OTA_HOST", CMD_OTA_HOST.format(config["ota_host"] or "-")))
+    if "ota_interval" in config:
+        commands.append(("OTA_INTERVAL", CMD_OTA_INTERVAL.format(int(config["ota_interval"]))))
+    if "led_white" in config:
+        commands.append(("LED_WHITE", CMD_LED_WHITE.format(1 if config["led_white"] else 0)))
+    if "led_red" in config:
+        commands.append(("LED_RED", CMD_LED_RED.format(1 if config["led_red"] else 0)))
+    if "beep" in config:
+        commands.append(("BEEP", CMD_BEEP.format(1 if config["beep"] else 0)))
 
     if not commands:
         return True, ["No config commands to send."]

@@ -2686,6 +2686,55 @@ void processBLE(int timeout)
     n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_PWD", strcmp(p, "-") ? p : "") == ESP_OK
         && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
     loadConfig();
+  } else if (!strncmp(cmd, "OTA_TOKEN=", 10)) {
+    // Provision (or clear) the pull-OTA authentication token in NVS.
+    // Use "-" or empty string to clear the token (disables OTA checks).
+    // Also updates the runtime variable so the next OTA check fires without
+    // a reboot (assuming OTA_INTERVAL is also set and otaHost is reachable).
+    const char* p = cmd + 10;
+    const bool clr = (p[0] == '\0' || (p[0] == '-' && p[1] == '\0'));
+    esp_err_t e = nvs_set_str(nvs, "OTA_TOKEN", clr ? "" : p);
+    if (e == ESP_OK) e = nvs_commit(nvs);
+    if (e == ESP_OK) {
+      size_t tlen = sizeof(otaToken);
+      otaToken[0] = 0;
+      nvs_get_str(nvs, "OTA_TOKEN", otaToken, &tlen);
+      // Ensure otaHost is set so performPullOtaCheck() can open a connection.
+      // If no dedicated OTA_HOST key is stored, fall back to serverHost.
+      if (!otaHost[0] && otaToken[0]) {
+        strncpy(otaHost, serverHost, sizeof(otaHost) - 1);
+        otaHost[sizeof(otaHost) - 1] = 0;
+      }
+    }
+    n += snprintf(buf + n, bufsize - n, e == ESP_OK ? "OK" : "ERR");
+  } else if (!strncmp(cmd, "OTA_HOST=", 9)) {
+    // Set the hostname (or IP) of the HA server that serves the pull-OTA
+    // endpoint.  Stored in NVS as OTA_HOST and applied at runtime.
+    // Use "-" to clear (firmware then falls back to serverHost).
+    const char* p = cmd + 9;
+    const bool clr = (p[0] == '-' && p[1] == '\0');
+    esp_err_t e = nvs_set_str(nvs, "OTA_HOST", clr ? "" : p);
+    if (e == ESP_OK) e = nvs_commit(nvs);
+    if (e == ESP_OK) {
+      size_t hlen = sizeof(otaHost);
+      otaHost[0] = 0;
+      nvs_get_str(nvs, "OTA_HOST", otaHost, &hlen);
+      // Same fallback as OTA_TOKEN handler: use serverHost when OTA_HOST is cleared.
+      if (!otaHost[0] && otaToken[0]) {
+        strncpy(otaHost, serverHost, sizeof(otaHost) - 1);
+        otaHost[sizeof(otaHost) - 1] = 0;
+      }
+    }
+    n += snprintf(buf + n, bufsize - n, e == ESP_OK ? "OK" : "ERR");
+  } else if (!strncmp(cmd, "OTA_INTERVAL=", 13)) {
+    // Set the pull-OTA check interval in seconds (0 = disable).
+    // Applied at runtime so the next check fires after this interval,
+    // without requiring a reboot.
+    uint16_t interval = (uint16_t)atoi(cmd + 13);
+    esp_err_t e = nvs_set_u16(nvs, "OTA_INTERVAL", interval);
+    if (e == ESP_OK) e = nvs_commit(nvs);
+    if (e == ESP_OK) otaCheckIntervalS = interval;
+    n += snprintf(buf + n, bufsize - n, e == ESP_OK ? "OK" : "ERR");
 #else
   } else if (!strcmp(cmd, "SSID?") || !strcmp(cmd, "WPWD?")) {
     n += snprintf(buf + n, bufsize - n, "-");
@@ -2745,6 +2794,27 @@ void processBLE(int timeout)
     n += snprintf(buf + n, bufsize - n, "%d", (int)(gd->speed * 1852 / 1000));
   } else if (!strcmp(cmd, "CRS") && gd) {
     n += snprintf(buf + n, bufsize - n, "%u", (unsigned int)gd->heading);
+  } else if (!strncmp(cmd, "LED_WHITE=", 10)) {
+    // Enable (1) or disable (0) the white/network LED at runtime and in NVS.
+    uint8_t v = (uint8_t)atoi(cmd + 10);
+    enableLedWhite = (v != 0);
+    esp_err_t e = nvs_set_u8(nvs, "LED_WHITE_EN", v);
+    if (e == ESP_OK) e = nvs_commit(nvs);
+    n += snprintf(buf + n, bufsize - n, e == ESP_OK ? "OK" : "ERR");
+  } else if (!strncmp(cmd, "LED_RED=", 8)) {
+    // Enable (1) or disable (0) the red/power LED at runtime and in NVS.
+    uint8_t v = (uint8_t)atoi(cmd + 8);
+    enableLedRed = (v != 0);
+    esp_err_t e = nvs_set_u8(nvs, "LED_RED_EN", v);
+    if (e == ESP_OK) e = nvs_commit(nvs);
+    n += snprintf(buf + n, bufsize - n, e == ESP_OK ? "OK" : "ERR");
+  } else if (!strncmp(cmd, "BEEP=", 5)) {
+    // Enable (1) or disable (0) the connection beep at runtime and in NVS.
+    uint8_t v = (uint8_t)atoi(cmd + 5);
+    enableBeep = (v != 0);
+    esp_err_t e = nvs_set_u8(nvs, "BEEP_EN", v);
+    if (e == ESP_OK) e = nvs_commit(nvs);
+    n += snprintf(buf + n, bufsize - n, e == ESP_OK ? "OK" : "ERR");
   } else {
     n += snprintf(buf + n, bufsize - n, "ERROR");
   }
