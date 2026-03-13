@@ -78,6 +78,7 @@ from .const import (
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
+    CONF_SETTINGS_VERSION,
     CONF_SIM_PIN,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
@@ -1439,7 +1440,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         if not token or entry_id is None:
             return web.Response(status=401, text="Invalid or unknown OTA token")
 
-        if filename not in ("meta.json", "firmware.bin"):
+        if filename not in ("meta.json", "firmware.bin", "nvs.bin"):
             return web.Response(status=404, text="Not found")
 
         # Locate this device's published firmware in the www/ directory.
@@ -1489,13 +1490,25 @@ class FreematicsOtaPullView(HomeAssistantView):
         _entry_cfg = {**(entry.data or {}), **(entry.options or {})}
         _ota_mode = _entry_cfg.get(CONF_OTA_MODE, OTA_MODE_CLOUD)
 
+        # Effective OTA version: combines firmware version with a settings
+        # timestamp so the device re-downloads firmware + NVS whenever HA
+        # settings change (WiFi, LED, BLE, etc.), not only when firmware changes.
+        # Format: "5.1.2026-03-13T14:23:34+00:00" or just "5.1" for legacy entries.
+        _settings_version = _entry_cfg.get(CONF_SETTINGS_VERSION, "")
+        effective_version = (
+            f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
+        )
+
+        # URL of the NVS settings binary endpoint (served by this same view).
+        _nvs_url = f"/api/freematics/ota_pull/{token}/nvs.bin"
+
         if filename == "meta.json":
             if _ota_mode == OTA_MODE_PULL:
                 # Variant 1: serve the latest firmware only when the device does
-                # not already have the current bundled version.  Track the last
-                # downloaded version in a per-device state file so the device
-                # does not re-download and re-flash on every OTA check interval
-                # (which would cause an infinite reboot loop).
+                # not already have the current effective version.  The effective
+                # version combines the firmware version with a settings timestamp
+                # so settings changes (WiFi, LED, BLE, etc.) also trigger a
+                # re-download of both firmware.bin and nvs.bin.
                 _pull_state_file = _www_dir / "ota_pull_state.json"
 
                 def _read_pull_state() -> dict:
@@ -1508,18 +1521,18 @@ class FreematicsOtaPullView(HomeAssistantView):
                     return web.Response(
                         body=json.dumps({
                             "available": False,
-                            "version": FIRMWARE_VERSION,
+                            "version": effective_version,
                         }).encode("utf-8"),
                         content_type="application/json",
                     )
 
                 pull_state = await hass.async_add_executor_job(_read_pull_state)
-                if pull_state.get("version") == FIRMWARE_VERSION:
-                    # Device already has the current bundled version.
+                if pull_state.get("version") == effective_version:
+                    # Device already has the current firmware + settings.
                     return web.Response(
                         body=json.dumps({
                             "available": False,
-                            "version": FIRMWARE_VERSION,
+                            "version": effective_version,
                         }).encode("utf-8"),
                         content_type="application/json",
                     )
@@ -1537,10 +1550,14 @@ class FreematicsOtaPullView(HomeAssistantView):
                 return web.Response(
                     body=json.dumps({
                         "available": True,
-                        "version": FIRMWARE_VERSION,
+                        "version": effective_version,
                         "size": fw_size,
                         "sha256": fw_sha256,
                         "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                        # nvs_url tells the firmware to also download the NVS
+                        # settings partition so WiFi, LED, BLE etc. are applied
+                        # without requiring a serial re-flash.
+                        "nvs_url": _nvs_url,
                     }).encode("utf-8"),
                     content_type="application/json",
                 )
@@ -1587,6 +1604,8 @@ class FreematicsOtaPullView(HomeAssistantView):
                         "size": fw_size,
                         "sha256": fw_sha256,
                         "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                        # nvs_url: also deliver current NVS settings alongside firmware.
+                        "nvs_url": _nvs_url,
                     }).encode("utf-8"),
                     content_type="application/json",
                 )
@@ -1598,6 +1617,67 @@ class FreematicsOtaPullView(HomeAssistantView):
                     "version": FIRMWARE_VERSION,
                 }).encode("utf-8"),
                 content_type="application/json",
+            )
+
+        if filename == "nvs.bin":
+            # Serve the generated NVS partition binary so the device can apply
+            # updated settings (WiFi, LED, BLE, etc.) without a serial re-flash.
+            # Accessible at GET /api/freematics/ota_pull/{token}/nvs.bin.
+            if _ota_mode == OTA_MODE_DISABLED:
+                return web.Response(status=404, text="OTA is disabled for this device")
+
+            kwargs = await _build_nvs_kwargs(hass, entry)
+            try:
+                from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
+                nvs_data: bytes | None = await hass.async_add_executor_job(
+                    generate_nvs_partition,
+                    kwargs["wifi_ssid"],
+                    kwargs["wifi_password"],
+                    kwargs["cell_apn"],
+                    kwargs["server_host"],
+                    kwargs["server_port"],
+                    kwargs["webhook_path"],
+                    kwargs["enable_httpd"],
+                    kwargs["enable_ble"],
+                    kwargs["data_interval_ms"],
+                    kwargs["sync_interval_s"],
+                    kwargs["sim_pin"],
+                    kwargs["cell_server_host"],
+                    kwargs["cell_server_port"],
+                    kwargs["cell_webhook_path"],
+                    kwargs["cell_debug"],
+                    kwargs.get("led_red_en", True),
+                    kwargs.get("led_white_en", True),
+                    kwargs.get("beep_en", True),
+                    kwargs.get("ota_token", ""),
+                    kwargs.get("ota_host", ""),
+                    kwargs.get("ota_port", 443),
+                    kwargs.get("ota_check_interval_s", 0),
+                )
+            except ImportError:
+                nvs_data = None
+
+            if nvs_data is None:
+                return web.Response(
+                    status=503,
+                    text=(
+                        "NVS partition generation failed. "
+                        "Install esp-idf-nvs-partition-gen: pip install esp-idf-nvs-partition-gen"
+                    ),
+                )
+
+            _LOGGER.info(
+                "Freematics pull-OTA: serving nvs.bin (%d bytes) to device (entry %s)",
+                len(nvs_data),
+                entry_id,
+            )
+            return web.Response(
+                body=nvs_data,
+                content_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": "attachment; filename=config_nvs.bin",
+                    "Cache-Control": "no-store",
+                },
             )
 
         # filename == "firmware.bin"
@@ -1662,7 +1742,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                 _www_dir.mkdir(parents=True, exist_ok=True)
                 try:
                     _pull_state_file.write_text(
-                        json.dumps({"version": FIRMWARE_VERSION, "downloaded_at": now_iso}, indent=2),
+                        json.dumps({"version": effective_version, "downloaded_at": now_iso}, indent=2),
                         encoding="utf-8",
                     )
                 except OSError as _exc:
