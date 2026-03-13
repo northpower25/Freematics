@@ -2282,13 +2282,27 @@ bool performPullOtaCheck()
         dlOk = false;
         break;
       }
-      if ((size_t)fwFile.write(s_otaChunkBuf, (size_t)n) != (size_t)n) {
-        Serial.printf("[OTA-PULL] SD write error at offset %u\n", (unsigned)written);
+      size_t nw = fwFile.write(s_otaChunkBuf, (size_t)n);
+      if (nw != (size_t)n) {
+        // First write attempt failed or was incomplete (SPI bus may have been
+        // momentarily held by the HTTPD task).  Retry once after a short pause.
+        // The data is still in s_otaChunkBuf so we can write the remainder.
+        Serial.printf("[OTA-PULL] SD write retry at offset %u (got %u/%u)\n",
+                      (unsigned)written, (unsigned)nw, (unsigned)n);
+        delay(50);
+        if (nw < (size_t)n) {
+          size_t nw2 = fwFile.write(s_otaChunkBuf + nw, (size_t)n - nw);
+          nw += nw2;
+        }
+        if (nw != (size_t)n) {
+          Serial.printf("[OTA-PULL] SD write error at offset %u\n", (unsigned)written);
 #if STORAGE != STORAGE_NONE
-        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_WRITE");
+          if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_WRITE");
 #endif
-        dlOk = false;
-        break;
+          dlOk = false;
+          break;
+        }
+        Serial.printf("[OTA-PULL] SD write retry succeeded at offset %u\n", (unsigned)written);
       }
       written += (size_t)n;
       if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
