@@ -860,6 +860,33 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     else:
         ota_token = cfg.get(CONF_OTA_TOKEN, "")
         ota_check_interval_s = int(cfg.get(CONF_OTA_CHECK_INTERVAL_S, 3600))
+        # Safety net: if OTA mode is enabled but no token exists yet (e.g. the
+        # entry was created before OTA support was added, or a migration left the
+        # token field empty), auto-generate one now and persist it so the NVS
+        # partition written to the device always carries a valid token.
+        if not ota_token:
+            import secrets as _secrets  # noqa: PLC0415
+            ota_token = _secrets.token_hex(32)
+            try:
+                hass.config_entries.async_update_entry(
+                    entry,
+                    options={**entry.options, CONF_OTA_TOKEN: ota_token},
+                )
+                # Also update the fast token→entry_id lookup cache so the first
+                # OTA request from the device does not require a full entry scan.
+                hass.data.setdefault(DOMAIN, {}).setdefault(
+                    "_ota_tokens", {}
+                )[ota_token] = entry.entry_id
+                _LOGGER.info(
+                    "Freematics: auto-generated missing OTA token for entry %s",
+                    entry.entry_id,
+                )
+            except Exception as _exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: could not persist auto-generated OTA token for entry %s: %s",
+                    entry.entry_id,
+                    _exc,
+                )
 
     # Determine the operating mode.  New entries use the operating_mode selector;
     # legacy pre-existing entries fall back to the old enable_httpd boolean.
