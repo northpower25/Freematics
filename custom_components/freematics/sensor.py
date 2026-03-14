@@ -248,6 +248,8 @@ class FreematicsDebugSensor(SensorEntity):
             "ota_mode": _u,
             "ota_token_set": _u,
             "ota_interval_s": _u,
+            # Full OTA meta.json URL the device uses (incl. token) – debug only
+            "ota_meta_url": _u,
             # OTA pull status – updated by FreematicsOtaPullView after each OTA event
             "ota_last_success": _u,   # ISO timestamp of last successful OTA flash
             "ota_last_error": _u,     # Error message from the last failed OTA attempt
@@ -311,6 +313,9 @@ class FreematicsDebugSensor(SensorEntity):
             "OTA Modus": d["ota_mode"],
             "OTA Token gesetzt": d["ota_token_set"],
             "OTA Prüfintervall (s)": d["ota_interval_s"],
+            # Full meta.json URL used by the device for OTA checks (incl. token).
+            # Paste this into a browser to manually verify the OTA endpoint.
+            "OTA Meta URL": d["ota_meta_url"],
             # OTA pull update status
             # Records firmware transmission time, not confirmed device application
             # (device may still fail SD write after HA serves the binary).
