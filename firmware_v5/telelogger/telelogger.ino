@@ -1792,22 +1792,68 @@ static bool _applyNvsFromSD()
     return false;
   }
   size_t nvsSize = nvsFile.size();
-  nvsFile.close();
 
   // Sanity check: the NVS image must be at least 4 KB and at most the full
   // partition size (20 KB).  Anything outside that range is corrupt.
   if (nvsSize < 4096 || nvsSize > 0x5000) {
+    nvsFile.close();
     Serial.printf("[OTA-PULL] NVS staging file has invalid size: %u — skipping\n",
                   (unsigned)nvsSize);
     SD.remove(OTA_NVS_PATH);
     return false;
   }
 
+  // Read the entire NVS image into a heap buffer BEFORE touching the NVS flash
+  // partition.  This is critical: if we erased the partition first and then
+  // encountered an SD read error mid-write, the device would reboot with a
+  // blank NVS — losing WiFi credentials, OTA_TOKEN, and all other settings.
+  // By buffering the full image first we guarantee that either (a) the SD read
+  // succeeds and we can safely erase + write, or (b) we leave the existing NVS
+  // intact and return false so the caller logs "rebooting with old NVS".
+  //
+  // Allocate nvsSize rounded up to a 4-byte boundary so the alignment padding
+  // applied to the last write chunk (esp_partition_write requires 4-byte-aligned
+  // sizes) never writes beyond the allocated region.
+  size_t nvsBufSize = (nvsSize + 3) & ~3UL;
+  uint8_t* nvsBuf = (uint8_t*)malloc(nvsBufSize);
+  if (!nvsBuf) {
+    nvsFile.close();
+    Serial.println("[OTA-PULL] NVS: not enough RAM to buffer image — skipping NVS update");
+    SD.remove(OTA_NVS_PATH);
+    return false;
+  }
+  // Pre-fill the alignment-padding tail with 0xFF so it is ready for the write.
+  if (nvsBufSize > nvsSize) {
+    memset(nvsBuf + nvsSize, 0xFF, nvsBufSize - nvsSize);
+  }
+
+  size_t readTotal = 0;
+  bool readOk = true;
+  while (readTotal < nvsSize) {
+    int toRead = (int)(nvsSize - readTotal);
+    if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+    int n = nvsFile.read(nvsBuf + readTotal, toRead);
+    if (n <= 0) {
+      Serial.printf("[OTA-PULL] NVS SD read error at offset %u\n", (unsigned)readTotal);
+      readOk = false;
+      break;
+    }
+    readTotal += (size_t)n;
+  }
+  nvsFile.close();
+  SD.remove(OTA_NVS_PATH);
+
+  if (!readOk || readTotal != nvsSize) {
+    free(nvsBuf);
+    Serial.println("[OTA-PULL] NVS staging file read incomplete — NVS unchanged");
+    return false;
+  }
+
   const esp_partition_t* nvsPart = esp_partition_find_first(
       ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "nvs");
   if (!nvsPart) {
+    free(nvsBuf);
     Serial.println("[OTA-PULL] NVS partition not found in partition table");
-    SD.remove(OTA_NVS_PATH);
     return false;
   }
 
@@ -1817,45 +1863,32 @@ static bool _applyNvsFromSD()
 
   esp_err_t err = esp_partition_erase_range(nvsPart, 0, nvsPart->size);
   if (err != ESP_OK) {
+    free(nvsBuf);
     Serial.printf("[OTA-PULL] NVS partition erase failed: %d\n", (int)err);
-    SD.remove(OTA_NVS_PATH);
     return false;
   }
 
-  // Write the NVS image in PULL_OTA_CHUNK_SIZE (4 KB) chunks.
-  nvsFile = SD.open(OTA_NVS_PATH, FILE_READ);
-  if (!nvsFile) {
-    Serial.println("[OTA-PULL] Cannot re-open NVS staging file after erase");
-    SD.remove(OTA_NVS_PATH);
-    return false;
-  }
+  // Write the buffered NVS image to the flash partition in PULL_OTA_CHUNK_SIZE
+  // (4 KB) chunks.  The SD file has already been read and removed above.
+  // The tail of nvsBuf was pre-filled with 0xFF so alignment padding for the
+  // last chunk is already in place — no per-chunk memset is needed.
   size_t written = 0;
   bool writeOk = true;
   while (written < nvsSize) {
-    int toRead = (int)(nvsSize - written);
-    if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
-    int n = nvsFile.read(s_otaChunkBuf, toRead);
-    if (n <= 0) {
-      Serial.printf("[OTA-PULL] NVS SD read error at offset %u\n", (unsigned)written);
-      writeOk = false;
-      break;
-    }
-    // esp_partition_write() requires 4-byte aligned size; pad to multiple of 4.
-    size_t aligned = ((size_t)n + 3) & ~3UL;
-    if (aligned > (size_t)n) {
-      memset(s_otaChunkBuf + n, 0xFF, aligned - (size_t)n);
-    }
-    err = esp_partition_write(nvsPart, written, s_otaChunkBuf, aligned);
+    size_t toWrite = nvsSize - written;
+    if (toWrite > PULL_OTA_CHUNK_SIZE) toWrite = PULL_OTA_CHUNK_SIZE;
+    // Round up to 4-byte boundary for esp_partition_write; tail bytes are 0xFF.
+    size_t aligned = (toWrite + 3) & ~3UL;
+    err = esp_partition_write(nvsPart, written, nvsBuf + written, aligned);
     if (err != ESP_OK) {
       Serial.printf("[OTA-PULL] NVS partition write failed at offset %u: %d\n",
                     (unsigned)written, (int)err);
       writeOk = false;
       break;
     }
-    written += (size_t)n;
+    written += toWrite;
   }
-  nvsFile.close();
-  SD.remove(OTA_NVS_PATH);
+  free(nvsBuf);
 
   if (!writeOk) {
     return false;
