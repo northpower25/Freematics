@@ -1767,89 +1767,131 @@ class FreematicsOtaPullView(HomeAssistantView):
         except OSError as exc:
             return web.Response(status=500, text=f"Cannot read firmware: {exc}")
 
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-
-        if _ota_mode == OTA_MODE_CLOUD:
-            # Record that this publish was served so meta.json can return
-            # available=false on subsequent checks (prevents re-download loops).
-            # We write ota_pull_state.json (same file as Pull-OTA) keyed by
-            # publish_id so pressing "Publish" again (which generates a new
-            # publish_id) automatically unblocks a fresh download.
-            # Unlike the old approach (setting version.json "available": false),
-            # version.json stays untouched so users can tell the publish is still
-            # active and simply press "Publish" again to allow a retry.
-            def _write_cloud_pull_state() -> None:
-                _www_dir.mkdir(parents=True, exist_ok=True)
-                try:
-                    (_www_dir / "ota_pull_state.json").write_text(
-                        json.dumps({"version": _pub_id, "downloaded_at": now_iso}, indent=2),
-                        encoding="utf-8",
-                    )
-                except OSError as _exc:
-                    _LOGGER.warning(
-                        "Freematics Cloud OTA: could not write ota_pull_state.json: %s", _exc
-                    )
-
-            await hass.async_add_executor_job(_write_cloud_pull_state)
-        else:
-            # Variant 1 (PULL mode): record the downloaded version so meta.json
-            # can return available=false until the bundled FIRMWARE_VERSION changes.
-            # This prevents the device from re-flashing the same firmware on every
-            # OTA check interval (which would cause an infinite reboot loop).
-            _pull_state_file = _www_dir / "ota_pull_state.json"
-
-            def _write_pull_state() -> None:
-                _www_dir.mkdir(parents=True, exist_ok=True)
-                try:
-                    _pull_state_file.write_text(
-                        json.dumps({"version": effective_version, "downloaded_at": now_iso}, indent=2),
-                        encoding="utf-8",
-                    )
-                except OSError as _exc:
-                    _LOGGER.warning(
-                        "Freematics pull-OTA: could not write ota_pull_state.json: %s", _exc
-                    )
-
-            await hass.async_add_executor_job(_write_pull_state)
-
         _fw_version = published.get("version", FIRMWARE_VERSION)
 
-        # Record the firmware-download event so the debug sensor can show
-        # "OTA firmware downloaded at <time>" to the user.  The device will
-        # flash and reboot shortly; we record the download timestamp here
-        # because the HA side has no direct hook for "flash complete".
-        for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
-            if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
-                _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
-                if _eid == entry_id:
-                    _diag = _entry_data["diag"]
-                    _diag["ota_last_success"] = now_iso
-                    _diag["ota_last_error"] = "Kein Fehler"
-                    _diag["ota_last_version"] = _fw_version
-                    _diag["fw_version"] = _fw_version
-                    async_dispatcher_send(
-                        hass,
-                        f"{DOMAIN}_{_webhook}_debug",
-                        {
-                            "ota_last_success": now_iso,
-                            "ota_last_error": "Kein Fehler",
-                            "ota_last_version": _fw_version,
-                            "fw_version": _fw_version,
-                        },
-                    )
-                    _LOGGER.info(
-                        "Freematics pull-OTA (%s): firmware v%s downloaded by device (entry %s)",
-                        _ota_mode,
-                        _fw_version,
-                        entry_id,
-                    )
-                    break
-
-        return web.Response(
-            body=firmware_data,
-            content_type="application/octet-stream",
+        # Stream the firmware binary to the device in 32 KB chunks.
+        #
+        # IMPORTANT: ota_pull_state.json is written ONLY AFTER the complete
+        # payload has been successfully transmitted.  Writing it earlier (before
+        # the HTTP response body is sent) caused a permanent "no update
+        # available" situation whenever the device aborted the download mid-
+        # stream — for example when an SD write error occurred at offset 0.
+        # In that case the device closes the TCP connection early and the
+        # asyncio transport raises an exception on the next write() call.  We
+        # catch that, skip the state-file write, and the device can therefore
+        # retry the download on its next OTA check interval without any
+        # operator intervention.
+        _ota_chunk_size = 32768  # 32 KB — small enough to detect disconnect promptly
+        _stream_resp = web.StreamResponse(
+            status=200,
             headers={
+                "Content-Type": "application/octet-stream",
                 "Content-Disposition": "attachment; filename=telelogger.bin",
                 "Cache-Control": "no-store",
+                "Content-Length": str(len(firmware_data)),
             },
         )
+        await _stream_resp.prepare(request)
+
+        _bytes_sent = 0
+        _fully_sent = False
+        try:
+            while _bytes_sent < len(firmware_data):
+                _chunk = firmware_data[_bytes_sent : _bytes_sent + _ota_chunk_size]
+                await _stream_resp.write(_chunk)
+                _bytes_sent += len(_chunk)
+            await _stream_resp.write_eof()
+            _fully_sent = True
+        except OSError:
+            # ConnectionResetError / BrokenPipeError / ConnectionAbortedError /
+            # SSLEOFError — all subclasses of OSError on CPython.  The device
+            # closed the TCP/TLS connection before receiving the full payload
+            # (e.g. SD write error caused firmware to abort the download).
+            _LOGGER.info(
+                "Freematics pull-OTA (%s): device disconnected after %d / %d bytes "
+                "— ota_pull_state.json NOT written; device will retry on next check",
+                _ota_mode,
+                _bytes_sent,
+                len(firmware_data),
+            )
+
+        if _fully_sent:
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+            # Record that the full firmware was delivered so meta.json returns
+            # available=false on subsequent checks (prevents re-download loops).
+            if _ota_mode == OTA_MODE_CLOUD:
+                # Keyed by publish_id: pressing "Publish" again generates a new
+                # publish_id, which automatically unblocks a fresh download.
+                def _write_cloud_pull_state() -> None:
+                    _www_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        (_www_dir / "ota_pull_state.json").write_text(
+                            json.dumps(
+                                {"version": _pub_id, "downloaded_at": now_iso},
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except OSError as _exc:
+                        _LOGGER.warning(
+                            "Freematics Cloud OTA: could not write ota_pull_state.json: %s",
+                            _exc,
+                        )
+
+                await hass.async_add_executor_job(_write_cloud_pull_state)
+            else:
+                # Pull-OTA (Variant 1): keyed by effective_version.
+                _pull_state_file = _www_dir / "ota_pull_state.json"
+
+                def _write_pull_state() -> None:
+                    _www_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        _pull_state_file.write_text(
+                            json.dumps(
+                                {"version": effective_version, "downloaded_at": now_iso},
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except OSError as _exc:
+                        _LOGGER.warning(
+                            "Freematics pull-OTA: could not write ota_pull_state.json: %s",
+                            _exc,
+                        )
+
+                await hass.async_add_executor_job(_write_pull_state)
+
+            # Update the debug sensor to reflect the successful transmission.
+            # fw_version is NOT updated here because we can't confirm the device
+            # actually applied the firmware to its flash partition (it may still
+            # fail at the SD→flash step).  ota_last_version records the version
+            # that was transmitted so the user can see what the device last
+            # attempted to stage, even without confirmed application.
+            for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
+                if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
+                    _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
+                    if _eid == entry_id:
+                        _diag = _entry_data["diag"]
+                        _diag["ota_last_success"] = now_iso
+                        _diag["ota_last_error"] = "Kein Fehler"
+                        _diag["ota_last_version"] = _fw_version
+                        async_dispatcher_send(
+                            hass,
+                            f"{DOMAIN}_{_webhook}_debug",
+                            {
+                                "ota_last_success": now_iso,
+                                "ota_last_error": "Kein Fehler",
+                                "ota_last_version": _fw_version,
+                            },
+                        )
+                        _LOGGER.info(
+                            "Freematics pull-OTA (%s): firmware v%s fully transmitted "
+                            "to device (entry %s)",
+                            _ota_mode,
+                            _fw_version,
+                            entry_id,
+                        )
+                        break
+
+        return _stream_resp
