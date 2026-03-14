@@ -186,6 +186,14 @@ volatile bool s_ota_active = false;
 // Also set at startup when a previously staged file is found on SD.
 static volatile bool s_ota_pending = false;
 
+// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85).
+// Initialised to -1 so the first call to process() always adds the PIDs to the
+// buffer.  Reset back to -1 whenever the telemetry connection drops (bufman is
+// purged) so the current state is re-sent after every reconnect — preventing a
+// "Unbekannt" IST-Status in Home Assistant when the first transmission fails.
+static int8_t s_lastLedWhite = -1;
+static int8_t s_lastBeep     = -1;
+
 // Pull-OTA constants used in initialize(), standby(), performPullOtaFlash(),
 // and performPullOtaCheck().  Defined here (before any function body) so that
 // all translation-unit uses see them regardless of source order.
@@ -955,18 +963,20 @@ void process()
   buffer->add(PID_DEVICE_TEMP, ELEMENT_INT32, &deviceTemp, sizeof(deviceTemp));
 
   // Report white-LED and beep runtime state so HA can display live IST-Status.
-  // Uses a send-on-change pattern (static sentinel -1 triggers the first send).
+  // Uses the file-scope sentinels s_lastLedWhite / s_lastBeep (both initialised
+  // to -1 and reset to -1 on every telemetry reconnect via bufman.purge()) so
+  // the current state is always re-sent after a connection drop, preventing a
+  // permanent "Unbekannt" IST-Status in Home Assistant when the very first
+  // transmission attempt fails and the buffer is subsequently purged.
   {
-    static int8_t lastLedWhite = -1;
-    static int8_t lastBeep     = -1;
     uint8_t lwv = enableLedWhite ? 1 : 0;
     uint8_t bv  = enableBeep     ? 1 : 0;
-    if ((int8_t)lwv != lastLedWhite) {
-      lastLedWhite = (int8_t)lwv;
+    if ((int8_t)lwv != s_lastLedWhite) {
+      s_lastLedWhite = (int8_t)lwv;
       buffer->add(PID_LED_WHITE_STATE, ELEMENT_UINT8, &lwv, sizeof(lwv));
     }
-    if ((int8_t)bv != lastBeep) {
-      lastBeep = (int8_t)bv;
+    if ((int8_t)bv != s_lastBeep) {
+      s_lastBeep = (int8_t)bv;
       buffer->add(PID_BEEP_STATE, ELEMENT_UINT8, &bv, sizeof(bv));
     }
   }
@@ -1201,6 +1211,12 @@ void telemetry(void* inst)
       state.clear(STATE_NET_READY | STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
       teleClient.reset();
       bufman.purge();
+      // Reset LED/beep sentinels so the current state is re-sent in the first
+      // buffer after the connection is re-established.  Without this reset the
+      // state-change detection would suppress the PIDs (value unchanged) and
+      // Home Assistant would keep showing "Unbekannt" for the IST-Status.
+      s_lastLedWhite = -1;
+      s_lastBeep     = -1;
 
       uint32_t t = millis();
       do {
