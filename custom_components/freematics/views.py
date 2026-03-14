@@ -1050,22 +1050,51 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
             )
 
     # Step 3 – resolve OTA pull host/port.  The pull-OTA endpoint lives on the
-    # HA instance itself, not on hooks.nabu.casa.  When Nabu Casa cloud is
-    # active, server_host is already set to hooks.nabu.casa (for the telemetry
-    # webhook); OTA_HOST must point to the actual HA server that serves
-    # /api/freematics/ota_pull/…  Use get_url(prefer_external=True) for this
-    # so that the device can reach the OTA endpoint from outside the home
-    # network when it is away from home (e.g., using the NabuCasa Remote UI
-    # URL *.ui.nabu.casa or a user-configured external URL).
+    # HA instance itself.  Prefer the Nabu Casa Remote UI URL (*.ui.nabu.casa)
+    # when available: it is publicly reachable from any network (home WiFi,
+    # LTE/cellular, etc.) so the device can always check for and download
+    # firmware updates even when away from home.  Falls back to
+    # get_url(prefer_external=True) for installations without Nabu Casa.
     ota_host = ""
     ota_port = 443
     if ota_token:
+        _ota_base = None
+
+        # 1. Prefer Nabu Casa Remote UI (*.ui.nabu.casa) – reachable from any
+        #    network including LTE.  async_remote_ui_url() raises when the
+        #    Remote UI is not active; we catch broadly and fall through.
         try:
-            from homeassistant.helpers.network import (  # noqa: PLC0415
-                NoURLAvailableError,
-                get_url,
+            from homeassistant.components import cloud as _ota_cloud  # noqa: PLC0415
+            if _ota_cloud.async_is_logged_in(hass):
+                _ota_base = _ota_cloud.async_remote_ui_url(hass)
+        except Exception as _exc:  # noqa: BLE001
+            _LOGGER.debug(
+                "Freematics: Nabu Casa Remote UI not available for OTA host (%s); "
+                "falling back to get_url(prefer_external=True).",
+                _exc,
             )
-            _ota_base = get_url(hass, prefer_external=True)
+
+        # 2. Fall back to any configured external URL (non-Nabu Casa setups).
+        if not _ota_base:
+            try:
+                from homeassistant.helpers.network import (  # noqa: PLC0415
+                    NoURLAvailableError,
+                    get_url,
+                )
+                _ota_base = get_url(hass, prefer_external=True)
+            except NoURLAvailableError:
+                _LOGGER.warning(
+                    "Freematics: cannot resolve HA external URL for pull-OTA; "
+                    "OTA_HOST will not be provisioned in NVS.  Configure an external "
+                    "URL or Nabu Casa cloud for pull-OTA to work."
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: unexpected error resolving HA external URL for pull-OTA; "
+                    "OTA_HOST will not be provisioned in NVS."
+                )
+
+        if _ota_base:
             _ota_parsed = urlparse(_ota_base)
             ota_host = _ota_parsed.hostname or ""
             if _ota_parsed.port:
@@ -1074,17 +1103,6 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                 ota_port = 443
             else:
                 ota_port = 80
-        except NoURLAvailableError:
-            _LOGGER.warning(
-                "Freematics: cannot resolve HA external URL for pull-OTA; "
-                "OTA_HOST will not be provisioned in NVS.  Configure an external "
-                "URL or Nabu Casa cloud for pull-OTA to work."
-            )
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning(
-                "Freematics: unexpected error resolving HA external URL for pull-OTA; "
-                "OTA_HOST will not be provisioned in NVS."
-            )
 
     return {
         "wifi_ssid": wifi_ssid,

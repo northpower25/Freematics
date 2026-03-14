@@ -315,6 +315,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _ota_mode: str = _cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
     _ota_token_set: bool = bool(_cfg.get(CONF_OTA_TOKEN, ""))
     _ota_interval_s: int = int(_cfg.get(CONF_OTA_CHECK_INTERVAL_S, 0))
+    # Build the full OTA meta.json URL as the device uses it.
+    # Priority: Nabu Casa Remote UI (*.ui.nabu.casa) > generic external URL.
+    # Shown in the debug sensor so the user can paste it into a browser for
+    # quick manual testing of the OTA endpoint.
+    _ota_token: str = _cfg.get(CONF_OTA_TOKEN, "")
+    _ota_meta_url: str = ""
+    if _ota_token:
+        _ota_base: str = ""
+        try:
+            from homeassistant.components import cloud as _ota_cloud  # noqa: PLC0415
+            if _ota_cloud.async_is_logged_in(hass):
+                _ota_base = _ota_cloud.async_remote_ui_url(hass)
+        except Exception as _exc:  # noqa: BLE001
+            _LOGGER.debug(
+                "Freematics: Nabu Casa Remote UI not available for OTA meta URL (%s); "
+                "falling back to get_url().",
+                _exc,
+            )
+        if not _ota_base:
+            try:
+                from homeassistant.helpers.network import (  # noqa: PLC0415
+                    get_url,
+                    NoURLAvailableError,
+                )
+                _ota_base = get_url(hass, prefer_external=True)
+            except Exception as _exc:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Freematics: could not resolve HA external URL for OTA meta URL (%s); "
+                    "'OTA Meta URL' attribute will show 'Unbekannt'.",
+                    _exc,
+                )
+        if _ota_base:
+            _ota_meta_url = (
+                f"{_ota_base.rstrip('/')}/api/freematics/ota_pull"
+                f"/{_ota_token}/meta.json"
+            )
     # Device IP for querying /api/info (SD card info).  May be empty.
     _device_ip: str = _cfg.get(CONF_DEVICE_IP, "")
     # Datalogger mode: HTTPD is the primary API; telelogger mode: HTTPD is still
@@ -499,6 +535,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _httpd_port, _ble_enabled,
                 _ota_mode, _ota_token_set, _ota_interval_s,
                 _led_white_en, _beep_en,
+                _ota_meta_url,
             ),
         )
 
@@ -557,6 +594,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _httpd_port, _ble_enabled,
             _ota_mode, _ota_token_set, _ota_interval_s,
             _led_white_en, _beep_en,
+            _ota_meta_url,
         ),
     }
 
@@ -591,6 +629,7 @@ def _build_debug_payload(
     ota_interval_s: int = 0,
     led_white_en: bool = True,
     beep_en: bool = True,
+    ota_meta_url: str = "",
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
@@ -670,6 +709,10 @@ def _build_debug_payload(
         "ota_mode": _ota_mode_label,
         "ota_token_set": _JA if ota_token_set else _NEIN,
         "ota_interval_s": ota_interval_s if ota_interval_s > 0 else _UNK,
+        # Full meta.json URL that the device uses for OTA checks (incl. token).
+        # The host is the Nabu Casa Remote UI URL when available so the device
+        # can reach HA from any network (WiFi or LTE).  Useful for manual testing.
+        "ota_meta_url": ota_meta_url or _UNK,
         # OTA pull runtime status (updated by FreematicsOtaPullView on OTA events)
         "ota_last_success": diag.get("ota_last_success") or _UNK,
         "ota_last_error": diag.get("ota_last_error") or _UNK,
