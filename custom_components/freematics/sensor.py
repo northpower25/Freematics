@@ -312,7 +312,9 @@ class FreematicsDebugSensor(SensorEntity):
             "OTA Token gesetzt": d["ota_token_set"],
             "OTA Prüfintervall (s)": d["ota_interval_s"],
             # OTA pull update status
-            "OTA letzter Erfolg": d["ota_last_success"],
+            # Records firmware transmission time, not confirmed device application
+            # (device may still fail SD write after HA serves the binary).
+            "OTA letzte Übertragung": d["ota_last_success"],
             "OTA letzter Fehler": d["ota_last_error"],
             "OTA letzte Version": d["ota_last_version"],
             # Raw debug data

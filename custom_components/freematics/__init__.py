@@ -354,7 +354,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "ota_last_success": None,
         "ota_last_error": None,
         "ota_last_version": None,
-        # Firmware version – initialised to the bundled version; updated after OTA
+        # Firmware version – initialised to the bundled FIRMWARE_VERSION.
+        # This reflects the version known to be running on the device after a
+        # serial flash.  It is NOT updated from the OTA serve path because the
+        # HA server cannot confirm whether the device successfully applied the
+        # transmitted firmware (the device may fail to write it to its SD
+        # staging area).
         "fw_version": FIRMWARE_VERSION,
         # Live device state for white LED and beep – updated when the device reports
         # PID_LED_WHITE_STATE (0x84) / PID_BEEP_STATE (0x85) in its telemetry.
@@ -556,6 +561,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Reload the config entry whenever the user saves new options so that the
+    # webhook handler closure (which captures _led_white_en, _beep_en and all
+    # other config-derived values at setup time) picks up the updated values.
+    # Without this, changes made via the Options Flow would not be reflected in
+    # the debug entity until the next full HA restart.
+    async def _async_reload_on_options_update(
+        hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        await hass.config_entries.async_reload(entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_update))
+
     return True
 
 
@@ -642,7 +660,9 @@ def _build_debug_payload(
         # Stays "Unbekannt" until the device sends its first telemetry packet.
         "led_white_device": _opt_bool(diag.get("led_white_device")),
         "beep_device": _opt_bool(diag.get("beep_device")),
-        # FW version – initialised to the bundled version; updated after OTA.
+        # FW version – shows the bundled FIRMWARE_VERSION (what was last serially
+        # flashed to the device).  Not updated from the OTA serve path because
+        # we cannot confirm the device applied the firmware; see diag["fw_version"].
         "fw_version": diag.get("fw_version") or _UNK,
         # OTA configuration (from HA config entry – reflects what was provisioned
         # into device NVS at last flash).  Shows the user immediately whether OTA

@@ -1814,10 +1814,14 @@ class FreematicsOtaPullView(HomeAssistantView):
 
         _fw_version = published.get("version", FIRMWARE_VERSION)
 
-        # Record the firmware-download event so the debug sensor can show
-        # "OTA firmware downloaded at <time>" to the user.  The device will
-        # flash and reboot shortly; we record the download timestamp here
-        # because the HA side has no direct hook for "flash complete".
+        # Record the firmware-delivery event so the debug sensor can show
+        # "OTA firmware transmitted at <time>" to the user.  Note: this records
+        # when the HA server SERVED the binary, not when the device confirmed a
+        # successful flash.  The device may still fail to write the firmware to
+        # its SD staging area (e.g. SD write error) even though HA served the
+        # file.  fw_version is intentionally NOT updated here because we cannot
+        # verify that the device actually applied the firmware; it stays at the
+        # last confirmed value (set at serial-flash time).
         for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
             if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
                 _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
@@ -1826,7 +1830,6 @@ class FreematicsOtaPullView(HomeAssistantView):
                     _diag["ota_last_success"] = now_iso
                     _diag["ota_last_error"] = "Kein Fehler"
                     _diag["ota_last_version"] = _fw_version
-                    _diag["fw_version"] = _fw_version
                     async_dispatcher_send(
                         hass,
                         f"{DOMAIN}_{_webhook}_debug",
@@ -1834,11 +1837,10 @@ class FreematicsOtaPullView(HomeAssistantView):
                             "ota_last_success": now_iso,
                             "ota_last_error": "Kein Fehler",
                             "ota_last_version": _fw_version,
-                            "fw_version": _fw_version,
                         },
                     )
                     _LOGGER.info(
-                        "Freematics pull-OTA (%s): firmware v%s downloaded by device (entry %s)",
+                        "Freematics pull-OTA (%s): firmware v%s transmitted to device (entry %s)",
                         _ota_mode,
                         _fw_version,
                         entry_id,
