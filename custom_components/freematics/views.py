@@ -1545,8 +1545,11 @@ class FreematicsOtaPullView(HomeAssistantView):
                     )
 
                 pull_state = await hass.async_add_executor_job(_read_pull_state)
-                if pull_state.get("version") == effective_version:
-                    # Device already has the current firmware + settings.
+                if (
+                    pull_state.get("version") == effective_version
+                    and pull_state.get("nvs_version") == effective_version
+                ):
+                    # Device already has the current firmware + NVS settings.
                     return web.Response(
                         body=json.dumps({
                             "available": False,
@@ -1587,7 +1590,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                     return web.Response(
                         body=json.dumps({
                             "available": False,
-                            "version": FIRMWARE_VERSION,
+                            "version": effective_version,
                         }).encode("utf-8"),
                         content_type="application/json",
                     )
@@ -1597,7 +1600,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                     return web.Response(
                         body=json.dumps({
                             "available": False,
-                            "version": published.get("version", FIRMWARE_VERSION),
+                            "version": published.get("version") or effective_version,
                         }).encode("utf-8"),
                         content_type="application/json",
                     )
@@ -1609,7 +1612,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                 # again to force a retry after a failed download.
                 # Fall back to the version string for backwards-compat with old
                 # version.json files that do not have a publish_id.
-                _publish_id = published.get("publish_id") or published.get("version", FIRMWARE_VERSION)
+                _publish_id = published.get("publish_id") or published.get("version") or FIRMWARE_VERSION
                 _cloud_pull_state_file = _www_dir / "ota_pull_state.json"
 
                 def _read_cloud_pull_state() -> dict:
@@ -1619,13 +1622,17 @@ class FreematicsOtaPullView(HomeAssistantView):
                         return {}
 
                 cloud_pull_state = await hass.async_add_executor_job(_read_cloud_pull_state)
-                if cloud_pull_state.get("version") == _publish_id:
-                    # This publish was already downloaded by the device.  The device
-                    # will have staged the firmware for flashing at its next standby.
+                if (
+                    cloud_pull_state.get("version") == _publish_id
+                    and cloud_pull_state.get("nvs_version") == effective_version
+                ):
+                    # Both firmware and NVS settings are current for this publish.
+                    # The device has staged the firmware for flashing at its next
+                    # standby and has received the latest NVS settings binary.
                     return web.Response(
                         body=json.dumps({
                             "available": False,
-                            "version": published.get("version", FIRMWARE_VERSION),
+                            "version": published.get("version") or effective_version,
                         }).encode("utf-8"),
                         content_type="application/json",
                     )
@@ -1646,7 +1653,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                 return web.Response(
                     body=json.dumps({
                         "available": True,
-                        "version": published.get("version", FIRMWARE_VERSION),
+                        "version": published.get("version") or effective_version,
                         "size": fw_size,
                         "sha256": fw_sha256,
                         "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
@@ -1660,7 +1667,7 @@ class FreematicsOtaPullView(HomeAssistantView):
             return web.Response(
                 body=json.dumps({
                     "available": False,
-                    "version": FIRMWARE_VERSION,
+                    "version": effective_version,
                 }).encode("utf-8"),
                 content_type="application/json",
             )
@@ -1717,6 +1724,34 @@ class FreematicsOtaPullView(HomeAssistantView):
                 len(nvs_data),
                 entry_id,
             )
+
+            # Record that the NVS settings binary was served so that subsequent
+            # meta.json checks can confirm nvs_version matches effective_version.
+            # This allows the server to re-deliver the NVS (alongside firmware)
+            # if settings change between two firmware downloads.
+            _nvs_state_file = _www_dir / "ota_pull_state.json"
+
+            def _update_nvs_version_in_state() -> None:
+                """Merge nvs_version into ota_pull_state.json (blocking I/O)."""
+                try:
+                    _state = json.loads(_nvs_state_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    _state = {}
+                try:
+                    _state["nvs_version"] = effective_version
+                    _www_dir.mkdir(parents=True, exist_ok=True)
+                    _nvs_state_file.write_text(
+                        json.dumps(_state, indent=2), encoding="utf-8"
+                    )
+                except OSError as _exc:
+                    _LOGGER.warning(
+                        "Freematics pull-OTA: could not update nvs_version in "
+                        "ota_pull_state.json: %s",
+                        _exc,
+                    )
+
+            await hass.async_add_executor_job(_update_nvs_version_in_state)
+
             return web.Response(
                 body=nvs_data,
                 content_type="application/octet-stream",
@@ -1751,8 +1786,11 @@ class FreematicsOtaPullView(HomeAssistantView):
                     ),
                 )
             # Also gate on the pull_state: if this exact publish_id was already
-            # served to the device, reject duplicate requests.
-            _pub_id = published.get("publish_id") or published.get("version", FIRMWARE_VERSION)
+            # served to the device AND the NVS settings are current, reject
+            # duplicate requests.  If the NVS version is outdated (settings
+            # changed since the last download), allow re-download so the device
+            # gets the updated NVS alongside the firmware.
+            _pub_id = published.get("publish_id") or published.get("version") or FIRMWARE_VERSION
             _cloud_ps_file = _www_dir / "ota_pull_state.json"
 
             def _read_cloud_ps() -> dict:
@@ -1762,7 +1800,10 @@ class FreematicsOtaPullView(HomeAssistantView):
                     return {}
 
             _cloud_ps = await hass.async_add_executor_job(_read_cloud_ps)
-            if _cloud_ps.get("version") == _pub_id:
+            if (
+                _cloud_ps.get("version") == _pub_id
+                and _cloud_ps.get("nvs_version") == effective_version
+            ):
                 return web.Response(
                     status=404,
                     text=(
@@ -1785,7 +1826,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         except OSError as exc:
             return web.Response(status=500, text=f"Cannot read firmware: {exc}")
 
-        _fw_version = published.get("version", FIRMWARE_VERSION)
+        _fw_version = published.get("version") or effective_version
 
         # Stream the firmware binary to the device in 32 KB chunks.
         #
@@ -1838,6 +1879,15 @@ class FreematicsOtaPullView(HomeAssistantView):
 
             # Record that the full firmware was delivered so meta.json returns
             # available=false on subsequent checks (prevents re-download loops).
+            # nvs_version is also written speculatively: if the device is running
+            # firmware that does not support nvs_url it will not request nvs.bin,
+            # but we record the current effective_version so future meta.json checks
+            # do not trigger a re-download solely because nvs_version was never set.
+            # When the device DOES request nvs.bin (firmware with nvs_url support),
+            # the nvs.bin handler overwrites nvs_version with the confirmed value.
+            # When settings change (effective_version bumps), nvs_version becomes
+            # stale and the next meta.json check returns available=true so the device
+            # downloads firmware + the updated NVS together.
             if _ota_mode == OTA_MODE_CLOUD:
                 # Keyed by publish_id: pressing "Publish" again generates a new
                 # publish_id, which automatically unblocks a fresh download.
@@ -1846,7 +1896,11 @@ class FreematicsOtaPullView(HomeAssistantView):
                     try:
                         (_www_dir / "ota_pull_state.json").write_text(
                             json.dumps(
-                                {"version": _pub_id, "downloaded_at": now_iso},
+                                {
+                                    "version": _pub_id,
+                                    "nvs_version": effective_version,
+                                    "downloaded_at": now_iso,
+                                },
                                 indent=2,
                             ),
                             encoding="utf-8",
@@ -1867,7 +1921,11 @@ class FreematicsOtaPullView(HomeAssistantView):
                     try:
                         _pull_state_file.write_text(
                             json.dumps(
-                                {"version": effective_version, "downloaded_at": now_iso},
+                                {
+                                    "version": effective_version,
+                                    "nvs_version": effective_version,
+                                    "downloaded_at": now_iso,
+                                },
                                 indent=2,
                             ),
                             encoding="utf-8",
