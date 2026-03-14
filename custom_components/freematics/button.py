@@ -30,6 +30,7 @@ from .const import (
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_MODE,
     CONF_OTA_TOKEN,
     CONF_SERIAL_PORT,
     CONF_SETTINGS_VERSION,
@@ -39,6 +40,7 @@ from .const import (
     DEFAULT_DEVICE_PORT,
     DOMAIN,
     FIRMWARE_VERSION,
+    OTA_MODE_DISABLED,
 )
 from .flash_manager import (
     CONTROL_PATH,
@@ -267,6 +269,32 @@ class SendConfigButton(_FreematicsButton):
         cfg["led_white"] = bool(self._cfg(CONF_LED_WHITE_EN, True))
         cfg["led_red"]   = bool(self._cfg(CONF_LED_RED_EN, True))
         cfg["beep"]      = bool(self._cfg(CONF_BEEP_EN, True))
+
+        # Push OTA settings when OTA mode is enabled so that a device that was
+        # serial-flashed before OTA was configured can be provisioned with the
+        # OTA token without a full re-flash.  After receiving OTA_TOKEN the
+        # firmware's telemetry loop fires an OTA check immediately (since
+        # lastOtaCheckMs is 0 until the first successful check).
+        ota_mode = self._cfg(CONF_OTA_MODE, OTA_MODE_DISABLED)
+        ota_token = self._cfg(CONF_OTA_TOKEN, "")
+        ota_interval = int(self._cfg(CONF_OTA_CHECK_INTERVAL_S, 0))
+        if ota_mode != OTA_MODE_DISABLED and ota_token:
+            cfg["ota_token"] = ota_token
+            cfg["ota_interval"] = ota_interval
+            # Resolve OTA host (Nabu Casa Remote UI or external URL).
+            hass: HomeAssistant = self.hass  # type: ignore[attr-defined]
+            from .views import _build_nvs_kwargs  # noqa: PLC0415
+            try:
+                nvs_kwargs = await _build_nvs_kwargs(hass, self._entry)
+                ota_host = nvs_kwargs.get("ota_host", "")
+                if ota_host:
+                    cfg["ota_host"] = ota_host
+            except Exception as _exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: could not resolve OTA host for config push (%s); "
+                    "device will fall back to SERVER_HOST for OTA.",
+                    _exc,
+                )
 
         _LOGGER.info("Freematics: sending config to %s:%s", device_ip, device_port)
         ok, results = await async_send_config(device_ip, device_port, cfg)
