@@ -1330,6 +1330,33 @@ void telemetry(void* inst)
 #endif
       }
 
+      // Periodic pull-OTA check: runs whenever WiFi or cellular is connected
+      // and OTA_TOKEN + OTA_INTERVAL are provisioned.  Moved here (before the
+      // empty-buffer continue) so the check fires even when OBD2/GPS are
+      // inactive and no telemetry data is being collected — the previous
+      // placement after the buffer-serialisation block caused the check to be
+      // skipped entirely whenever the buffer was empty.  The check is
+      // rate-limited by otaCheckIntervalS; 0 means disabled.
+      //
+      // For STORAGE_SD: performPullOtaCheck() downloads the binary to SD and
+      // returns false (no reboot yet).  The flash happens in standby().
+      // For other storage: returns true when direct flash has started (reboot
+      // imminent) so the caller blocks here waiting for the reboot timer.
+      if (otaToken[0] && otaCheckIntervalS > 0 &&
+          (state.check(STATE_WIFI_CONNECTED) || state.check(STATE_CELL_CONNECTED))) {
+        static uint32_t lastOtaCheckMs = 0;
+        uint32_t nowMs = millis();
+        if (lastOtaCheckMs == 0 || nowMs - lastOtaCheckMs >= (uint32_t)otaCheckIntervalS * 1000UL) {
+          lastOtaCheckMs = nowMs;
+          Serial.println("[OTA-PULL] Checking for firmware update...");
+          if (performPullOtaCheck()) {
+            // Direct-flash path: firmware flash started; device will reboot
+            // shortly.  Block here so the loop doesn't continue transmitting.
+            while (true) delay(1000);
+          }
+        }
+      }
+
       // get data from buffer
       CBuffer* buffer = bufman.getNewest();
       if (!buffer) {
@@ -1389,30 +1416,6 @@ void telemetry(void* inst)
         timeoutsNet++;
         if (!teleClient.connect()) {
           connErrors++;
-        }
-      }
-
-      // Periodic pull-OTA check: runs when WiFi or cellular is connected, the
-      // device is actively transmitting, and OTA_TOKEN + OTA_INTERVAL are
-      // provisioned.  The check is rate-limited by otaCheckIntervalS; 0 means
-      // disabled.
-      //
-      // For STORAGE_SD: performPullOtaCheck() downloads the binary to SD and
-      // returns false (no reboot yet).  The flash happens in standby().
-      // For other storage: returns true when direct flash has started (reboot
-      // imminent) so the caller blocks here waiting for the reboot timer.
-      if (otaToken[0] && otaCheckIntervalS > 0 &&
-          (state.check(STATE_WIFI_CONNECTED) || state.check(STATE_CELL_CONNECTED))) {
-        static uint32_t lastOtaCheckMs = 0;
-        uint32_t nowMs = millis();
-        if (lastOtaCheckMs == 0 || nowMs - lastOtaCheckMs >= (uint32_t)otaCheckIntervalS * 1000UL) {
-          lastOtaCheckMs = nowMs;
-          Serial.println("[OTA-PULL] Checking for firmware update...");
-          if (performPullOtaCheck()) {
-            // Direct-flash path: firmware flash started; device will reboot
-            // shortly.  Block here so the loop doesn't continue transmitting.
-            while (true) delay(1000);
-          }
         }
       }
 
