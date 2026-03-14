@@ -202,16 +202,14 @@ static volatile bool s_ota_pending = false;
 
 // Shared chunk buffer used by the download (to SD) and flash (from SD) phases.
 // File-scope static so both functions share one allocation.
-#if ENABLE_WIFI
 static uint8_t s_otaChunkBuf[PULL_OTA_CHUNK_SIZE];
-#endif
 
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
 void processMEMS(CBuffer* buffer);
 bool processGPS(CBuffer* buffer);
 void processBLE(int timeout);
-#if STORAGE == STORAGE_SD && ENABLE_WIFI
+#if STORAGE == STORAGE_SD
 // Forward declaration: defined in the Pull-OTA section below.
 static bool performPullOtaFlash();
 #endif
@@ -691,9 +689,8 @@ void initialize()
   }
 #endif
 
-#if STORAGE == STORAGE_SD && ENABLE_WIFI
+#if STORAGE == STORAGE_SD
   // Startup check: detect a firmware staged by a previous session.
-  // If /ota_meta.txt exists, read the expected byte count and compare
   // against the actual /ota_fw.bin file size.  A match means the download
   // completed successfully; set s_ota_pending so the flash happens at the
   // next standby transition.  Any mismatch means a partial download —
@@ -1395,16 +1392,17 @@ void telemetry(void* inst)
         }
       }
 
-      // Periodic pull-OTA check: runs only when WiFi is connected, the device
-      // is actively transmitting, and OTA_TOKEN + OTA_INTERVAL are provisioned.
-      // The check is rate-limited by otaCheckIntervalS; 0 means disabled.
+      // Periodic pull-OTA check: runs when WiFi or cellular is connected, the
+      // device is actively transmitting, and OTA_TOKEN + OTA_INTERVAL are
+      // provisioned.  The check is rate-limited by otaCheckIntervalS; 0 means
+      // disabled.
       //
       // For STORAGE_SD: performPullOtaCheck() downloads the binary to SD and
       // returns false (no reboot yet).  The flash happens in standby().
       // For other storage: returns true when direct flash has started (reboot
       // imminent) so the caller blocks here waiting for the reboot timer.
-#if ENABLE_WIFI
-      if (otaToken[0] && otaCheckIntervalS > 0 && state.check(STATE_WIFI_CONNECTED)) {
+      if (otaToken[0] && otaCheckIntervalS > 0 &&
+          (state.check(STATE_WIFI_CONNECTED) || state.check(STATE_CELL_CONNECTED))) {
         static uint32_t lastOtaCheckMs = 0;
         uint32_t nowMs = millis();
         if (lastOtaCheckMs == 0 || nowMs - lastOtaCheckMs >= (uint32_t)otaCheckIntervalS * 1000UL) {
@@ -1417,7 +1415,6 @@ void telemetry(void* inst)
           }
         }
       }
-#endif
 
       if (connErrors >= MAX_CONN_ERRORS_RECONNECT) {
 #if ENABLE_WIFI
@@ -1452,7 +1449,7 @@ void standby()
 {
   state.set(STATE_STANDBY);
 
-#if STORAGE == STORAGE_SD && ENABLE_WIFI
+#if STORAGE == STORAGE_SD
   // Apply any pending pull-OTA update BEFORE closing the log file so that
   // success/failure events can still be written.  This is the right moment:
   // the device is no longer actively collecting or transmitting data, yet
@@ -1765,7 +1762,7 @@ void loadConfig()
 // PULL_OTA_MIN_FW_SIZE / PULL_OTA_CHUNK_SIZE / PULL_OTA_CHUNK_TIMEOUT_MS /
 // OTA_TELEMETRY_YIELD_DELAY_MS are also defined near the top.
 
-#if STORAGE == STORAGE_SD && ENABLE_WIFI
+#if STORAGE == STORAGE_SD
 // ---------------------------------------------------------------------------
 // _applyNvsFromSD()
 //
@@ -2048,34 +2045,16 @@ static bool performPullOtaFlash()
   esp_timer_start_once(s_ota_flash_timer, 1500000);
   return true;
 }
-#endif  // STORAGE == STORAGE_SD && ENABLE_WIFI
+#endif  // STORAGE == STORAGE_SD
 
-#if ENABLE_WIFI
 // ---------------------------------------------------------------------------
-// performPullOtaCheck()
+// _maskOtaHost()
 //
-// Fetches the pull-OTA metadata endpoint and, when a newer firmware version is
-// available, downloads it.
-//
-// For STORAGE == STORAGE_SD (the default) the binary is saved to the SD card
-// staging file (OTA_PENDING_PATH) and the flash is DEFERRED to the next
-// standby transition.  This way active data collection is never interrupted by
-// an OTA operation.  s_ota_pending is set to true on a successful download so
-// that standby() knows to call performPullOtaFlash().
-//
-// For other storage configurations (STORAGE_NONE / STORAGE_SPIFFS) there is no
-// staging area large enough for the firmware binary, so the old direct-flash
-// path is used as a fallback: the binary is streamed from the network directly
-// into the OTA flash partition.
-//
-// Returns true only when the direct-flash path has started (reboot imminent).
-// Returns false in all other cases, including the SD-staging success case
-// (caller must NOT block waiting for a reboot when false is returned).
+// Returns a privacy-safe representation of an OTA hostname for serial
+// logging.  Shows only the first 8 characters followed by "..." when the
+// hostname is longer than 12 characters, preventing NabuCasa subdomain IDs
+// from appearing verbatim in serial output.
 // ---------------------------------------------------------------------------
-// Returns a privacy-safe representation of an OTA hostname for serial logging.
-// Shows only the first 8 characters followed by "..." when the hostname is
-// longer than 12 characters, preventing NabuCasa subdomain IDs from appearing
-// verbatim in serial output.
 static String _maskOtaHost(const char* host) {
   if (!host || !host[0]) return String("(none)");
   size_t n = strlen(host);
@@ -2087,10 +2066,36 @@ static String _maskOtaHost(const char* host) {
   return String(host);
 }
 
+// ---------------------------------------------------------------------------
+// performPullOtaCheck()
+//
+// Fetches the pull-OTA metadata endpoint and, when a newer firmware version
+// is available, downloads it.  Works over both WiFi and cellular (SIM7600).
+//
+// For STORAGE == STORAGE_SD the binary is saved to the SD card staging file
+// (OTA_PENDING_PATH) and the flash is DEFERRED to the next standby
+// transition.  s_ota_pending is set to true on a successful download so
+// that standby() calls performPullOtaFlash().
+//
+// For other storage configurations (STORAGE_NONE / STORAGE_SPIFFS) the old
+// direct-flash path is used as a fallback; cellular is not supported for
+// direct flash (no rawClient streaming available).
+//
+// Returns true only when the direct-flash path has started (reboot imminent).
+// Returns false in all other cases, including the SD-staging success case
+// (caller must NOT block waiting for a reboot when false is returned).
+// ---------------------------------------------------------------------------
 bool performPullOtaCheck()
 {
   if (!otaToken[0] || !otaHost[0]) return false;
-  if (!WiFi.isConnected()) return false;
+
+  // Determine which transport is available.
+  bool useWifi = false;
+#if ENABLE_WIFI
+  useWifi = WiFi.isConnected();
+#endif
+  bool useCell = !useWifi && state.check(STATE_CELL_CONNECTED);
+  if (!useWifi && !useCell) return false;
 
 #if STORAGE == STORAGE_SD
   // If a firmware is already staged on SD, skip the meta-check and download:
@@ -2103,68 +2108,111 @@ bool performPullOtaCheck()
 
   // ---- Step 1: Fetch metadata JSON ----------------------------------------
   // Build the metadata path: /api/freematics/ota_pull/{token}/meta.json
-  // The token is embedded as a URL path component (no Authorization header
-  // needed since the token itself acts as the authenticator).
   char metaPath[384];
   snprintf(metaPath, sizeof(metaPath),
            "/api/freematics/ota_pull/%s/meta.json", otaToken);
 
-  // Log the URL for diagnostics with the token truncated for security.
   Serial.printf("[OTA-PULL] URL: https://%s:%u/api/freematics/ota_pull/%.8s.../meta.json\n",
                 _maskOtaHost(otaHost).c_str(), (unsigned)otaPort, otaToken);
 
-  // Temporarily disconnect the telemetry client so we can reuse the WiFi
-  // stack for the OTA metadata fetch.  s_ota_active is NOT set here because
-  // the meta-fetch is lightweight (< 200 bytes) and fast; we only set it
-  // before the large firmware download that follows.
-  teleClient.wifi.close();
-
-  if (!teleClient.wifi.open(otaHost, otaPort)) {
-    Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
-#if STORAGE != STORAGE_NONE
-    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
-#endif
-    return false;
-  }
-
-  // Use genHeaderWithAuth so the HA server can confirm the token matches the
-  // one in the URL path.  Both are the same token value; the Authorization
-  // header provides defence-in-depth for proxy setups that might strip
-  // path components.
-  // For the WiFiHTTP wrapper we call send() which uses genHeader internally.
-  // We'll use a small local buffer for the meta response.
-  if (!teleClient.wifi.send(METHOD_GET, metaPath)) {
-    Serial.println("[OTA-PULL] META send failed");
-    teleClient.wifi.close();
-#if STORAGE != STORAGE_NONE
-    if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_SEND");
-#endif
-    return false;
-  }
-
-  // Receive the response into a buffer large enough for the full meta.json
-  // (which now includes nvs_url and the extended effective_version string).
   char metaBuf[768];
   int metaBytes = 0;
-  char* metaBody = teleClient.wifi.receive(metaBuf, sizeof(metaBuf) - 1, &metaBytes);
-  if (!metaBody || teleClient.wifi.code() != 200) {
-    Serial.printf("[OTA-PULL] META HTTP %u\n", (unsigned)teleClient.wifi.code());
+  char* metaBody = nullptr;
+
+  if (useWifi) {
+#if ENABLE_WIFI
+    // Temporarily disconnect the telemetry client so we can reuse the WiFi
+    // stack for the OTA metadata fetch.
     teleClient.wifi.close();
+
+    if (!teleClient.wifi.open(otaHost, otaPort)) {
+      Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE
-    if (state.check(STATE_STORAGE_READY)) {
-      char _ota_diag[48];
-      snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=META_HTTP%d", (int)teleClient.wifi.code());
-      logger.logEvent(_ota_diag);
-    }
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
 #endif
-    return false;
+      return false;
+    }
+
+    if (!teleClient.wifi.send(METHOD_GET, metaPath)) {
+      Serial.println("[OTA-PULL] META send failed");
+      teleClient.wifi.close();
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_SEND");
+#endif
+      return false;
+    }
+
+    metaBody = teleClient.wifi.receive(metaBuf, sizeof(metaBuf) - 1, &metaBytes);
+    if (!metaBody || teleClient.wifi.code() != 200) {
+      Serial.printf("[OTA-PULL] META HTTP %u\n", (unsigned)teleClient.wifi.code());
+      teleClient.wifi.close();
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) {
+        char _ota_diag[48];
+        snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=META_HTTP%d", (int)teleClient.wifi.code());
+        logger.logEvent(_ota_diag);
+      }
+#endif
+      return false;
+    }
+    metaBuf[metaBytes < (int)sizeof(metaBuf) - 1 ? metaBytes : (int)sizeof(metaBuf) - 1] = '\0';
+    teleClient.wifi.close();
+#endif  // ENABLE_WIFI
+  } else {
+    // Cellular path: close current telemetry connection and reuse the modem
+    // for the lightweight meta-data request.
+    teleClient.cell.close();
+
+    if (!teleClient.cell.open(otaHost, otaPort)) {
+      Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
+#endif
+      return false;
+    }
+
+    if (!teleClient.cell.send(METHOD_GET, otaHost, otaPort, metaPath)) {
+      Serial.println("[OTA-PULL] META send failed");
+      teleClient.cell.close();
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_SEND");
+#endif
+      return false;
+    }
+
+    int rxBytes = 0;
+    char* resp = teleClient.cell.receive(&rxBytes);
+    if (!resp || teleClient.cell.code() != 200) {
+      Serial.printf("[OTA-PULL] META HTTP %u\n", (unsigned)teleClient.cell.code());
+      teleClient.cell.close();
+#if STORAGE != STORAGE_NONE
+      if (state.check(STATE_STORAGE_READY)) {
+        char _ota_diag[48];
+        snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=META_HTTP%d", (int)teleClient.cell.code());
+        logger.logEvent(_ota_diag);
+      }
+#endif
+      return false;
+    }
+    // CellHTTP::receive() returns the full HTTP response (headers + body).
+    // Locate the body after the header/body separator \r\n\r\n.
+    char* bodyPtr = strstr(resp, "\r\n\r\n");
+    bodyPtr = bodyPtr ? bodyPtr + 4 : resp;
+    int bodyLen = rxBytes - (int)(bodyPtr - resp);
+    if (bodyLen < 0) bodyLen = 0;
+    if (bodyLen > (int)sizeof(metaBuf) - 1) bodyLen = (int)sizeof(metaBuf) - 1;
+    memcpy(metaBuf, bodyPtr, bodyLen);
+    metaBuf[bodyLen] = '\0';
+    metaBytes = bodyLen;
+    metaBody = metaBuf;
+    teleClient.cell.close();
   }
-  metaBuf[metaBytes < (int)sizeof(metaBuf) - 1 ? metaBytes : (int)sizeof(metaBuf) - 1] = '\0';
+
+  // ---- Parse metadata JSON (common for both transports) -------------------
 
   // Parse "available": true / false
   if (!strstr(metaBody, "\"available\":true") && !strstr(metaBody, "\"available\": true")) {
     Serial.println("[OTA-PULL] No update available");
-    teleClient.wifi.close();
     return false;
   }
 
@@ -2173,7 +2221,6 @@ bool performPullOtaCheck()
   char* sizeField = strstr(metaBody, "\"size\":");
   if (!sizeField) {
     Serial.println("[OTA-PULL] META: missing size field");
-    teleClient.wifi.close();
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_NOSIZE");
 #endif
@@ -2182,7 +2229,6 @@ bool performPullOtaCheck()
   fwSize = (size_t)atol(sizeField + 7);
   if (fwSize < PULL_OTA_MIN_FW_SIZE) { // sanity check: firmware must be at least 64 KB
     Serial.printf("[OTA-PULL] META: implausible size %u\n", (unsigned)fwSize);
-    teleClient.wifi.close();
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=META_SIZE");
 #endif
@@ -2198,9 +2244,7 @@ bool performPullOtaCheck()
   }
 #endif
 
-  // Parse optional nvs_url field: present when the HA side has NVS settings
-  // to push alongside the firmware update.  The path is extracted from the
-  // JSON string value (simple strstr + quote scan — no JSON library needed).
+  // Parse optional nvs_url field.
   char nvsPath[256] = "";
   {
     char* nvsField = strstr(metaBody, "\"nvs_url\":");
@@ -2217,8 +2261,6 @@ bool performPullOtaCheck()
     }
   }
 
-  teleClient.wifi.close();
-
   // ---- Step 2: Download firmware ------------------------------------------
   char fwPath[384];
   snprintf(fwPath, sizeof(fwPath),
@@ -2226,17 +2268,7 @@ bool performPullOtaCheck()
 
 #if STORAGE == STORAGE_SD
   // --- SD-staging path (default): download to /ota_fw.bin, flash at standby -
-  // This leaves active telemetry running; no data is lost.  s_ota_active is
-  // NOT set here because we are not calling Update.begin() yet: the WiFi
-  // connection is used solely for file download (no flash partition locked).
-  //
-  // Steps:
-  //   a. Remove any leftover staging files from a previous (possibly partial)
-  //      download attempt.
-  //   b. Open /ota_fw.bin for writing.
-  //   c. Stream firmware chunks from the socket to the SD file.
-  //   d. On success: write expected size to /ota_meta.txt and set s_ota_pending.
-  //   e. standby() will call performPullOtaFlash() at the next sleep transition.
+  // This leaves active telemetry running; no data is lost.
   if (state.check(STATE_STORAGE_READY)) {
     // a. Clean up any leftover files.
     SD.remove(OTA_PENDING_PATH);
@@ -2251,90 +2283,186 @@ bool performPullOtaCheck()
       return false;
     }
 
-    if (!teleClient.wifi.open(otaHost, otaPort)) {
-      Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
-      fwFile.close();
-      SD.remove(OTA_PENDING_PATH);
-#if STORAGE != STORAGE_NONE
-      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
-#endif
-      return false;
-    }
-
-    if (!teleClient.wifi.send(METHOD_GET, fwPath)) {
-      Serial.println("[OTA-PULL] FW send failed");
-      teleClient.wifi.close();
-      fwFile.close();
-      SD.remove(OTA_PENDING_PATH);
-#if STORAGE != STORAGE_NONE
-      if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_SEND");
-#endif
-      return false;
-    }
-
-    int contentLength = 0;
-    int httpCode = teleClient.wifi.receiveHeaders(&contentLength);
-    if (httpCode != 200) {
-      Serial.printf("[OTA-PULL] FW HTTP %d\n", httpCode);
-      teleClient.wifi.close();
-      fwFile.close();
-      SD.remove(OTA_PENDING_PATH);
-#if STORAGE != STORAGE_NONE
-      if (state.check(STATE_STORAGE_READY)) {
-        char _ota_diag[48];
-        snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=FW_HTTP%d", httpCode);
-        logger.logEvent(_ota_diag);
-      }
-#endif
-      return false;
-    }
-    if (contentLength > 0 && (size_t)contentLength != fwSize) {
-      // Content-Length overrides the size from meta.json (server is authoritative).
-      Serial.printf("[OTA-PULL] FW size mismatch: meta=%u header=%d\n",
-                    (unsigned)fwSize, contentLength);
-      fwSize = (size_t)contentLength;
-    }
-
-    WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
     size_t written = 0;
     uint32_t dlStart = millis();
     size_t lastLogAt = 0;
     bool dlOk = true;
 
-    while (written < fwSize) {
-      uint32_t chunkStart = millis();
-      while (!rawSock.available() && millis() - chunkStart < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
-      if (!rawSock.available()) {
-        Serial.printf("[OTA-PULL] Recv timeout at offset %u\n", (unsigned)written);
+    if (useWifi) {
+#if ENABLE_WIFI
+      if (!teleClient.wifi.open(otaHost, otaPort)) {
+        Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
+        fwFile.close();
+        SD.remove(OTA_PENDING_PATH);
 #if STORAGE != STORAGE_NONE
-        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_TIMEOUT");
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
 #endif
-        dlOk = false;
-        break;
+        return false;
       }
-      int toRead = (int)(fwSize - written);
-      if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
-      int n = rawSock.read(s_otaChunkBuf, toRead);
-      if (n <= 0) {
-        Serial.printf("[OTA-PULL] Read error at offset %u\n", (unsigned)written);
+
+      if (!teleClient.wifi.send(METHOD_GET, fwPath)) {
+        Serial.println("[OTA-PULL] FW send failed");
+        teleClient.wifi.close();
+        fwFile.close();
+        SD.remove(OTA_PENDING_PATH);
 #if STORAGE != STORAGE_NONE
-        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_READ");
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_SEND");
 #endif
-        dlOk = false;
-        break;
+        return false;
       }
-      size_t nw = fwFile.write(s_otaChunkBuf, (size_t)n);
-      if (nw != (size_t)n) {
-        // First write attempt failed or was incomplete (SPI bus may have been
-        // momentarily held by the HTTPD task).  Retry once after a short pause.
-        // The data is still in s_otaChunkBuf so we can write the remainder.
-        Serial.printf("[OTA-PULL] SD write retry at offset %u (got %u/%u)\n",
-                      (unsigned)written, (unsigned)nw, (unsigned)n);
-        delay(50);
-        if (nw < (size_t)n) {
-          size_t nw2 = fwFile.write(s_otaChunkBuf + nw, (size_t)n - nw);
-          nw += nw2;
+
+      int contentLength = 0;
+      int httpCode = teleClient.wifi.receiveHeaders(&contentLength);
+      if (httpCode != 200) {
+        Serial.printf("[OTA-PULL] FW HTTP %d\n", httpCode);
+        teleClient.wifi.close();
+        fwFile.close();
+        SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) {
+          char _ota_diag[48];
+          snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=FW_HTTP%d", httpCode);
+          logger.logEvent(_ota_diag);
         }
+#endif
+        return false;
+      }
+      if (contentLength > 0 && (size_t)contentLength != fwSize) {
+        Serial.printf("[OTA-PULL] FW size mismatch: meta=%u header=%d\n",
+                      (unsigned)fwSize, contentLength);
+        fwSize = (size_t)contentLength;
+      }
+
+      WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
+
+      while (written < fwSize) {
+        uint32_t chunkStart = millis();
+        while (!rawSock.available() && millis() - chunkStart < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
+        if (!rawSock.available()) {
+          Serial.printf("[OTA-PULL] Recv timeout at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+          if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_TIMEOUT");
+#endif
+          dlOk = false;
+          break;
+        }
+        int toRead = (int)(fwSize - written);
+        if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+        int n = rawSock.read(s_otaChunkBuf, toRead);
+        if (n <= 0) {
+          Serial.printf("[OTA-PULL] Read error at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+          if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_READ");
+#endif
+          dlOk = false;
+          break;
+        }
+        size_t nw = fwFile.write(s_otaChunkBuf, (size_t)n);
+        if (nw != (size_t)n) {
+          // First write attempt failed or was incomplete; retry once.
+          Serial.printf("[OTA-PULL] SD write retry at offset %u (got %u/%u)\n",
+                        (unsigned)written, (unsigned)nw, (unsigned)n);
+          delay(50);
+          if (nw < (size_t)n) {
+            size_t nw2 = fwFile.write(s_otaChunkBuf + nw, (size_t)n - nw);
+            nw += nw2;
+          }
+          if (nw != (size_t)n) {
+            Serial.printf("[OTA-PULL] SD write error at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+            if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SD_WRITE");
+#endif
+            dlOk = false;
+            break;
+          }
+          Serial.printf("[OTA-PULL] SD write retry succeeded at offset %u\n", (unsigned)written);
+        }
+        written += (size_t)n;
+        if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
+          lastLogAt = written;
+          Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
+                        (unsigned)written, (unsigned)fwSize,
+                        100.0f * written / fwSize, (unsigned)(millis() - dlStart));
+        }
+      }
+      fwFile.close();
+      teleClient.wifi.close();
+#endif  // ENABLE_WIFI
+    } else {
+      // ---- Cellular SD-staging path ---------------------------------------
+      // Uses CellHTTP::receiveHeaders() + receiveBodyBytes() to stream the
+      // firmware binary to SD in ≤448-byte chunks (SIM7600 only).
+      // Telemetry is paused for the duration of the download; the telemetry
+      // loop reconnects automatically after this function returns.
+      if (!teleClient.cell.open(otaHost, otaPort)) {
+        Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
+        fwFile.close();
+        SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_CONNECT");
+#endif
+        return false;
+      }
+
+      if (!teleClient.cell.send(METHOD_GET, otaHost, otaPort, fwPath)) {
+        Serial.println("[OTA-PULL] FW send failed");
+        teleClient.cell.close();
+        fwFile.close();
+        SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=FW_SEND");
+#endif
+        return false;
+      }
+
+      int contentLength = 0;
+      int httpCode = teleClient.cell.receiveHeaders(&contentLength);
+      if (httpCode != 200) {
+        Serial.printf("[OTA-PULL] FW HTTP %d\n", httpCode);
+        teleClient.cell.close();
+        fwFile.close();
+        SD.remove(OTA_PENDING_PATH);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) {
+          char _ota_diag[48];
+          snprintf(_ota_diag, sizeof(_ota_diag), "OTA-PULL ERR=FW_HTTP%d", httpCode);
+          logger.logEvent(_ota_diag);
+        }
+#endif
+        return false;
+      }
+      if (contentLength > 0 && (size_t)contentLength != fwSize) {
+        Serial.printf("[OTA-PULL] FW size mismatch: meta=%u header=%d\n",
+                      (unsigned)fwSize, contentLength);
+        fwSize = (size_t)contentLength;
+      }
+
+      while (written < fwSize) {
+        int toRead = (int)(fwSize - written);
+        if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+        int n = teleClient.cell.receiveBodyBytes((char*)s_otaChunkBuf, toRead,
+                                                 PULL_OTA_CHUNK_TIMEOUT_MS);
+        if (n < 0) {
+          // Modem type does not support streaming (non-SIM7600).
+          Serial.println("[OTA-PULL] Cellular streaming not supported on this modem");
+#if STORAGE != STORAGE_NONE
+          if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CELL_UNSUPPORTED");
+#endif
+          dlOk = false;
+          break;
+        }
+        if (n == 0) {
+          // End-of-stream reached before expected size.
+          if (written < fwSize) {
+            Serial.printf("[OTA-PULL] Recv timeout at offset %u\n", (unsigned)written);
+#if STORAGE != STORAGE_NONE
+            if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=RECV_TIMEOUT");
+#endif
+            dlOk = false;
+          }
+          break;
+        }
+        size_t nw = fwFile.write(s_otaChunkBuf, (size_t)n);
         if (nw != (size_t)n) {
           Serial.printf("[OTA-PULL] SD write error at offset %u\n", (unsigned)written);
 #if STORAGE != STORAGE_NONE
@@ -2343,18 +2471,22 @@ bool performPullOtaCheck()
           dlOk = false;
           break;
         }
-        Serial.printf("[OTA-PULL] SD write retry succeeded at offset %u\n", (unsigned)written);
+        written += (size_t)n;
+        if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
+          lastLogAt = written;
+          Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
+                        (unsigned)written, (unsigned)fwSize,
+                        100.0f * written / fwSize, (unsigned)(millis() - dlStart));
+        }
       }
-      written += (size_t)n;
-      if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
-        lastLogAt = written;
-        Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
-                      (unsigned)written, (unsigned)fwSize,
-                      100.0f * written / fwSize, (unsigned)(millis() - dlStart));
-      }
-    }
-    fwFile.close();
-    teleClient.wifi.close();
+      fwFile.close();
+      teleClient.cell.close();
+      // Force fast telemetry reconnect.  teleClient.login=false tells
+      // TeleClientHTTP::connect() that no existing session is valid, so it
+      // will re-run init()+open()+EVENT_LOGIN on the next transmit attempt
+      // instead of trying to reuse the now-closed OTA connection.
+      teleClient.login = false;
+    }  // useCell firmware download
 
     if (!dlOk || written != fwSize) {
       Serial.printf("[OTA-PULL] Download incomplete (%u / %u bytes) — staging file removed\n",
@@ -2363,8 +2495,7 @@ bool performPullOtaCheck()
       return false;
     }
 
-    // Write companion meta file: expected byte count for integrity check at
-    // boot and in performPullOtaFlash().
+    // Write companion meta file: expected byte count for integrity check.
     {
       File metaFile = SD.open(OTA_META_PATH, FILE_WRITE);
       if (metaFile) {
@@ -2376,57 +2507,95 @@ bool performPullOtaCheck()
     }
 
     // ---- Step 3 (optional): Download NVS settings binary -------------------
-    // Present only when the meta.json response included a "nvs_url" field,
-    // which means HA-side settings (WiFi, LED, BLE, etc.) have changed since
-    // the last flash.  The NVS binary is staged to OTA_NVS_PATH and applied
-    // by performPullOtaFlash() after the firmware is written to flash.
-    // Failure here is non-fatal: the firmware update proceeds, but the device
-    // boots with its existing NVS settings.
-    SD.remove(OTA_NVS_PATH); // clean up any stale file from a previous attempt
+    SD.remove(OTA_NVS_PATH);
     if (nvsPath[0]) {
       Serial.printf("[OTA-PULL] Downloading NVS settings from %s\n", nvsPath);
-      if (teleClient.wifi.open(otaHost, otaPort) &&
-          teleClient.wifi.send(METHOD_GET, nvsPath)) {
-        int nvsContentLen = 0;
-        int nvsHttpCode = teleClient.wifi.receiveHeaders(&nvsContentLen);
-        if (nvsHttpCode == 200 && nvsContentLen > 0) {
-          File nvsFile = SD.open(OTA_NVS_PATH, FILE_WRITE);
-          if (nvsFile) {
-            WiFiClientSecure& rawSock2 = teleClient.wifi.rawClient();
-            size_t nvsWritten = 0;
-            size_t nvsExpected = (size_t)nvsContentLen;
-            bool nvsOk = true;
-            while (nvsWritten < nvsExpected) {
-              uint32_t t1 = millis();
-              while (!rawSock2.available() && millis() - t1 < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
-              if (!rawSock2.available()) { nvsOk = false; break; }
-              int toRead = (int)(nvsExpected - nvsWritten);
-              if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
-              int nr = rawSock2.read(s_otaChunkBuf, toRead);
-              if (nr <= 0) { nvsOk = false; break; }
-              if ((size_t)nvsFile.write(s_otaChunkBuf, (size_t)nr) != (size_t)nr) { nvsOk = false; break; }
-              nvsWritten += (size_t)nr;
-            }
-            nvsFile.close();
-            if (nvsOk && nvsWritten == nvsExpected) {
-              Serial.printf("[OTA-PULL] NVS staged: %u bytes\n", (unsigned)nvsWritten);
+      if (useWifi) {
+#if ENABLE_WIFI
+        if (teleClient.wifi.open(otaHost, otaPort) &&
+            teleClient.wifi.send(METHOD_GET, nvsPath)) {
+          int nvsContentLen = 0;
+          int nvsHttpCode = teleClient.wifi.receiveHeaders(&nvsContentLen);
+          if (nvsHttpCode == 200 && nvsContentLen > 0) {
+            File nvsFile = SD.open(OTA_NVS_PATH, FILE_WRITE);
+            if (nvsFile) {
+              WiFiClientSecure& rawSock2 = teleClient.wifi.rawClient();
+              size_t nvsWritten = 0;
+              size_t nvsExpected = (size_t)nvsContentLen;
+              bool nvsOk = true;
+              while (nvsWritten < nvsExpected) {
+                uint32_t t1 = millis();
+                while (!rawSock2.available() && millis() - t1 < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
+                if (!rawSock2.available()) { nvsOk = false; break; }
+                int toRead = (int)(nvsExpected - nvsWritten);
+                if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+                int nr = rawSock2.read(s_otaChunkBuf, toRead);
+                if (nr <= 0) { nvsOk = false; break; }
+                if ((size_t)nvsFile.write(s_otaChunkBuf, (size_t)nr) != (size_t)nr) { nvsOk = false; break; }
+                nvsWritten += (size_t)nr;
+              }
+              nvsFile.close();
+              if (nvsOk && nvsWritten == nvsExpected) {
+                Serial.printf("[OTA-PULL] NVS staged: %u bytes\n", (unsigned)nvsWritten);
 #if STORAGE != STORAGE_NONE
-              if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL NVS DL OK");
+                if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL NVS DL OK");
 #endif
-            } else {
-              Serial.println("[OTA-PULL] NVS download incomplete — skipping settings update");
-              SD.remove(OTA_NVS_PATH);
+              } else {
+                Serial.println("[OTA-PULL] NVS download incomplete — skipping settings update");
+                SD.remove(OTA_NVS_PATH);
+              }
             }
+          } else {
+            Serial.printf("[OTA-PULL] NVS HTTP %d — skipping settings update\n", nvsHttpCode);
           }
+          teleClient.wifi.close();
         } else {
-          Serial.printf("[OTA-PULL] NVS HTTP %d — skipping settings update\n", nvsHttpCode);
+          Serial.println("[OTA-PULL] NVS connect/send failed — skipping settings update");
+          teleClient.wifi.close();
         }
-        teleClient.wifi.close();
+#endif  // ENABLE_WIFI
       } else {
-        Serial.println("[OTA-PULL] NVS connect/send failed — skipping settings update");
-        teleClient.wifi.close();
-      }
-    }
+        // Cellular NVS download (streaming, same approach as firmware).
+        if (teleClient.cell.open(otaHost, otaPort) &&
+            teleClient.cell.send(METHOD_GET, otaHost, otaPort, nvsPath)) {
+          int nvsContentLen = 0;
+          int nvsHttpCode = teleClient.cell.receiveHeaders(&nvsContentLen);
+          if (nvsHttpCode == 200 && nvsContentLen > 0) {
+            File nvsFile = SD.open(OTA_NVS_PATH, FILE_WRITE);
+            if (nvsFile) {
+              size_t nvsWritten = 0;
+              size_t nvsExpected = (size_t)nvsContentLen;
+              bool nvsOk = true;
+              while (nvsWritten < nvsExpected) {
+                int toRead = (int)(nvsExpected - nvsWritten);
+                if (toRead > (int)PULL_OTA_CHUNK_SIZE) toRead = (int)PULL_OTA_CHUNK_SIZE;
+                int nr = teleClient.cell.receiveBodyBytes((char*)s_otaChunkBuf, toRead,
+                                                          PULL_OTA_CHUNK_TIMEOUT_MS);
+                if (nr <= 0) { nvsOk = false; break; }
+                if ((size_t)nvsFile.write(s_otaChunkBuf, (size_t)nr) != (size_t)nr) { nvsOk = false; break; }
+                nvsWritten += (size_t)nr;
+              }
+              nvsFile.close();
+              if (nvsOk && nvsWritten == nvsExpected) {
+                Serial.printf("[OTA-PULL] NVS staged: %u bytes\n", (unsigned)nvsWritten);
+#if STORAGE != STORAGE_NONE
+                if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL NVS DL OK");
+#endif
+              } else {
+                Serial.println("[OTA-PULL] NVS download incomplete — skipping settings update");
+                SD.remove(OTA_NVS_PATH);
+              }
+            }
+          } else {
+            Serial.printf("[OTA-PULL] NVS HTTP %d — skipping settings update\n", nvsHttpCode);
+          }
+          teleClient.cell.close();
+        } else {
+          Serial.println("[OTA-PULL] NVS connect/send failed — skipping settings update");
+          teleClient.cell.close();
+        }
+      }  // cellular NVS
+    }  // nvsPath[0]
 
     s_ota_pending = true;
     Serial.printf("[OTA-PULL] Download complete: %u bytes in %u ms\n"
@@ -2444,8 +2613,15 @@ bool performPullOtaCheck()
 #endif  // STORAGE == STORAGE_SD
 
   // ---- Fallback: stream directly to flash (STORAGE_NONE / STORAGE_SPIFFS) --
-  // Signal the telemetry task to pause WiFi I/O (closes TLS connections and
-  // frees mbedTLS heap) before the Update library allocates flash buffers.
+  // This path requires a WiFi rawClient() for streaming; cellular is not
+  // supported (no large intermediate buffer available over AT commands).
+  if (useCell) {
+    Serial.println("[OTA-PULL] Direct flash over cellular not supported; SD storage required");
+    return false;
+  }
+
+#if ENABLE_WIFI
+  // Signal the telemetry task to pause WiFi I/O before Update.begin().
   s_ota_active = true;
   delay(1500);
 
@@ -2468,7 +2644,6 @@ bool performPullOtaCheck()
     return false;
   }
 
-  // Parse response headers to confirm 200 OK and get actual Content-Length.
   int contentLength = 0;
   int httpCode = teleClient.wifi.receiveHeaders(&contentLength);
   if (httpCode != 200) {
@@ -2485,7 +2660,6 @@ bool performPullOtaCheck()
     return false;
   }
   if (contentLength > 0 && (size_t)contentLength != fwSize) {
-    // Content-Length overrides the size from meta.json (server is authoritative).
     Serial.printf("[OTA-PULL] FW size mismatch: meta=%u header=%d\n",
                   (unsigned)fwSize, contentLength);
     fwSize = (size_t)contentLength;
@@ -2501,16 +2675,12 @@ bool performPullOtaCheck()
     return false;
   }
 
-  // Stream the firmware body from the socket to the flash in PULL_OTA_CHUNK_SIZE chunks.
-  // rawClient() exposes the underlying WiFiClientSecure so we can read the
-  // body directly after receiveHeaders() has consumed the header block.
   WiFiClientSecure& rawSock = teleClient.wifi.rawClient();
   size_t written = 0;
   uint32_t dlStart = millis();
-  size_t lastLogAt = 0;  // reset per-OTA; tracks progress-log threshold
+  size_t lastLogAt = 0;
 
   while (written < fwSize) {
-    // Wait up to PULL_OTA_CHUNK_TIMEOUT_MS for the next chunk.
     uint32_t chunkStart = millis();
     while (!rawSock.available() && millis() - chunkStart < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
     if (!rawSock.available()) {
@@ -2551,7 +2721,6 @@ bool performPullOtaCheck()
     }
     written += (size_t)n;
 
-    // Log progress every 10%.
     if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
       lastLogAt = written;
       Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
@@ -2595,8 +2764,9 @@ bool performPullOtaCheck()
   }
   esp_timer_start_once(s_pull_ota_timer, 1500000);
   return true;
-}
 #endif  // ENABLE_WIFI
+  return false;
+}
 
 void processBLE(int timeout)
 {
@@ -2968,7 +3138,6 @@ if (!state.check(STATE_MEMS_READY)) do {
   }
 #endif
 
-#if ENABLE_WIFI
   // Print pull-OTA configuration so users can verify NVS provisioning via the
   // serial console.  This makes silent failures immediately obvious:
   // "OTA:disabled" means OTA_TOKEN was not written to NVS (re-flash with the
@@ -2982,7 +3151,6 @@ if (!state.check(STATE_MEMS_READY)) do {
   } else {
     Serial.println("OTA:disabled");
   }
-#endif
 
   // initialize components
   initialize();

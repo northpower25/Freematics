@@ -190,10 +190,28 @@ public:
     bool close();
     bool send(HTTP_METHOD method, const char* host, uint16_t port, const char* path, const char* payload = 0, int payloadSize = 0);
     char* receive(int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
+    // Streaming receive for large responses (SIM7600 only).
+    // receiveHeaders() reads the first data chunk from the modem socket, parses
+    // the HTTP status code and Content-Length header, and buffers any body bytes
+    // already present in that chunk so they are returned by the first
+    // receiveBodyBytes() call without an additional AT command round-trip.
+    // Returns the HTTP status code (e.g. 200), or -1 on failure / unsupported modem.
+    int receiveHeaders(int* contentLength = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
+    // Read the next chunk of the response body after receiveHeaders().
+    // Returns the number of bytes written to buf (> 0), 0 at end-of-stream,
+    // or -1 on error / unsupported modem type.
+    int receiveBodyBytes(char* buf, int maxLen, unsigned int timeout = HTTP_CONN_TIMEOUT);
 protected:
     // Override to detect +CHTTPSCLSE: URCs that arrive during any AT command
     // and mark the session disconnected before send() tries to use it.
     void inbound() override;
+private:
+    // Body bytes buffered during receiveHeaders() that have not yet been
+    // returned by receiveBodyBytes().  m_buffer[0..m_streamBodyLen-1] holds
+    // the initial body slice; m_streamBodyPos is the next unread offset.
+    // Both are reset to 0 at the start of each receiveHeaders() call.
+    int m_streamBodyLen = 0;
+    int m_streamBodyPos = 0;
 };
 
 #endif

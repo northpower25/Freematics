@@ -1563,3 +1563,179 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
   }
   return 0;
 }
+
+// ---------------------------------------------------------------------------
+// CellHTTP::receiveHeaders()
+//
+// SIM7600 only.  Issues AT+CCHRECV to read the first data chunk from the
+// open SSL socket, parses the HTTP status line and Content-Length header,
+// then memmoves any body bytes that are already present in the buffer to
+// m_buffer[0..n-1] so that receiveBodyBytes() can return them without an
+// extra AT command round-trip.
+//
+// Returns the HTTP status code (e.g. 200), or -1 on error / unsupported.
+// ---------------------------------------------------------------------------
+
+// Bytes reserved in RECV_BUF_SIZE for AT command prefix/suffix overhead in
+// the AT+CCHRECV response: "AT+CCHRECV=0,NNN\r\n+CCHRECV: DATA,0,NNN\r\n"
+// plus trailing "\r\n+CCHRECV: 0\r\nOK\r\n".  64 bytes is conservative.
+static const int AT_CCHRECV_OVERHEAD = 64;
+
+int CellHTTP::receiveHeaders(int* contentLength, unsigned int timeout)
+{
+  m_streamBodyLen = 0;
+  m_streamBodyPos = 0;
+  if (contentLength) *contentLength = 0;
+
+  if (m_type != CELL_SIM7600) return -1;
+
+  // Wait for an incoming-data notification or a peer-close event.
+  if (m_state != HTTP_DISCONNECTED) {
+    if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
+    if (!m_incoming && m_state != HTTP_DISCONNECTED) return -1;
+  }
+  m_incoming = 0;
+
+  // Check if the data was already auto-pushed into m_buffer (CCHRECVMODE=0).
+  char* p = strstr(m_buffer, "+CCHRECV: DATA,");
+  if (!p) p = strstr(m_buffer, "+CCHRECV:DATA,");
+
+  // Maximum payload bytes readable per AT+CCHRECV call.
+  const int toRead = RECV_BUF_SIZE - AT_CCHRECV_OVERHEAD;
+
+  if (!p) {
+    sprintf(m_buffer, "AT+CCHRECV=0,%d\r", toRead);
+    sendCommand(m_buffer, timeout);
+    p = strstr(m_buffer, "\r\n+CCHRECV: DATA");
+    if (!p) p = strstr(m_buffer, "\r\n+CCHRECV:DATA");
+  }
+  if (!p) return -1;
+
+  // Parse "+CCHRECV: DATA,<session>,<len>\r\n<data>"
+  char* q = strchr(p, ',');
+  if (!q) return -1;
+  char* eol = strchr(p, '\n');
+  q = strchr(q + 1, ',');   // skip past the session-ID field
+  if (!q || !eol || q >= eol) return -1;
+
+  int received = atoi(q + 1);
+  char* data = eol + 1;
+  if (received <= 0 || received > toRead) return -1;
+
+  // Locate the HTTP header/body separator "\r\n\r\n".
+  char* hdrEnd = 0;
+  for (int i = 0; i <= received - 4; i++) {
+    if (data[i] == '\r' && data[i+1] == '\n' &&
+        data[i+2] == '\r' && data[i+3] == '\n') {
+      hdrEnd = data + i;
+      break;
+    }
+  }
+  if (!hdrEnd) return -1;   // full headers not present in first chunk
+
+  // Temporarily null-terminate the header block for string parsing.
+  char saved = *hdrEnd;
+  *hdrEnd = '\0';
+
+  // Parse HTTP status code.
+  int code = -1;
+  char* ps = strstr(data, "HTTP/1.");
+  if (ps) {
+    code = atoi(ps + 9);
+    m_code = (uint16_t)code;
+  }
+
+  // Parse Content-Length (case-insensitive prefix match for common variants).
+  if (contentLength) {
+    char* cl = strstr(data, "Content-Length: ");
+    if (!cl) cl = strstr(data, "content-length: ");
+    if (!cl) cl = strstr(data, "Content-length: ");
+    if (cl) *contentLength = atoi(cl + 16);
+  }
+
+  // Restore the byte overwritten for parsing.
+  *hdrEnd = saved;
+
+  // Move any body bytes already in the buffer to m_buffer[0..bodyLen-1]
+  // so they survive the next sendCommand() call (which overwrites m_buffer).
+  int bodyOffset = (int)(hdrEnd + 4 - data);
+  int bodyLen = received - bodyOffset;
+  if (bodyLen > 0) {
+    memmove(m_buffer, data + bodyOffset, bodyLen);
+    m_streamBodyLen = bodyLen;
+  }
+
+  m_state = (code >= 200 && code < 300) ? HTTP_CONNECTED : HTTP_ERROR;
+  return code;
+}
+
+// ---------------------------------------------------------------------------
+// CellHTTP::receiveBodyBytes()
+//
+// SIM7600 only.  Returns the next chunk of the HTTP response body after
+// receiveHeaders() has been called.
+//
+// On the first few calls the bytes already buffered in m_buffer by
+// receiveHeaders() are returned without any additional AT command.  Once
+// those are exhausted, AT+CCHRECV is issued in a loop until the caller has
+// received all data.
+//
+// Returns bytes written to buf (> 0), 0 at end-of-stream, -1 on error /
+// unsupported modem type.
+// ---------------------------------------------------------------------------
+int CellHTTP::receiveBodyBytes(char* buf, int maxLen, unsigned int timeout)
+{
+  // First drain any body bytes already buffered from receiveHeaders().
+  if (m_streamBodyPos < m_streamBodyLen) {
+    int avail = m_streamBodyLen - m_streamBodyPos;
+    int n = (avail < maxLen) ? avail : maxLen;
+    memcpy(buf, m_buffer + m_streamBodyPos, n);
+    m_streamBodyPos += n;
+    return n;
+  }
+
+  if (m_type != CELL_SIM7600) return -1;
+  if (m_state != HTTP_CONNECTED && m_state != HTTP_DISCONNECTED) return -1;
+
+  // Wait for more data or a peer-close event.
+  if (m_state != HTTP_DISCONNECTED) {
+    if (!m_incoming && timeout) sendCommand(0, timeout, "+CCHRECV:");
+    if (!m_incoming && m_state != HTTP_DISCONNECTED) return -1;  // timed out
+  }
+  m_incoming = 0;
+
+  // Check if the data was auto-pushed (CCHRECVMODE=0).
+  char* p = strstr(m_buffer, "+CCHRECV: DATA,");
+  if (!p) p = strstr(m_buffer, "+CCHRECV:DATA,");
+
+  const int toRead = RECV_BUF_SIZE - AT_CCHRECV_OVERHEAD;
+
+  if (!p) {
+    sprintf(m_buffer, "AT+CCHRECV=0,%d\r", toRead);
+    sendCommand(m_buffer, timeout);
+    p = strstr(m_buffer, "\r\n+CCHRECV: DATA");
+    if (!p) p = strstr(m_buffer, "\r\n+CCHRECV:DATA");
+    if (!p) {
+      // No data in modem buffer; signal end-of-stream.
+      if (strstr(m_buffer, "+CCH_PEER_CLOSED:")) m_state = HTTP_DISCONNECTED;
+      return 0;
+    }
+  }
+
+  // Parse "+CCHRECV: DATA,<session>,<len>\r\n<data>"
+  char* q = strchr(p, ',');
+  if (!q) return 0;
+  char* eol = strchr(p, '\n');
+  q = strchr(q + 1, ',');   // skip session ID
+  if (!q || !eol || q >= eol) return 0;
+
+  int received = atoi(q + 1);
+  char* data = eol + 1;
+  if (received <= 0) {
+    return (m_state == HTTP_DISCONNECTED) ? 0 : -1;
+  }
+
+  int toReturn = (received < maxLen) ? received : maxLen;
+  memcpy(buf, data, toReturn);
+  return toReturn;
+}
