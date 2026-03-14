@@ -1575,6 +1575,12 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
 //
 // Returns the HTTP status code (e.g. 200), or -1 on error / unsupported.
 // ---------------------------------------------------------------------------
+
+// Bytes reserved in RECV_BUF_SIZE for AT command prefix/suffix overhead in
+// the AT+CCHRECV response: "AT+CCHRECV=0,NNN\r\n+CCHRECV: DATA,0,NNN\r\n"
+// plus trailing "\r\n+CCHRECV: 0\r\nOK\r\n".  64 bytes is conservative.
+static const int AT_CCHRECV_OVERHEAD = 64;
+
 int CellHTTP::receiveHeaders(int* contentLength, unsigned int timeout)
 {
   m_streamBodyLen = 0;
@@ -1594,8 +1600,8 @@ int CellHTTP::receiveHeaders(int* contentLength, unsigned int timeout)
   char* p = strstr(m_buffer, "+CCHRECV: DATA,");
   if (!p) p = strstr(m_buffer, "+CCHRECV:DATA,");
 
-  // Maximum bytes readable per AT+CCHRECV; leave room for the AT overhead.
-  const int toRead = RECV_BUF_SIZE - 64;
+  // Maximum payload bytes readable per AT+CCHRECV call.
+  const int toRead = RECV_BUF_SIZE - AT_CCHRECV_OVERHEAD;
 
   if (!p) {
     sprintf(m_buffer, "AT+CCHRECV=0,%d\r", toRead);
@@ -1702,7 +1708,7 @@ int CellHTTP::receiveBodyBytes(char* buf, int maxLen, unsigned int timeout)
   char* p = strstr(m_buffer, "+CCHRECV: DATA,");
   if (!p) p = strstr(m_buffer, "+CCHRECV:DATA,");
 
-  const int toRead = RECV_BUF_SIZE - 64;
+  const int toRead = RECV_BUF_SIZE - AT_CCHRECV_OVERHEAD;
 
   if (!p) {
     sprintf(m_buffer, "AT+CCHRECV=0,%d\r", toRead);

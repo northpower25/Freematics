@@ -2481,8 +2481,10 @@ bool performPullOtaCheck()
       }
       fwFile.close();
       teleClient.cell.close();
-      // Force telemetry reconnect: the cellular connection was borrowed for
-      // OTA; the telemetry loop will re-login on the next transmit attempt.
+      // Force fast telemetry reconnect.  teleClient.login=false tells
+      // TeleClientHTTP::connect() that no existing session is valid, so it
+      // will re-run init()+open()+EVENT_LOGIN on the next transmit attempt
+      // instead of trying to reuse the now-closed OTA connection.
       teleClient.login = false;
     }  // useCell firmware download
 
