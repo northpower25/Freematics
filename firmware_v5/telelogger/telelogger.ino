@@ -2199,15 +2199,32 @@ bool performPullOtaCheck()
     // for the lightweight meta-data request.
     teleClient.cell.close();
 
-    if (!teleClient.cell.open(otaHost, otaPort)) {
-      Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
+    // *.ui.nabu.casa (Nabu Casa Remote UI) is stored in OTA_HOST for WiFi OTA
+    // downloads but SIM7600E-H cellular modems CANNOT complete TLS to it
+    // (error 15 – modem TLS incompatibility with the Remote UI proxy).
+    // When CELL_HOST and CELL_PATH are provisioned (hooks.nabu.casa and the
+    // cloud-webhook path), route the OTA meta check through the cellular
+    // telemetry webhook instead: a GET request to the webhook returns the
+    // same OTA meta JSON as the direct meta.json endpoint.
+    // This allows the device to discover available firmware even without WiFi.
+    bool useCellWebhook = (cellServerHost[0] != '\0' && cellWebhookPath[0] != '\0');
+    const char* metaCheckHost = useCellWebhook ? cellServerHost : otaHost;
+    uint16_t    metaCheckPort = useCellWebhook ? cellServerPort : otaPort;
+    const char* metaCheckPath = useCellWebhook ? cellWebhookPath : metaPath;
+
+    Serial.printf("[OTA-PULL] Cellular meta check via %s\n",
+                  _maskOtaHost(metaCheckHost).c_str());
+
+    if (!teleClient.cell.open(metaCheckHost, metaCheckPort)) {
+      Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n",
+                    _maskOtaHost(metaCheckHost).c_str(), (unsigned)metaCheckPort);
 #if STORAGE != STORAGE_NONE
       if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=CONNECT");
 #endif
       return false;
     }
 
-    if (!teleClient.cell.send(METHOD_GET, otaHost, otaPort, metaPath)) {
+    if (!teleClient.cell.send(METHOD_GET, metaCheckHost, metaCheckPort, metaCheckPath)) {
       Serial.println("[OTA-PULL] META send failed");
       teleClient.cell.close();
 #if STORAGE != STORAGE_NONE
