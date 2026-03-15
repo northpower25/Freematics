@@ -2502,21 +2502,17 @@ bool performPullOtaCheck()
     // for the lightweight meta-data request.
     teleClient.cell.close();
 
-    // *.ui.nabu.casa (Nabu Casa Remote UI) is stored in OTA_HOST for WiFi OTA
-    // downloads but SIM7600E-H cellular modems CANNOT complete TLS to it
-    // (error 15 – modem TLS incompatibility with the Remote UI proxy).
-    // When CELL_HOST and CELL_PATH are provisioned (hooks.nabu.casa and the
-    // cloud-webhook path), route the OTA meta check through the cellular
-    // telemetry webhook.
-    //
-    // IMPORTANT: hooks.nabu.casa cloud webhooks return an empty response body
-    // for GET requests (fire-and-forget behaviour).  The firmware therefore
-    // uses POST ?type=ota_meta so that the HA webhook handler returns the OTA
-    // meta JSON in the POST response body, which hooks.nabu.casa does forward.
-    // A plain GET to the direct OTA host (non-webhook path) still uses GET.
-    bool useCellWebhook = (cellServerHost[0] != '\0' && cellWebhookPath[0] != '\0');
-    const char* metaCheckHost = useCellWebhook ? cellServerHost : otaHost;
-    uint16_t    metaCheckPort = useCellWebhook ? cellServerPort : otaPort;
+    // *.ui.nabu.casa (Nabu Casa Remote UI) is stored in OTA_HOST for pull-OTA.
+    // The AT+CSSLCFG="ciphersuite" restriction in FreematicsNetwork.cpp now
+    // enables direct TLS from SIM7600E-H to *.ui.nabu.casa (Cloudflare):
+    //   – ECDHE-RSA cipher suites force Cloudflare to present an RSA certificate
+    //     that the modem can verify (ECDSA certs caused TLS error 15).
+    // Use otaHost directly with a plain GET (same path as WiFi).
+    // Fall back to a POST ?type=ota_meta via hooks.nabu.casa only when otaHost
+    // is not provisioned (e.g. non-Nabu-Casa setups without a public OTA URL).
+    bool useCellWebhook = (!otaHost[0] && cellServerHost[0] != '\0' && cellWebhookPath[0] != '\0');
+    const char* metaCheckHost = (otaHost[0] != '\0') ? otaHost : cellServerHost;
+    uint16_t    metaCheckPort = (otaHost[0] != '\0') ? otaPort : cellServerPort;
 
     Serial.printf("[OTA-PULL] Cellular meta check via %s\n",
                   _maskOtaHost(metaCheckHost).c_str());
@@ -2850,15 +2846,19 @@ bool performPullOtaCheck()
       // Telemetry is paused for the duration of the download; the telemetry
       // loop reconnects automatically after this function returns.
       //
-      // When cell_firmware_path was provided in meta.json (hooks.nabu.casa
-      // path + "?type=firmware"), use cellServerHost:cellServerPort for the
-      // download.  This avoids TLS error 15 that SIM7600E-H modems encounter
-      // when connecting to *.ui.nabu.casa (the standard OTA_HOST).
+      // cellFwPath is empty when meta.json was served from otaHost directly
+      // (ECDHE-RSA cipher fix enables *.ui.nabu.casa; firmware_url from meta.json
+      // → GET to otaHost).  cellFwPath is set only when the webhook path was
+      // used for the meta check (e.g. otaHost not provisioned), in which case
+      // HA embeds "?type=firmware" in cell_firmware_path → POST to cellServerHost.
       const char* cellFwHost = (cellFwPath[0] && cellServerHost[0]) ? cellServerHost : otaHost;
       uint16_t    cellFwPort = (cellFwPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
       const char* cellFwDlPath = cellFwPath[0] ? cellFwPath : fwPath;
+      // Use GET for the direct OTA path (FreematicsOtaPullView handles GET);
+      // use POST for the webhook path (?type=firmware, requires JSON body).
+      const bool cellFwViaWebhook = (cellFwPath[0] != '\0');
       Serial.printf("[OTA-PULL] Cellular FW download from %s (path: %s)\n",
-                    _maskOtaHost(cellFwHost).c_str(), cellFwPath[0] ? "webhook" : "direct");
+                    _maskOtaHost(cellFwHost).c_str(), cellFwViaWebhook ? "webhook" : "direct");
       if (!teleClient.cell.open(cellFwHost, cellFwPort)) {
         Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(cellFwHost).c_str(), (unsigned)cellFwPort);
         fwFile.close();
@@ -2869,7 +2869,9 @@ bool performPullOtaCheck()
         return false;
       }
 
-      if (!teleClient.cell.send(METHOD_POST, cellFwHost, cellFwPort, cellFwDlPath, "{}", 2)) {
+      if (cellFwViaWebhook
+          ? !teleClient.cell.send(METHOD_POST, cellFwHost, cellFwPort, cellFwDlPath, "{}", 2)
+          : !teleClient.cell.send(METHOD_GET,  cellFwHost, cellFwPort, cellFwDlPath)) {
         Serial.println("[OTA-PULL] FW send failed");
         teleClient.cell.close();
         fwFile.close();
@@ -3050,13 +3052,17 @@ bool performPullOtaCheck()
 #endif  // ENABLE_WIFI
       } else {
         // Cellular NVS download (streaming, same approach as firmware).
-        // Use cellNvsPath / cellServerHost when provided (avoids TLS error 15
-        // on SIM7600E-H for *.ui.nabu.casa).
+        // cellNvsPath is empty when using direct otaHost (ECDHE-RSA cipher fix);
+        // set only when meta.json came from the webhook path.
         const char* cellNvsHost = (cellNvsPath[0] && cellServerHost[0]) ? cellServerHost : otaHost;
         uint16_t    cellNvsPort = (cellNvsPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
         const char* cellNvsDlPath = cellNvsPath[0] ? cellNvsPath : nvsPath;
-        if (teleClient.cell.open(cellNvsHost, cellNvsPort) &&
-            teleClient.cell.send(METHOD_POST, cellNvsHost, cellNvsPort, cellNvsDlPath, "{}", 2)) {
+        const bool cellNvsViaWebhook = (cellNvsPath[0] != '\0');
+        const bool nvsSendOk = teleClient.cell.open(cellNvsHost, cellNvsPort) &&
+            (cellNvsViaWebhook
+              ? teleClient.cell.send(METHOD_POST, cellNvsHost, cellNvsPort, cellNvsDlPath, "{}", 2)
+              : teleClient.cell.send(METHOD_GET,  cellNvsHost, cellNvsPort, cellNvsDlPath));
+        if (nvsSendOk) {
           int nvsContentLen = 0;
           int nvsHttpCode = teleClient.cell.receiveHeaders(&nvsContentLen);
           if (nvsHttpCode == 200 && nvsContentLen > 0) {

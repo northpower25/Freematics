@@ -457,7 +457,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     return _up(_cloud_hook_url).path or ""
                 except Exception as _exc:  # noqa: BLE001
                     _LOGGER.debug(
-                        "Freematics: could not parse cloud hook URL %r: %s",
+                        "Freematics: could not parse cloud hook URL %r for "
+                        "cell webhook path derivation: %s",
                         _cloud_hook_url, _exc,
                     )
             return ""

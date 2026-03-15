@@ -981,6 +981,30 @@ void CellHTTP::init()
         sendCommand(m_buffer);
         sprintf(m_buffer, "AT+CSSLCFG=\"alpnprotocol\",%d,\"http/1.1\"\r", ctx);
         sendCommand(m_buffer);
+        // Restrict cipher suites to ECDHE-RSA-only (no ECDSA variants).
+        //
+        // The SIM7600E-H default cipher list includes both ECDHE-ECDSA-* and
+        // ECDHE-RSA-* suites.  Cloudflare (*.ui.nabu.casa) prefers ECDSA cipher
+        // suites and — when the client advertises them — presents an ECDSA edge
+        // certificate.  The SIM7600E-H TLS stack cannot verify ECDSA certificates,
+        // so the handshake fails with error 15 (+CCHOPEN: 0,15).
+        //
+        // Specifying only ECDHE-RSA suites forces Cloudflare to fall back to its
+        // RSA certificate, which the modem can verify.  AWS ALB (hooks.nabu.casa)
+        // supports these same suites, so no regressions occur there.
+        //
+        // Cipher codes (IANA, concatenated per SIMCom SSL Application Note §2.2 —
+        // four hex digits per suite, no separators between suites):
+        //   C02F = TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256  (preferred)
+        //   C030 = TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384  (fallback)
+        // "C02FC030" → modem tries C02F first, falls back to C030.
+        //
+        // If the firmware revision does not support AT+CSSLCFG="ciphersuite" the
+        // command returns ERROR, which sendCommand() silently ignores — the modem
+        // falls back to its default cipher list and connections to hooks.nabu.casa
+        // still work; *.ui.nabu.casa may still fail on older firmware.
+        sprintf(m_buffer, "AT+CSSLCFG=\"ciphersuite\",%d,\"C02FC030\"\r", ctx);
+        sendCommand(m_buffer);
       }
     };
     applySslCfg();
