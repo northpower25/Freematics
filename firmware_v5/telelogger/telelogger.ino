@@ -281,6 +281,9 @@ State state;
 // ---------------------------------------------------------------------------
 static volatile bool s_http_standby_enter = false;
 static volatile bool s_http_standby_exit  = false;
+// Set by handlerControl (cmd=CELL_DL_TEST) to trigger a cellular download test
+// from the telemetry loop.  Cleared after the test completes.
+static volatile bool s_cell_dl_test_request = false;
 
 // Called from handlerControl (httpd task) to pause or resume the telemetry task.
 void httpControlStandby(bool enter) {
@@ -1460,6 +1463,15 @@ void telemetry(void* inst)
         }
       }
 
+      // Cellular download connectivity test (triggered by cmd=CELL_DL_TEST via HTTPD).
+      // Runs the download through hooks.nabu.casa with a 1 KB known-pattern payload
+      // so the user can verify the full cellular binary-download path works before
+      // attempting a real OTA firmware update.  Only runs over cellular.
+      if (s_cell_dl_test_request && state.check(STATE_CELL_CONNECTED)) {
+        s_cell_dl_test_request = false;
+        performCellularDlTest();
+      }
+
       // get data from buffer
       CBuffer* buffer = bufman.getNewest();
       if (!buffer) {
@@ -2206,6 +2218,116 @@ static String _maskOtaHost(const char* host) {
 }
 
 // ---------------------------------------------------------------------------
+// performCellularDlTest()
+//
+// Temporary diagnostic: tests the full cellular binary-download path through
+// hooks.nabu.casa without touching the real firmware binary.
+//
+// The HA webhook GET handler responds to ?type=test with a 1 KB payload of a
+// known byte pattern (bytes 0x00–0xFF repeated 4×).  The firmware downloads it
+// via CellHTTP (same code path used for OTA firmware), verifies the byte count
+// and content, and logs PASS/FAIL to the serial console.
+//
+// Triggered by the HTTPD control command: GET /api/control?cmd=CELL_DL_TEST
+// (requires the device to have CELL_HOST + CELL_PATH provisioned in NVS).
+// ---------------------------------------------------------------------------
+static void performCellularDlTest()
+{
+  Serial.println("[CELL-TEST] Starting cellular download test via webhook");
+
+  if (!cellServerHost[0] || !cellWebhookPath[0]) {
+    Serial.println("[CELL-TEST] FAIL: CELL_HOST / CELL_PATH not provisioned in NVS");
+    return;
+  }
+  if (!state.check(STATE_CELL_CONNECTED)) {
+    Serial.println("[CELL-TEST] FAIL: cellular not connected (STATE_CELL_CONNECTED not set)");
+    return;
+  }
+
+  // Build the test URL path: webhook_path + "?type=test"
+  // +16 is enough for "?type=test\0" (10 chars) plus a small safety margin.
+  char testPath[sizeof(cellWebhookPath) + 16];
+  snprintf(testPath, sizeof(testPath), "%s?type=test", cellWebhookPath);
+
+  Serial.printf("[CELL-TEST] GET https://%s%s\n",
+                _maskOtaHost(cellServerHost).c_str(), testPath);
+
+  teleClient.cell.close();
+  if (!teleClient.cell.open(cellServerHost, cellServerPort)) {
+    Serial.printf("[CELL-TEST] FAIL: connect to %s:%u failed\n",
+                  _maskOtaHost(cellServerHost).c_str(), (unsigned)cellServerPort);
+    return;
+  }
+
+  if (!teleClient.cell.send(METHOD_GET, cellServerHost, cellServerPort, testPath)) {
+    Serial.println("[CELL-TEST] FAIL: HTTP send failed");
+    teleClient.cell.close();
+    teleClient.login = false;
+    return;
+  }
+
+  int contentLength = 0;
+  int httpCode = teleClient.cell.receiveHeaders(&contentLength);
+  if (httpCode != 200) {
+    Serial.printf("[CELL-TEST] FAIL: HTTP %d (expected 200)\n", httpCode);
+    teleClient.cell.close();
+    teleClient.login = false;
+    return;
+  }
+  Serial.printf("[CELL-TEST] HTTP 200, Content-Length: %d\n", contentLength);
+  if (contentLength != 1024 && contentLength != 0) {
+    // Non-zero mismatch means the proxy changed the payload (chunked encoding, etc.)
+    Serial.printf("[CELL-TEST] WARN: Content-Length=%d (expected 1024) — "
+                  "proxy may be using Transfer-Encoding: chunked\n", contentLength);
+  }
+
+  // Receive all body bytes and verify the known pattern (byte[i] == i & 0xFF).
+  // Intentionally smaller than the 448-byte AT+CCHRECV limit so the test
+  // exercises multiple receiveBodyBytes() calls, matching the OTA download path.
+  static const int CELL_TEST_CHUNK = 64;
+  uint8_t buf[CELL_TEST_CHUNK];
+  int received = 0;
+  bool patternOk = true;
+  while (received < 1024) {
+    int n = teleClient.cell.receiveBodyBytes((char*)buf, CELL_TEST_CHUNK, 10000);
+    if (n < 0) {
+      Serial.println("[CELL-TEST] FAIL: modem does not support streaming (non-SIM7600)");
+      patternOk = false;
+      break;
+    }
+    if (n == 0) {
+      Serial.printf("[CELL-TEST] End of stream at offset %d\n", received);
+      break;
+    }
+    // Verify pattern
+    for (int i = 0; i < n; i++) {
+      if ((uint8_t)buf[i] != (uint8_t)((received + i) & 0xFF)) {
+        Serial.printf("[CELL-TEST] FAIL: byte[%d] = 0x%02X, expected 0x%02X\n",
+                      received + i, (uint8_t)buf[i],
+                      (uint8_t)((received + i) & 0xFF));
+        patternOk = false;
+        break;
+      }
+    }
+    if (!patternOk) break;
+    received += n;
+  }
+
+  teleClient.cell.close();
+  teleClient.login = false;  // Force telemetry reconnect after test
+
+  if (patternOk && received == 1024) {
+    Serial.println("[CELL-TEST] PASS: 1024 bytes received and pattern verified OK");
+    Serial.println("[CELL-TEST] hooks.nabu.casa cellular binary download path: WORKING");
+  } else {
+    Serial.printf("[CELL-TEST] FAIL: received=%d patternOk=%d\n",
+                  received, patternOk ? 1 : 0);
+    Serial.println("[CELL-TEST] hooks.nabu.casa cellular binary download path: BROKEN");
+    Serial.println("[CELL-TEST] Possible causes: timeout, size limit, chunked encoding");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // performPullOtaCheck()
 //
 // Fetches the pull-OTA metadata endpoint and, when a newer firmware version
@@ -2472,7 +2594,7 @@ bool performPullOtaCheck()
         if (e && (size_t)(e - s) == 64) {
           memcpy(fwSha256Hex, s, 64);
           fwSha256Hex[64] = '\0';
-          // Validate: all 64 chars must be lowercase hex [0-9a-f].
+          // Validate: all 64 chars must be valid hex [0-9a-fA-F] (upper or lower).
           // Non-hex content (e.g. malformed meta) is treated as absent (skip verify).
           for (int _i = 0; _i < 64; _i++) {
             char _c = fwSha256Hex[_i];
@@ -2750,13 +2872,14 @@ bool performPullOtaCheck()
     // errors over cellular) is detected immediately and the staging file is
     // removed — the next OTA check interval will retry with a clean download.
     if (doSha256) {
-      uint8_t digest[32];
+      static const int SHA256_DIGEST_BYTES = 32;  // SHA-256 produces a 256-bit (32-byte) digest
+      uint8_t digest[SHA256_DIGEST_BYTES];
       mbedtls_sha256_finish_ret(&sha256Ctx, digest);
       mbedtls_sha256_free(&sha256Ctx);
-      char actualHex[65];
-      for (int i = 0; i < 32; i++) snprintf(actualHex + i * 2, 3, "%02x", digest[i]);
-      actualHex[64] = '\0';
-      if (strncmp(actualHex, fwSha256Hex, 64) != 0) {
+      char actualHex[SHA256_DIGEST_BYTES * 2 + 1];
+      for (int i = 0; i < SHA256_DIGEST_BYTES; i++) snprintf(actualHex + i * 2, 3, "%02x", digest[i]);
+      actualHex[SHA256_DIGEST_BYTES * 2] = '\0';
+      if (strncmp(actualHex, fwSha256Hex, SHA256_DIGEST_BYTES * 2) != 0) {
         Serial.printf("[OTA-PULL] SHA256 mismatch — staging file removed (retry at next interval)\n"
                       "[OTA-PULL]   expected: %s\n"
                       "[OTA-PULL]   actual:   %s\n",

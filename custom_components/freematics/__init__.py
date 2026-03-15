@@ -86,6 +86,12 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "button", "device_tracker"]
 
+# Cellular download test payload: 1 KB with a known byte pattern (0x00–0xFF × 4).
+# The firmware's CELL_DL_TEST command downloads this and checks every byte so any
+# proxy mangling (chunked encoding, truncation) is detected immediately.
+# SHA-256: 785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9
+_CELL_TEST_PAYLOAD: bytes = bytes(i & 0xFF for i in range(1024))
+
 
 def _parse_freematics_payload(body: str) -> dict:
     """Parse the Freematics text telemetry format into a sensor-key → value dict.
@@ -459,6 +465,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         filename, _exc,
                     )
                     return _web.Response(status=500, text="Internal error")
+
+            # ── Cellular connectivity test ─────────────────────────────────
+            # GET ?type=test  is requested by the firmware's CELL_DL_TEST command
+            # (triggered via /api/control?cmd=CELL_DL_TEST on the device HTTPD).
+            # Returns a 1 KB payload with a known byte pattern so the firmware can
+            # verify the full download path through hooks.nabu.casa end-to-end
+            # without touching the real firmware binary.
+            # Pattern: bytes 0x00–0xFF repeated 4×  (1024 bytes total)
+            # SHA-256:  785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9
+            if _req_type == "test":
+                return _web.Response(
+                    body=_CELL_TEST_PAYLOAD,
+                    content_type="application/octet-stream",
+                    headers={"Content-Length": "1024"},
+                )
 
             # ── Cellular OTA meta check ───────────────────────────────────
             if _ota_token:
