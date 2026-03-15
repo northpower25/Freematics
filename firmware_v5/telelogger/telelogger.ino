@@ -199,6 +199,23 @@ static int8_t s_lastLedWhite = -1;
 static int8_t s_lastBeep     = -1;
 static int8_t s_lastConnType = -1;  // PID_CONN_TYPE sentinel: 1=WiFi, 2=Cellular
 
+// Inject-on-next-packet flag: set whenever the sentinels are reset (new
+// connection established or session start).  The telemetry task checks this
+// flag and injects LED/beep/conn-type/SD PIDs directly into the outgoing
+// CStorage packet before store.tailer(), guaranteeing these IST-Status values
+// are in the FIRST transmitted packet regardless of which buffer getNewest()
+// picks up.  Without this, a race between process() (updating sentinels and
+// filling buffers) and the telemetry loop (slow OTA check over cellular delays
+// getNewest()) causes the sentinel-triggered buffer to be overwritten before it
+// is transmitted — leaving HA with "Unbekannt" for LED/beep/SD indefinitely.
+static volatile bool s_send_state_pids = false;
+
+// Cached SD card capacity/free space (MiB) — updated by process() each time it
+// emits PID_SD_TOTAL_MB / PID_SD_FREE_MB.  Read (not written) by the telemetry
+// inject block so it does not need to access the SD SPI bus from the wrong task.
+static uint32_t s_cachedSdTotalMb = 0;
+static uint32_t s_cachedSdFreeMb  = 0;
+
 // Pull-OTA constants used in initialize(), standby(), performPullOtaFlash(),
 // and performPullOtaCheck().  Defined here (before any function body) so that
 // all translation-unit uses see them regardless of source order.
@@ -650,9 +667,12 @@ void initialize()
   // "Unbekannt" IST-Status when HA is reloaded while the device was connected
   // (HA loses diag state, device never resends unchanged values unless the
   // sentinels are reset).
-  s_lastLedWhite = -1;
-  s_lastBeep     = -1;
-  s_lastConnType = -1;
+  s_lastLedWhite    = -1;
+  s_lastBeep        = -1;
+  s_lastConnType    = -1;
+  // Signal the telemetry task to inject IST-Status PIDs into the very next
+  // transmitted packet so they are not lost to the getNewest() race.
+  s_send_state_pids = true;
 
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
@@ -1035,6 +1055,11 @@ void process()
         sdTotalMb = (uint32_t)(tot >> 20);
         sdFreeMb  = (uint32_t)((tot > used ? tot - used : 0) >> 20);
       }
+      // Update module-level cache so the telemetry inject block can include
+      // the SD values in the guaranteed first-packet injection without
+      // touching the SD SPI bus from the wrong task.
+      s_cachedSdTotalMb = sdTotalMb;
+      s_cachedSdFreeMb  = sdFreeMb;
       buffer->add(PID_SD_TOTAL_MB, ELEMENT_UINT32, &sdTotalMb, sizeof(sdTotalMb));
       buffer->add(PID_SD_FREE_MB,  ELEMENT_UINT32, &sdFreeMb,  sizeof(sdFreeMb));
     }
@@ -1276,9 +1301,10 @@ void telemetry(void* inst)
       // reset the state-change detection would suppress the PIDs (value
       // unchanged) and Home Assistant would keep showing "Unbekannt" for the
       // IST-Status and the connection-type timestamps.
-      s_lastLedWhite = -1;
-      s_lastBeep     = -1;
-      s_lastConnType = -1;
+      s_lastLedWhite    = -1;
+      s_lastBeep        = -1;
+      s_lastConnType    = -1;
+      s_send_state_pids = true;
 
       uint32_t t = millis();
       do {
@@ -1360,9 +1386,10 @@ void telemetry(void* inst)
             // LED/beep state and connection type to HA.  Without this, the
             // sentinels retain their values from the previous cellular session
             // and HA would keep showing stale IST-Status values.
-            s_lastLedWhite = -1;
-            s_lastBeep     = -1;
-            s_lastConnType = -1;
+            s_lastLedWhite    = -1;
+            s_lastBeep        = -1;
+            s_lastConnType    = -1;
+            s_send_state_pids = true;
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
               teleClient.cell.end();
@@ -1406,9 +1433,10 @@ void telemetry(void* inst)
         // LED/beep state and connection type to HA.  Without this, the sentinels
         // retain their values from the previous WiFi session and HA would keep
         // showing stale IST-Status values and incorrect connection timestamps.
-        s_lastLedWhite = -1;
-        s_lastBeep     = -1;
-        s_lastConnType = -1;
+        s_lastLedWhite    = -1;
+        s_lastBeep        = -1;
+        s_lastConnType    = -1;
+        s_send_state_pids = true;
       }
 
       if (millis() - lastRssiTime > SIGNAL_CHECK_INTERVAL * 1000) {
@@ -1484,6 +1512,42 @@ void telemetry(void* inst)
       store.timestamp(buffer->timestamp);
       buffer->serialize(store);
       bufman.free(buffer);
+      // Inject IST-Status PIDs (LED/beep/conn-type/SD) directly into this
+      // packet whenever a new connection has just been established.
+      //
+      // Without this injection, there is a race between process() and the
+      // telemetry loop that reliably loses these PIDs on cellular connections:
+      //   1. Sentinel reset → process() adds PIDs to Buffer A, updates sentinel.
+      //   2. OTA meta-check over cellular takes several seconds while process()
+      //      fills Buffers B, C, D … (sentinel already matches, no PIDs).
+      //   3. getNewest() returns Buffer D (newest), Buffer A is overwritten.
+      //   4. Result: HA never receives LED/beep/SD → "Unbekannt" forever.
+      // WiFi is not immune but the OTA check is much faster there, so the race
+      // is rarely observed.  With this injection both transports are reliable.
+      if (s_send_state_pids) {
+        s_send_state_pids = false;
+        {
+          uint8_t v = enableLedWhite ? 1 : 0;
+          store.log(PID_LED_WHITE_STATE, &v, 1);
+          s_lastLedWhite = (int8_t)v;
+        }
+        {
+          uint8_t v = enableBeep ? 1 : 0;
+          store.log(PID_BEEP_STATE, &v, 1);
+          s_lastBeep = (int8_t)v;
+        }
+        if (state.check(STATE_NET_READY)) {
+          uint8_t v = state.check(STATE_WIFI_CONNECTED) ? 1 : 2;
+          store.log(PID_CONN_TYPE, &v, 1);
+          s_lastConnType = (int8_t)v;
+        }
+#if STORAGE == STORAGE_SD
+        // s_cachedSdTotalMb/Free are kept current by process(); they are 0
+        // before the first SD read which HA correctly interprets as "no card".
+        store.log(PID_SD_TOTAL_MB, &s_cachedSdTotalMb, 1);
+        store.log(PID_SD_FREE_MB,  &s_cachedSdFreeMb,  1);
+#endif
+      }
       store.tailer();
       Serial.print("[DAT] ");
       Serial.println(store.buffer());
