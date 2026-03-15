@@ -145,6 +145,13 @@ class FlashSerialButton(_FreematicsButton):
         # OTA token/host/interval, LED/beep, etc.).  This ensures the device has
         # all necessary NVS keys — including OTA_TOKEN and OTA_INTERVAL — after
         # a serial flash.
+        #
+        # IMPORTANT: when OTA mode is enabled the NVS partition MUST be written
+        # so the OTA token reaches the device.  If NVS generation fails for any
+        # reason (tool not installed, I/O error, …) we abort the flash rather
+        # than flashing firmware-only and leaving the device with a blank NVS
+        # (which would mean no OTA token, no WiFi credentials, no server URL).
+        ota_mode = self._cfg(CONF_OTA_MODE, OTA_MODE_DISABLED)
         nvs_data: bytes | None = None
         try:
             from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
@@ -153,6 +160,15 @@ class FlashSerialButton(_FreematicsButton):
             nvs_data = generate_nvs_partition(**nvs_kwargs)
             if nvs_data:
                 _LOGGER.info("Freematics: NVS partition generated (%d bytes)", len(nvs_data))
+            elif ota_mode != OTA_MODE_DISABLED:
+                _LOGGER.error(
+                    "Freematics: serial flash ABORTED — NVS partition generation failed "
+                    "(esp-idf-nvs-partition-gen not installed or returned None). "
+                    "OTA mode is enabled so the OTA token must be written to NVS. "
+                    "Install esp-idf-nvs-partition-gen (pip install esp-idf-nvs-partition-gen) "
+                    "and retry."
+                )
+                return
             else:
                 _LOGGER.warning(
                     "Freematics: NVS partition generation returned None "
@@ -160,6 +176,14 @@ class FlashSerialButton(_FreematicsButton):
                     "Flashing firmware only; apply NVS settings separately."
                 )
         except Exception as exc:  # noqa: BLE001
+            if ota_mode != OTA_MODE_DISABLED:
+                _LOGGER.error(
+                    "Freematics: serial flash ABORTED — NVS partition could not be "
+                    "generated (%s). OTA mode is enabled so the OTA token must be "
+                    "written to NVS. Fix the error above and retry.",
+                    exc,
+                )
+                return
             _LOGGER.warning(
                 "Freematics: could not generate NVS partition (%s). "
                 "Flashing firmware only.",
