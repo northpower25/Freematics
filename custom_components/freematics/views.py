@@ -1439,30 +1439,18 @@ class FreematicsOtaTokenView(HomeAssistantView):
 
 
 async def _get_ota_pull_meta(
-    hass, entry, token: str, *, cell_webhook_path: str = ""
+    hass, entry, token: str
 ) -> web.Response:
     """Return the OTA meta.json response for a given config entry and token.
 
-    This is the shared implementation for the meta.json OTA check, called from
-    two places:
+    Called from ``FreematicsOtaPullView.get()`` – the direct HTTPS endpoint at
+    ``/api/freematics/ota_pull/{token}/meta.json``, reachable via the Nabu
+    Casa Remote UI (``*.ui.nabu.casa``) over WiFi.
 
-    1. ``FreematicsOtaPullView.get()`` – the direct HTTPS endpoint at
-       ``/api/freematics/ota_pull/{token}/meta.json``, reachable via the Nabu
-       Casa Remote UI (``*.ui.nabu.casa``) over WiFi.
-    2. The telemetry-webhook GET handler in ``async_setup_entry()`` – reachable
-       via Nabu Casa Cloud Webhooks (``hooks.nabu.casa``) over cellular.  The
-       SIM7600E-H modem cannot complete TLS to ``*.ui.nabu.casa`` (TLS error 15);
-       ``hooks.nabu.casa`` is the only Nabu Casa endpoint compatible with SIM7600
-       cellular TLS.  When the device is on cellular and sends a GET request to
-       the telemetry webhook, this function returns the same JSON that the direct
-       endpoint would serve, so the device can check for OTA updates even without
-       WiFi.
-
-    When ``cell_webhook_path`` is provided (non-empty string), the response JSON
-    includes ``cell_firmware_path`` and ``cell_nvs_path`` fields.  The firmware
-    uses these paths (combined with ``cellServerHost:cellServerPort``) for
-    downloading the firmware and NVS binaries over cellular — working around the
-    TLS incompatibility with ``*.ui.nabu.casa`` on SIM7600 modems.
+    OTA over cellular is not supported.  Firmware updates require a WiFi
+    connection.  Users should configure a mobile hotspot on their phone or
+    vehicle before installing the device so that OTA updates remain possible
+    after installation.
     """
     import hashlib  # noqa: PLC0415
     import re  # noqa: PLC0415
@@ -1490,16 +1478,6 @@ async def _get_ota_pull_meta(
         f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
     )
 
-    # Extra fields for cellular download via hooks.nabu.casa (avoids TLS error
-    # 15 on SIM7600E-H when the direct *.ui.nabu.casa OTA host is used).
-    # Only included when cell_webhook_path is provided (i.e. called from the
-    # telemetry-webhook GET handler, not from the direct meta.json endpoint).
-    _cell_extra: dict = {}
-    if cell_webhook_path:
-        _cell_extra = {
-            "cell_firmware_path": cell_webhook_path + "?type=firmware",
-            "cell_nvs_path": cell_webhook_path + "?type=nvs",
-        }
     _nvs_url = f"/api/freematics/ota_pull/{token}/nvs.bin"
 
     if _ota_mode == OTA_MODE_PULL:
@@ -1551,7 +1529,6 @@ async def _get_ota_pull_meta(
                 "sha256": fw_sha256,
                 "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
                 "nvs_url": _nvs_url,
-                **_cell_extra,
             }).encode("utf-8"),
             content_type="application/json",
         )
@@ -1619,7 +1596,6 @@ async def _get_ota_pull_meta(
                 "sha256": fw_sha256,
                 "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
                 "nvs_url": _nvs_url,
-                **_cell_extra,
             }).encode("utf-8"),
             content_type="application/json",
         )
@@ -1739,8 +1715,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         )
 
         if filename == "meta.json":
-            # Delegate to the shared helper; also called by the cellular webhook
-            # GET handler so SIM7600 devices on hooks.nabu.casa can check for OTA.
+            # Delegate to the shared meta.json helper.
             return await _get_ota_pull_meta(hass, entry, token)
 
         if filename == "nvs.bin":

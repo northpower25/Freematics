@@ -69,8 +69,6 @@ extern volatile bool s_ota_active;
 // resume the telemetry task safely from the httpd task context.
 extern void httpControlStandby(bool enter);
 extern bool httpIsStandby();
-// Cellular download test flag — set by cmd=CELL_DL_TEST, cleared after test.
-extern volatile bool s_cell_dl_test_request;
 // Pull-OTA runtime variables – provisioned via NVS during serial flash or via
 // the OTA_TOKEN= / OTA_HOST= / OTA_INTERVAL= control commands below.
 extern char otaToken[68];   // 64 hex chars + null; empty = OTA disabled
@@ -436,15 +434,6 @@ int handlerControl(UrlHandlerParam* param)
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
         printOtaStatus();
-    } else if (!strcmp(cmd, "CELL_DL_TEST")) {
-        // Trigger a cellular download connectivity test through hooks.nabu.casa.
-        // Downloads a 1 KB known-pattern payload via the cellular modem to verify
-        // the full binary download path before attempting a real OTA firmware update.
-        // The test runs asynchronously in the telemetry task; results are printed
-        // to the serial console.  Requires CELL_HOST + CELL_PATH in NVS.
-        s_cell_dl_test_request = true;
-        n = snprintf(buf, bufsize,
-            "OK - cellular download test queued; see serial output for PASS/FAIL result");
     } else {
         n = snprintf(buf, bufsize, "ERR");
     }
