@@ -3645,14 +3645,15 @@ if (!state.check(STATE_MEMS_READY)) do {
 
   // Print pull-OTA configuration so users can verify NVS provisioning via the
   // serial console.  This makes silent failures immediately obvious:
-  // "OTA:disabled" means OTA_TOKEN was not written to NVS (re-flash with the
-  // HA serial-flash button to provision it).  INTERVAL=0 means the check is
-  // disabled even though a token exists.
+  // "OTA:disabled"        → OTA_TOKEN not in NVS (re-flash with HA serial-flash button).
+  // "INTERVAL=0 (checks disabled)" → token set but OTA_INTERVAL not provisioned;
+  //                           re-flash or use Send Config to set OTA_INTERVAL > 0.
   if (otaToken[0]) {
-    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us\n",
+    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us%s\n",
                   otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
                   (unsigned)otaPort,
-                  (unsigned)otaCheckIntervalS);
+                  (unsigned)otaCheckIntervalS,
+                  otaCheckIntervalS == 0 ? " (checks disabled)" : "");
   } else {
     Serial.println("OTA:disabled");
   }
