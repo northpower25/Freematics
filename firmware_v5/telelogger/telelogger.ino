@@ -3623,7 +3623,7 @@ if (!state.check(STATE_MEMS_READY)) do {
   if (enableHttpd) {
     IPAddress ip;
     if (serverSetup(ip)) {
-      Serial.println("HTTPD:");
+      Serial.print("HTTPD:");
       Serial.println(ip);
 #if ENABLE_OLED
       oled.println(ip);
