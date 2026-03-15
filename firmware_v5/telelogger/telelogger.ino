@@ -2325,7 +2325,7 @@ static void performCellularDlTest()
   char testPath[sizeof(cellWebhookPath) + 16];
   snprintf(testPath, sizeof(testPath), "%s?type=test", cellWebhookPath);
 
-  Serial.printf("[CELL-TEST] GET https://%s%s\n",
+  Serial.printf("[CELL-TEST] POST https://%s%s\n",
                 _maskOtaHost(cellServerHost).c_str(), testPath);
 
   teleClient.cell.close();
@@ -2335,7 +2335,9 @@ static void performCellularDlTest()
     return;
   }
 
-  if (!teleClient.cell.send(METHOD_GET, cellServerHost, cellServerPort, testPath)) {
+  // POST with a minimal JSON body: hooks.nabu.casa requires valid JSON for
+  // POST requests and returns response bodies for POST (unlike GET).
+  if (!teleClient.cell.send(METHOD_POST, cellServerHost, cellServerPort, testPath, "{}", 2)) {
     Serial.println("[CELL-TEST] FAIL: HTTP send failed");
     teleClient.cell.close();
     teleClient.login = false;
@@ -2505,13 +2507,16 @@ bool performPullOtaCheck()
     // (error 15 – modem TLS incompatibility with the Remote UI proxy).
     // When CELL_HOST and CELL_PATH are provisioned (hooks.nabu.casa and the
     // cloud-webhook path), route the OTA meta check through the cellular
-    // telemetry webhook instead: a GET request to the webhook returns the
-    // same OTA meta JSON as the direct meta.json endpoint.
-    // This allows the device to discover available firmware even without WiFi.
+    // telemetry webhook.
+    //
+    // IMPORTANT: hooks.nabu.casa cloud webhooks return an empty response body
+    // for GET requests (fire-and-forget behaviour).  The firmware therefore
+    // uses POST ?type=ota_meta so that the HA webhook handler returns the OTA
+    // meta JSON in the POST response body, which hooks.nabu.casa does forward.
+    // A plain GET to the direct OTA host (non-webhook path) still uses GET.
     bool useCellWebhook = (cellServerHost[0] != '\0' && cellWebhookPath[0] != '\0');
     const char* metaCheckHost = useCellWebhook ? cellServerHost : otaHost;
     uint16_t    metaCheckPort = useCellWebhook ? cellServerPort : otaPort;
-    const char* metaCheckPath = useCellWebhook ? cellWebhookPath : metaPath;
 
     Serial.printf("[OTA-PULL] Cellular meta check via %s\n",
                   _maskOtaHost(metaCheckHost).c_str());
@@ -2525,7 +2530,20 @@ bool performPullOtaCheck()
       return false;
     }
 
-    if (!teleClient.cell.send(METHOD_GET, metaCheckHost, metaCheckPort, metaCheckPath)) {
+    bool metaSendOk = false;
+    if (useCellWebhook) {
+      // POST ?type=ota_meta to the webhook: hooks.nabu.casa forwards POST
+      // responses back to the device, unlike GET responses which are dropped.
+      char metaPostPath[sizeof(cellWebhookPath) + 16];
+      snprintf(metaPostPath, sizeof(metaPostPath), "%s?type=ota_meta", cellWebhookPath);
+      // Minimal valid JSON body required by hooks.nabu.casa for POST requests.
+      metaSendOk = teleClient.cell.send(METHOD_POST, metaCheckHost, metaCheckPort,
+                                        metaPostPath, "{}", 2);
+    } else {
+      // Direct connection to OTA host: plain GET to meta.json works fine.
+      metaSendOk = teleClient.cell.send(METHOD_GET, metaCheckHost, metaCheckPort, metaPath);
+    }
+    if (!metaSendOk) {
       Serial.println("[OTA-PULL] META send failed");
       teleClient.cell.close();
 #if STORAGE != STORAGE_NONE
@@ -2559,6 +2577,8 @@ bool performPullOtaCheck()
     metaBuf[bodyLen] = '\0';
     metaBytes = bodyLen;
     metaBody = metaBuf;
+    Serial.printf("[OTA-PULL] META body (%d bytes): %.128s%s\n",
+                  metaBytes, metaBuf, metaBytes > 128 ? "..." : "");
     teleClient.cell.close();
   }
 
@@ -2849,7 +2869,7 @@ bool performPullOtaCheck()
         return false;
       }
 
-      if (!teleClient.cell.send(METHOD_GET, cellFwHost, cellFwPort, cellFwDlPath)) {
+      if (!teleClient.cell.send(METHOD_POST, cellFwHost, cellFwPort, cellFwDlPath, "{}", 2)) {
         Serial.println("[OTA-PULL] FW send failed");
         teleClient.cell.close();
         fwFile.close();
@@ -3036,7 +3056,7 @@ bool performPullOtaCheck()
         uint16_t    cellNvsPort = (cellNvsPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
         const char* cellNvsDlPath = cellNvsPath[0] ? cellNvsPath : nvsPath;
         if (teleClient.cell.open(cellNvsHost, cellNvsPort) &&
-            teleClient.cell.send(METHOD_GET, cellNvsHost, cellNvsPort, cellNvsDlPath)) {
+            teleClient.cell.send(METHOD_POST, cellNvsHost, cellNvsPort, cellNvsDlPath, "{}", 2)) {
           int nvsContentLen = 0;
           int nvsHttpCode = teleClient.cell.receiveHeaders(&nvsContentLen);
           if (nvsHttpCode == 200 && nvsContentLen > 0) {
