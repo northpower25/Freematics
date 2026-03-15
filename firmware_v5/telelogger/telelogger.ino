@@ -2502,17 +2502,32 @@ bool performPullOtaCheck()
     // for the lightweight meta-data request.
     teleClient.cell.close();
 
-    // *.ui.nabu.casa (Nabu Casa Remote UI) is stored in OTA_HOST for pull-OTA.
-    // The AT+CSSLCFG="ciphersuite" restriction in FreematicsNetwork.cpp now
-    // enables direct TLS from SIM7600E-H to *.ui.nabu.casa (Cloudflare):
-    //   – ECDHE-RSA cipher suites force Cloudflare to present an RSA certificate
-    //     that the modem can verify (ECDSA certs caused TLS error 15).
-    // Use otaHost directly with a plain GET (same path as WiFi).
-    // Fall back to a POST ?type=ota_meta via hooks.nabu.casa only when otaHost
-    // is not provisioned (e.g. non-Nabu-Casa setups without a public OTA URL).
-    bool useCellWebhook = (!otaHost[0] && cellServerHost[0] != '\0' && cellWebhookPath[0] != '\0');
-    const char* metaCheckHost = (otaHost[0] != '\0') ? otaHost : cellServerHost;
-    uint16_t    metaCheckPort = (otaHost[0] != '\0') ? otaPort : cellServerPort;
+    // Prefer the cellular webhook path (hooks.nabu.casa, CELL_HOST / CELL_PATH)
+    // over a direct GET to otaHost (*.ui.nabu.casa / Cloudflare) because:
+    //
+    //   • hooks.nabu.casa uses AWS ALB which presents an RSA certificate that
+    //     the SIM7600E-H TLS stack can always verify.
+    //
+    //   • *.ui.nabu.casa uses Cloudflare which presents an ECDSA certificate
+    //     when the client advertises ECDHE-ECDSA cipher suites.
+    //     AT+CSSLCFG="ciphersuite" can restrict the modem to ECDHE-RSA only,
+    //     forcing Cloudflare to fall back to RSA; however that AT command
+    //     silently fails (returns ERROR) on some SIM7600E-H firmware revisions
+    //     and the modem falls back to its default cipher list, causing
+    //     Cloudflare to present an ECDSA cert the modem cannot verify
+    //     (+CCHOPEN: 0,15 / TLS error 15).
+    //
+    // When the webhook is available (CELL_HOST + CELL_PATH in NVS), HA
+    // responds to POST ?type=ota_meta with the meta JSON including
+    // cell_firmware_path / cell_nvs_path so the whole FW+NVS download chain
+    // also stays on hooks.nabu.casa without needing a direct *.ui.nabu.casa
+    // connection.
+    //
+    // Fall back to a direct GET to otaHost only when CELL_HOST / CELL_PATH
+    // are not provisioned (WiFi-only or non-Nabu-Casa installations).
+    bool useCellWebhook = (cellServerHost[0] != '\0' && cellWebhookPath[0] != '\0');
+    const char* metaCheckHost = useCellWebhook ? cellServerHost : otaHost;
+    uint16_t    metaCheckPort = useCellWebhook ? cellServerPort : otaPort;
 
     Serial.printf("[OTA-PULL] Cellular meta check via %s\n",
                   _maskOtaHost(metaCheckHost).c_str());
@@ -2846,11 +2861,11 @@ bool performPullOtaCheck()
       // Telemetry is paused for the duration of the download; the telemetry
       // loop reconnects automatically after this function returns.
       //
-      // cellFwPath is empty when meta.json was served from otaHost directly
-      // (ECDHE-RSA cipher fix enables *.ui.nabu.casa; firmware_url from meta.json
-      // → GET to otaHost).  cellFwPath is set only when the webhook path was
-      // used for the meta check (e.g. otaHost not provisioned), in which case
-      // HA embeds "?type=firmware" in cell_firmware_path → POST to cellServerHost.
+      // cellFwPath is set when the meta check used the webhook path: HA
+      // embeds "?type=firmware" in cell_firmware_path → POST to cellServerHost
+      // (hooks.nabu.casa).  cellFwPath is empty only when the meta check fell
+      // back to a direct GET to otaHost (e.g. no CELL_HOST/CELL_PATH in NVS)
+      // in which case the FW download also goes to otaHost directly.
       const char* cellFwHost = (cellFwPath[0] && cellServerHost[0]) ? cellServerHost : otaHost;
       uint16_t    cellFwPort = (cellFwPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
       const char* cellFwDlPath = cellFwPath[0] ? cellFwPath : fwPath;
@@ -3052,8 +3067,9 @@ bool performPullOtaCheck()
 #endif  // ENABLE_WIFI
       } else {
         // Cellular NVS download (streaming, same approach as firmware).
-        // cellNvsPath is empty when using direct otaHost (ECDHE-RSA cipher fix);
-        // set only when meta.json came from the webhook path.
+        // cellNvsPath is set when meta.json came from the webhook path (POST
+        // ?type=ota_meta via hooks.nabu.casa); empty only when the meta check
+        // fell back to a direct GET to otaHost (no CELL_HOST/CELL_PATH in NVS).
         const char* cellNvsHost = (cellNvsPath[0] && cellServerHost[0]) ? cellServerHost : otaHost;
         uint16_t    cellNvsPort = (cellNvsPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
         const char* cellNvsDlPath = cellNvsPath[0] ? cellNvsPath : nvsPath;
