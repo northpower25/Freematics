@@ -203,7 +203,9 @@ CONF_OTA_MODE = "ota_mode"
 OTA_MODE_DISABLED = "disabled"
 OTA_MODE_PULL     = "pull"
 OTA_MODE_CLOUD    = "cloud"
-DEFAULT_OTA_MODE  = OTA_MODE_DISABLED  # opt-in; no automatic updates out of the box
+DEFAULT_OTA_MODE  = OTA_MODE_PULL  # Pull-OTA enabled by default so fresh serial flashes
+                                   # always have an OTA token in NVS and can receive
+                                   # firmware updates over the air without re-flashing.
 
 # Control commands supported by the device HTTP API (/api/control)
 CMD_SSID = "SSID={}"

@@ -75,6 +75,7 @@ async def async_setup_entry(
         SendConfigButton(entry, webhook_id),
         RestartDeviceButton(entry, webhook_id),
         PublishCloudOtaButton(entry, webhook_id),
+        CellDlTestButton(entry, webhook_id),
     ]
     async_add_entities(buttons)
 
@@ -144,6 +145,13 @@ class FlashSerialButton(_FreematicsButton):
         # OTA token/host/interval, LED/beep, etc.).  This ensures the device has
         # all necessary NVS keys — including OTA_TOKEN and OTA_INTERVAL — after
         # a serial flash.
+        #
+        # IMPORTANT: when OTA mode is enabled the NVS partition MUST be written
+        # so the OTA token reaches the device.  If NVS generation fails for any
+        # reason (tool not installed, I/O error, …) we abort the flash rather
+        # than flashing firmware-only and leaving the device with a blank NVS
+        # (which would mean no OTA token, no WiFi credentials, no server URL).
+        ota_mode = self._cfg(CONF_OTA_MODE, OTA_MODE_DISABLED)
         nvs_data: bytes | None = None
         try:
             from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
@@ -152,6 +160,15 @@ class FlashSerialButton(_FreematicsButton):
             nvs_data = generate_nvs_partition(**nvs_kwargs)
             if nvs_data:
                 _LOGGER.info("Freematics: NVS partition generated (%d bytes)", len(nvs_data))
+            elif ota_mode != OTA_MODE_DISABLED:
+                _LOGGER.error(
+                    "Freematics: serial flash ABORTED — NVS partition generation failed "
+                    "(esp-idf-nvs-partition-gen not installed or returned None). "
+                    "OTA mode is enabled so the OTA token must be written to NVS. "
+                    "Install esp-idf-nvs-partition-gen (pip install esp-idf-nvs-partition-gen) "
+                    "and retry."
+                )
+                return
             else:
                 _LOGGER.warning(
                     "Freematics: NVS partition generation returned None "
@@ -159,6 +176,14 @@ class FlashSerialButton(_FreematicsButton):
                     "Flashing firmware only; apply NVS settings separately."
                 )
         except Exception as exc:  # noqa: BLE001
+            if ota_mode != OTA_MODE_DISABLED:
+                _LOGGER.error(
+                    "Freematics: serial flash ABORTED — NVS partition could not be "
+                    "generated (%s). OTA mode is enabled so the OTA token must be "
+                    "written to NVS. Fix the error above and retry.",
+                    exc,
+                )
+                return
             _LOGGER.warning(
                 "Freematics: could not generate NVS partition (%s). "
                 "Flashing firmware only.",
@@ -574,3 +599,51 @@ class PublishCloudOtaButton(_FreematicsButton):
                     )
         else:
             _LOGGER.error("Freematics Cloud OTA: %s", msg)
+
+
+class CellDlTestButton(_FreematicsButton):
+    """Button that triggers the cellular download connectivity test on the device.
+
+    Sends the CELL_DL_TEST command to the device via /api/control.  The firmware
+    downloads a 1 KB known-pattern payload through hooks.nabu.casa (same code path
+    used for OTA firmware downloads over cellular) and logs PASS/FAIL to the serial
+    console.  This lets users verify the full cellular binary-download path before
+    attempting a real OTA firmware update.
+
+    Requires:
+    - Device reachable at the configured IP address (device on WiFi).
+    - Cellular modem connected (STATE_CELL_CONNECTED) on the device.
+    - CELL_HOST / CELL_PATH provisioned in NVS (configured when Nabu Casa cloud
+      is active and the webhook is registered).
+    """
+
+    _attr_name = "Test Cellular Download"
+    _attr_icon = "mdi:cellphone-arrow-down"
+
+    def __init__(self, entry: ConfigEntry, webhook_id: str) -> None:
+        super().__init__(entry, webhook_id)
+        self._attr_unique_id = f"freematics_{webhook_id}_cell_dl_test"
+
+    async def async_press(self) -> None:
+        """Send CELL_DL_TEST command to device via /api/control."""
+        device_ip = self._cfg(CONF_DEVICE_IP, "")
+        device_port = self._cfg(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)
+        if not device_ip:
+            _LOGGER.error(
+                "Freematics: no device IP configured. "
+                "Set the device IP in the integration options."
+            )
+            return
+
+        try:
+            import aiohttp  # noqa: PLC0415
+            url = f"http://{device_ip}:{device_port}{CONTROL_PATH}?cmd=CELL_DL_TEST"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    _LOGGER.info(
+                        "Freematics CELL_DL_TEST queued on device, HTTP %s. "
+                        "Check the device serial console for [CELL-TEST] output.",
+                        resp.status,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Freematics CELL_DL_TEST command error: %s", exc)
