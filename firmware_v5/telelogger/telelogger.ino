@@ -283,7 +283,7 @@ static volatile bool s_http_standby_enter = false;
 static volatile bool s_http_standby_exit  = false;
 // Set by handlerControl (cmd=CELL_DL_TEST) to trigger a cellular download test
 // from the telemetry loop.  Cleared after the test completes.
-static volatile bool s_cell_dl_test_request = false;
+volatile bool s_cell_dl_test_request = false;
 
 // Called from handlerControl (httpd task) to pause or resume the telemetry task.
 void httpControlStandby(bool enter) {
