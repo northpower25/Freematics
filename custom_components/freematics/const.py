@@ -152,6 +152,7 @@ PID_MAP: dict[str, _PidMapping] = {
     "85":  ("beep_state",      1.0),   # PID_BEEP_STATE: 1=on, 0=off (runtime enableBeep)
     "86":  ("sd_total_mb",     1.0),   # PID_SD_TOTAL_MB: SD total capacity in MiB (0 = no card)
     "87":  ("sd_free_mb",      1.0),   # PID_SD_FREE_MB: SD free space in MiB
+    "88":  ("conn_type",       1.0),   # PID_CONN_TYPE: active transport (1=WiFi, 2=Cellular/LTE)
     # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
     "104": ("engine_load",        1.0),   # PID_ENGINE_LOAD (%)
     "105": ("coolant_temp",       1.0),   # PID_COOLANT_TEMP (°C)
@@ -166,6 +167,11 @@ PID_MAP: dict[str, _PidMapping] = {
     "10F": ("intake_temp",        1.0),   # PID_INTAKE_TEMP (°C)
     "111": ("throttle",           1.0),   # PID_THROTTLE (%)
 }
+
+# PID_CONN_TYPE (0x88) values – active transport reported by the firmware.
+# These match the raw byte sent by the firmware (scale factor 1.0 → float after parsing).
+PID_CONN_TYPE_WIFI     = 1.0  # active transport is WiFi (STATE_WIFI_CONNECTED)
+PID_CONN_TYPE_CELLULAR = 2.0  # active transport is cellular / LTE (SIM7600)
 
 # Settings version: UTC ISO 8601 timestamp of the last config/options save that
 # changed NVS-relevant settings.  Combined with FIRMWARE_VERSION to form the

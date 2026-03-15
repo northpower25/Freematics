@@ -186,15 +186,17 @@ volatile bool s_ota_active = false;
 // Also set at startup when a previously staged file is found on SD.
 static volatile bool s_ota_pending = false;
 
-// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85).
-// Initialised to -1 so the first call to process() always adds the PIDs to the
-// buffer.  Reset back to -1 by initialize() on every new telemetry session so
+// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85) and the
+// connection-type PID (0x88).  Initialised to -1 so the first call to process()
+// always adds the PIDs to the buffer.  Reset back to -1 by initialize() and
+// whenever a new WiFi or cellular connection is established (in telemetry()), so
 // the current state is always re-sent after a reconnect — preventing a permanent
 // "Unbekannt" IST-Status in Home Assistant when HA is reloaded while the device
 // is connected (HA loses diag state but device won't resend unchanged values
-// unless the sentinels are reset here).
+// unless the sentinels are reset).
 static int8_t s_lastLedWhite = -1;
 static int8_t s_lastBeep     = -1;
+static int8_t s_lastConnType = -1;  // PID_CONN_TYPE sentinel: 1=WiFi, 2=Cellular
 
 // Pull-OTA constants used in initialize(), standby(), performPullOtaFlash(),
 // and performPullOtaCheck().  Defined here (before any function body) so that
@@ -636,15 +638,17 @@ void initialize()
   // dump buffer data
   bufman.purge();
 
-  // Reset LED/beep sentinels so the current state is re-sent in the first buffer
-  // of the new telemetry session.  initialize() is called at the start of every
-  // logging session (boot and after each network disconnection), so resetting
-  // here ensures the device always reports its live LED/beep state to HA after
-  // a reconnect — preventing a permanent "Unbekannt" IST-Status when HA is
-  // reloaded while the device was connected (HA loses diag, device never resends
-  // the unchanged state unless the sentinels are reset here).
+  // Reset LED/beep/conn_type sentinels so the current state is re-sent in the
+  // first buffer of the new telemetry session.  initialize() is called at the
+  // start of every logging session (boot and after each network disconnection),
+  // so resetting here ensures the device always reports its live LED/beep state
+  // and active transport type to HA after a reconnect — preventing a permanent
+  // "Unbekannt" IST-Status when HA is reloaded while the device was connected
+  // (HA loses diag state, device never resends unchanged values unless the
+  // sentinels are reset).
   s_lastLedWhite = -1;
   s_lastBeep     = -1;
+  s_lastConnType = -1;
 
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
@@ -976,10 +980,11 @@ void process()
 
   // Report white-LED and beep runtime state so HA can display live IST-Status.
   // Uses the file-scope sentinels s_lastLedWhite / s_lastBeep (both initialised
-  // to -1 and reset to -1 on every telemetry reconnect via initialize()) so
-  // the current state is always re-sent after a connection drop, preventing a
-  // permanent "Unbekannt" IST-Status in Home Assistant when the very first
-  // transmission attempt fails and the buffer is subsequently purged.
+  // to -1 and reset to -1 on every telemetry reconnect via initialize() and on
+  // every new WiFi/cellular connection) so the current state is always re-sent
+  // after a connection drop, preventing a permanent "Unbekannt" IST-Status in
+  // Home Assistant when the very first transmission attempt fails and the buffer
+  // is subsequently purged.
   {
     uint8_t lwv = enableLedWhite ? 1 : 0;
     uint8_t bv  = enableBeep     ? 1 : 0;
@@ -990,6 +995,22 @@ void process()
     if ((int8_t)bv != s_lastBeep) {
       s_lastBeep = (int8_t)bv;
       buffer->add(PID_BEEP_STATE, ELEMENT_UINT8, &bv, sizeof(bv));
+    }
+  }
+
+  // Report active transport type (WiFi vs Cellular) via PID_CONN_TYPE (0x88).
+  // Only added when a network connection is active (STATE_NET_READY) so the
+  // value is always meaningful — the device is either on WiFi or cellular,
+  // never in AP-only mode when this PID reaches HA.  The sentinel is reset on
+  // every new connection, so the first packet of each session always includes
+  // this PID, enabling HA to correctly update "WiFi letzte Verbindung" /
+  // "LTE letzte Verbindung" timestamps for both transports.
+  if (state.check(STATE_NET_READY)) {
+    // 1 = WiFi (STATE_WIFI_CONNECTED), 2 = Cellular (SIM7600 / LTE).
+    uint8_t ctv = state.check(STATE_WIFI_CONNECTED) ? 1 : 2;
+    if ((int8_t)ctv != s_lastConnType) {
+      s_lastConnType = (int8_t)ctv;
+      buffer->add(PID_CONN_TYPE, ELEMENT_UINT8, &ctv, sizeof(ctv));
     }
   }
 
@@ -1246,12 +1267,14 @@ void telemetry(void* inst)
       state.clear(STATE_NET_READY | STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
       teleClient.reset();
       bufman.purge();
-      // Reset LED/beep sentinels so the current state is re-sent in the first
-      // buffer after the connection is re-established.  Without this reset the
-      // state-change detection would suppress the PIDs (value unchanged) and
-      // Home Assistant would keep showing "Unbekannt" for the IST-Status.
+      // Reset LED/beep/conn_type sentinels so the current state is re-sent in
+      // the first buffer after the connection is re-established.  Without this
+      // reset the state-change detection would suppress the PIDs (value
+      // unchanged) and Home Assistant would keep showing "Unbekannt" for the
+      // IST-Status and the connection-type timestamps.
       s_lastLedWhite = -1;
       s_lastBeep     = -1;
+      s_lastConnType = -1;
 
       uint32_t t = millis();
       do {
@@ -1282,6 +1305,20 @@ void telemetry(void* inst)
       }
       continue;
     }
+
+#if STORAGE == STORAGE_SD
+    // After a pull-OTA download completes (firmware staged to SD), pause all
+    // telemetry until the device enters standby and flashes the new firmware.
+    // This mirrors the WiFi OTA flow: connection closed during download, then
+    // transmission stops until flash.  The device is either on WiFi, on
+    // cellular, or in AP mode — no need for complex "what if" handling here.
+    // standby() will set s_ota_active when it is ready to flash, which is
+    // already checked at the top of this loop.
+    if (s_ota_pending) {
+      delay(1000);
+      continue;
+    }
+#endif
 
 #if ENABLE_WIFI
     if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
@@ -1315,6 +1352,13 @@ void telemetry(void* inst)
           if (teleClient.connect()) {
             state.set(STATE_WIFI_CONNECTED | STATE_NET_READY);
             if (enableBeep) beep(50);
+            // Reset sentinels so the first WiFi packet always re-transmits the
+            // LED/beep state and connection type to HA.  Without this, the
+            // sentinels retain their values from the previous cellular session
+            // and HA would keep showing stale IST-Status values.
+            s_lastLedWhite = -1;
+            s_lastBeep     = -1;
+            s_lastConnType = -1;
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
               teleClient.cell.end();
@@ -1354,6 +1398,13 @@ void telemetry(void* inst)
         Serial.println("[CELL] In service");
         state.set(STATE_NET_READY);
         if (enableBeep) beep(50);
+        // Reset sentinels so the first cellular packet always re-transmits the
+        // LED/beep state and connection type to HA.  Without this, the sentinels
+        // retain their values from the previous WiFi session and HA would keep
+        // showing stale IST-Status values and incorrect connection timestamps.
+        s_lastLedWhite = -1;
+        s_lastBeep     = -1;
+        s_lastConnType = -1;
       }
 
       if (millis() - lastRssiTime > SIGNAL_CHECK_INTERVAL * 1000) {

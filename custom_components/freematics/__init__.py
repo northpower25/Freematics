@@ -64,6 +64,8 @@ from .const import (
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
     OTA_MODE_DISABLED,
+    PID_CONN_TYPE_CELLULAR,
+    PID_CONN_TYPE_WIFI,
     SENSOR_DEFINITIONS,
 )
 from .views import (
@@ -555,10 +557,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # ── Update diagnostic state from received data ─────────────────
         diag["last_packet_time"] = now_iso
-        if conn_mode == 1:
+
+        # Determine which transport was used for this packet.
+        # Priority 1: firmware-reported PID_CONN_TYPE (0x88): 1.0 = WiFi, 2.0 = Cellular.
+        #   Available in firmware built from this source; not in older binaries.
+        # Priority 2: fall back to the configured conn_mode when the PID is absent.
+        #   - conn_mode 1 (pure LTE) → always cellular
+        #   - conn_mode 2 (pure WiFi) → always WiFi
+        #   - conn_mode 3 (WiFi+LTE) without PID: update both timestamps so
+        #     neither shows "Unbekannt" forever (we can't distinguish the transport
+        #     at the HTTP level when both WiFi and cellular use the same cloud hook).
+        _reported_conn_type = data.get("conn_type")  # PID 0x88 value (float or None)
+        if _reported_conn_type == PID_CONN_TYPE_CELLULAR:
+            # Firmware explicitly reports cellular transport.
             diag["last_lte_connection"] = now_iso
-        else:
+        elif _reported_conn_type == PID_CONN_TYPE_WIFI:
+            # Firmware explicitly reports WiFi transport.
             diag["last_wifi_connection"] = now_iso
+        elif conn_mode == 1:
+            # Configured as pure cellular; no PID_CONN_TYPE from firmware.
+            diag["last_lte_connection"] = now_iso
+        elif conn_mode == 2:
+            # Configured as pure WiFi; no PID_CONN_TYPE from firmware.
+            diag["last_wifi_connection"] = now_iso
+        else:
+            # WiFi+LTE mode (conn_mode == 3) without PID_CONN_TYPE: update both so
+            # neither timestamp stays "Unbekannt" indefinitely.  Once the device is
+            # flashed with a build that includes PID_CONN_TYPE the timestamps will
+            # be updated accurately per transport.
+            diag["last_wifi_connection"] = now_iso
+            diag["last_lte_connection"] = now_iso
 
         # GPS: mark active when valid lat/lng coordinates arrive; do NOT reset
         # to False on packets without GPS data because not every telemetry
