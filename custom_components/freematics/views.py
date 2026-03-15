@@ -1927,32 +1927,45 @@ class FreematicsOtaPullView(HomeAssistantView):
         if _fully_sent:
             now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
-            # Record that the full firmware was delivered so meta.json returns
-            # available=false on subsequent checks (prevents re-download loops).
-            # nvs_version is also written speculatively: if the device is running
-            # firmware that does not support nvs_url it will not request nvs.bin,
-            # but we record the current effective_version so future meta.json checks
-            # do not trigger a re-download solely because nvs_version was never set.
-            # When the device DOES request nvs.bin (firmware with nvs_url support),
-            # the nvs.bin handler overwrites nvs_version with the confirmed value.
-            # When settings change (effective_version bumps), nvs_version becomes
-            # stale and the next meta.json check returns available=true so the device
-            # downloads firmware + the updated NVS together.
+            # Record that the full firmware was delivered.  nvs_version is NOT
+            # written here: it is only set when the device actually requests and
+            # receives nvs.bin (handled below).  This prevents a situation where
+            # firmware downloads successfully but nvs.bin fails, the speculative
+            # nvs_version causes meta.json to return available=false, and the
+            # device is stuck with stale NVS settings (e.g. LED/beep still on
+            # after the user changed them to off in HA).
+            #
+            # Without the speculative write, when nvs.bin download fails the
+            # state file lacks nvs_version, meta.json returns available=true on
+            # the next interval, and the device downloads both firmware and NVS
+            # again.  The extra firmware re-download (same bytes) is acceptable
+            # because the device will overwrite the previously staged /ota_fw.bin
+            # with an identical copy and proceed normally.
             if _ota_mode == OTA_MODE_CLOUD:
                 # Keyed by publish_id: pressing "Publish" again generates a new
                 # publish_id, which automatically unblocks a fresh download.
                 def _write_cloud_pull_state() -> None:
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     try:
+                        # Read any existing state so we can preserve nvs_version
+                        # if the nvs.bin handler already set it (race-free merge).
+                        try:
+                            _existing = json.loads(
+                                (_www_dir / "ota_pull_state.json").read_text(encoding="utf-8")
+                            )
+                        except (OSError, json.JSONDecodeError):
+                            _existing = {}
+                        _state: dict = {
+                            "version": _pub_id,
+                            "downloaded_at": now_iso,
+                        }
+                        # Preserve nvs_version only if it was already confirmed
+                        # (i.e. the nvs.bin handler ran first in a concurrent
+                        # request — very unlikely but handled defensively).
+                        if _existing.get("nvs_version"):
+                            _state["nvs_version"] = _existing["nvs_version"]
                         (_www_dir / "ota_pull_state.json").write_text(
-                            json.dumps(
-                                {
-                                    "version": _pub_id,
-                                    "nvs_version": effective_version,
-                                    "downloaded_at": now_iso,
-                                },
-                                indent=2,
-                            ),
+                            json.dumps(_state, indent=2),
                             encoding="utf-8",
                         )
                     except OSError as _exc:
@@ -1969,15 +1982,20 @@ class FreematicsOtaPullView(HomeAssistantView):
                 def _write_pull_state() -> None:
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     try:
+                        try:
+                            _existing = json.loads(
+                                _pull_state_file.read_text(encoding="utf-8")
+                            )
+                        except (OSError, json.JSONDecodeError):
+                            _existing = {}
+                        _state_pull: dict = {
+                            "version": effective_version,
+                            "downloaded_at": now_iso,
+                        }
+                        if _existing.get("nvs_version"):
+                            _state_pull["nvs_version"] = _existing["nvs_version"]
                         _pull_state_file.write_text(
-                            json.dumps(
-                                {
-                                    "version": effective_version,
-                                    "nvs_version": effective_version,
-                                    "downloaded_at": now_iso,
-                                },
-                                indent=2,
-                            ),
+                            json.dumps(_state_pull, indent=2),
                             encoding="utf-8",
                         )
                     except OSError as _exc:
