@@ -77,6 +77,11 @@ extern char otaToken[68];   // 64 hex chars + null; empty = OTA disabled
 extern char otaHost[128];   // hostname of the HA server serving pull-OTA
 extern uint16_t otaCheckIntervalS; // seconds between OTA checks; 0 = disabled
 extern char serverHost[128]; // primary server hostname (fallback for otaHost)
+// Prints the current pull-OTA status (token/host/port/interval) to serial.
+// Defined in telelogger.ino (non-static for cross-file linkage); called after
+// live OTA config updates so users see the new state immediately without
+// needing to reboot.
+extern void printOtaStatus();
 
 uint16_t hex2uint16(const char *p);
 
@@ -408,6 +413,7 @@ int handlerControl(UrlHandlerParam* param)
             nvs_set_str(nvs, "OTA_TOKEN", clr ? "" : p) == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
+        printOtaStatus();
     } else if (!strncmp(cmd, "OTA_HOST=", 9)) {
         // Set the HA server hostname used for pull-OTA firmware downloads
         // (stored in NVS key OTA_HOST).  Use "-" to clear and fall back to
@@ -419,6 +425,7 @@ int handlerControl(UrlHandlerParam* param)
             nvs_set_str(nvs, "OTA_HOST", clr ? "" : p) == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
+        printOtaStatus();
     } else if (!strncmp(cmd, "OTA_INTERVAL=", 13)) {
         // Set the pull-OTA check interval in seconds (0 = disable).
         // Written to NVS key OTA_INTERVAL and applied immediately so the
@@ -428,6 +435,7 @@ int handlerControl(UrlHandlerParam* param)
             nvs_set_u16(nvs, "OTA_INTERVAL", interval) == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
+        printOtaStatus();
     } else if (!strcmp(cmd, "CELL_DL_TEST")) {
         // Trigger a cellular download connectivity test through hooks.nabu.casa.
         // Downloads a 1 KB known-pattern payload via the cellular modem to verify

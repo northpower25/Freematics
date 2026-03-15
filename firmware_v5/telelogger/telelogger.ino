@@ -3507,6 +3507,33 @@ void processBLE(int timeout)
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// printOtaStatus()
+//
+// Prints the current pull-OTA configuration to the serial console.  Called
+// at boot from setup() and after any live OTA config update via the HTTP
+// control API (OTA_TOKEN=, OTA_HOST=, OTA_INTERVAL= commands) so users see
+// the current OTA state immediately without needing to reboot.
+//
+// Outputs one of:
+//   OTA:disabled                       – OTA_TOKEN not in NVS
+//   OTA:TOKEN=<set> HOST=… PORT=… INTERVAL=Xs                   – fully active
+//   OTA:TOKEN=<set> HOST=… PORT=… INTERVAL=0s (checks disabled) – token set,
+//                                         but OTA_INTERVAL=0 so never fires
+// ---------------------------------------------------------------------------
+void printOtaStatus()
+{
+  if (otaToken[0]) {
+    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us%s\n",
+                  otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
+                  (unsigned)otaPort,
+                  (unsigned)otaCheckIntervalS,
+                  otaCheckIntervalS == 0 ? " (checks disabled)" : "");
+  } else {
+    Serial.println("OTA:disabled");
+  }
+}
+
 void setup()
 {
   // Drive the LED pin LOW immediately so that the GPIO output register
@@ -3648,15 +3675,7 @@ if (!state.check(STATE_MEMS_READY)) do {
   // "OTA:disabled"        → OTA_TOKEN not in NVS (re-flash with HA serial-flash button).
   // "INTERVAL=0 (checks disabled)" → token set but OTA_INTERVAL not provisioned;
   //                           re-flash or use Send Config to set OTA_INTERVAL > 0.
-  if (otaToken[0]) {
-    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us%s\n",
-                  otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
-                  (unsigned)otaPort,
-                  (unsigned)otaCheckIntervalS,
-                  otaCheckIntervalS == 0 ? " (checks disabled)" : "");
-  } else {
-    Serial.println("OTA:disabled");
-  }
+  printOtaStatus();
 
   // initialize components
   initialize();
