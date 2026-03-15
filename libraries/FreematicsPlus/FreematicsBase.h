@@ -42,6 +42,11 @@
 // Values are in MiB (1 MiB = 2^20 bytes).  sd_total_mb == 0 means no SD card.
 #define PID_SD_TOTAL_MB     0x86  // total SD capacity in MiB (0 = no card / not ready)
 #define PID_SD_FREE_MB      0x87  // free SD space in MiB
+// Active transport indicator: sent on change (and after every reconnect) so
+// Home Assistant can distinguish WiFi from cellular packets and correctly
+// update the "WiFi letzte Verbindung" / "LTE letzte Verbindung" timestamps.
+// Value: 1 = WiFi (STATE_WIFI_CONNECTED), 2 = Cellular (SIM7600/LTE).
+#define PID_CONN_TYPE       0x88  // active transport: 1=WiFi, 2=Cellular
 #define PID_EXT_SENSOR1 0x90
 #define PID_EXT_SENSOR2 0x91
 

@@ -64,6 +64,8 @@ from .const import (
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
     OTA_MODE_DISABLED,
+    PID_CONN_TYPE_CELLULAR,
+    PID_CONN_TYPE_WIFI,
     SENSOR_DEFINITIONS,
 )
 from .views import (
@@ -83,6 +85,12 @@ from .views import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "button", "device_tracker"]
+
+# Cellular download test payload: 1 KB with a known byte pattern (0x00–0xFF × 4).
+# The firmware's CELL_DL_TEST command downloads this and checks every byte so any
+# proxy mangling (chunked encoding, truncation) is detected immediately.
+# SHA-256: 785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9
+_CELL_TEST_PAYLOAD: bytes = bytes(i & 0xFF for i in range(1024))
 
 
 def _parse_freematics_payload(body: str) -> dict:
@@ -458,6 +466,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                     return _web.Response(status=500, text="Internal error")
 
+            # ── Cellular connectivity test ─────────────────────────────────
+            # GET ?type=test  is requested by the firmware's CELL_DL_TEST command
+            # (triggered via /api/control?cmd=CELL_DL_TEST on the device HTTPD).
+            # Returns a 1 KB payload with a known byte pattern so the firmware can
+            # verify the full download path through hooks.nabu.casa end-to-end
+            # without touching the real firmware binary.
+            # Pattern: bytes 0x00–0xFF repeated 4×  (1024 bytes total)
+            # SHA-256:  785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9
+            if _req_type == "test":
+                return _web.Response(
+                    body=_CELL_TEST_PAYLOAD,
+                    content_type="application/octet-stream",
+                    headers={"Content-Length": "1024"},
+                )
+
             # ── Cellular OTA meta check ───────────────────────────────────
             if _ota_token:
                 from .views import _get_ota_pull_meta  # noqa: PLC0415
@@ -555,10 +578,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # ── Update diagnostic state from received data ─────────────────
         diag["last_packet_time"] = now_iso
-        if conn_mode == 1:
+
+        # Determine which transport was used for this packet.
+        # Priority 1: firmware-reported PID_CONN_TYPE (0x88): 1.0 = WiFi, 2.0 = Cellular.
+        #   Available in firmware built from this source; not in older binaries.
+        # Priority 2: fall back to the configured conn_mode when the PID is absent.
+        #   - conn_mode 1 (pure LTE) → always cellular
+        #   - conn_mode 2 (pure WiFi) → always WiFi
+        #   - conn_mode 3 (WiFi+LTE) without PID: update both timestamps so
+        #     neither shows "Unbekannt" forever (we can't distinguish the transport
+        #     at the HTTP level when both WiFi and cellular use the same cloud hook).
+        reported_conn_type = data.get("conn_type")  # PID 0x88 value (float or None)
+        if reported_conn_type == PID_CONN_TYPE_CELLULAR:
+            # Firmware explicitly reports cellular transport.
             diag["last_lte_connection"] = now_iso
-        else:
+        elif reported_conn_type == PID_CONN_TYPE_WIFI:
+            # Firmware explicitly reports WiFi transport.
             diag["last_wifi_connection"] = now_iso
+        elif conn_mode == 1:
+            # Configured as pure cellular; no PID_CONN_TYPE from firmware.
+            diag["last_lte_connection"] = now_iso
+        elif conn_mode == 2:
+            # Configured as pure WiFi; no PID_CONN_TYPE from firmware.
+            diag["last_wifi_connection"] = now_iso
+        else:
+            # WiFi+LTE mode (conn_mode == 3) without PID_CONN_TYPE: update both so
+            # neither timestamp stays "Unbekannt" indefinitely.  Once the device is
+            # flashed with a build that includes PID_CONN_TYPE the timestamps will
+            # be updated accurately per transport.
+            diag["last_wifi_connection"] = now_iso
+            diag["last_lte_connection"] = now_iso
 
         # GPS: mark active when valid lat/lng coordinates arrive; do NOT reset
         # to False on packets without GPS data because not every telemetry

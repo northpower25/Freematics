@@ -17,6 +17,7 @@
 
 #include <FreematicsPlus.h>
 #include <httpd.h>
+#include <mbedtls/sha256.h>
 #include "config.h"
 #include "telestore.h"
 #include "teleclient.h"
@@ -186,15 +187,17 @@ volatile bool s_ota_active = false;
 // Also set at startup when a previously staged file is found on SD.
 static volatile bool s_ota_pending = false;
 
-// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85).
-// Initialised to -1 so the first call to process() always adds the PIDs to the
-// buffer.  Reset back to -1 by initialize() on every new telemetry session so
+// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85) and the
+// connection-type PID (0x88).  Initialised to -1 so the first call to process()
+// always adds the PIDs to the buffer.  Reset back to -1 by initialize() and
+// whenever a new WiFi or cellular connection is established (in telemetry()), so
 // the current state is always re-sent after a reconnect — preventing a permanent
 // "Unbekannt" IST-Status in Home Assistant when HA is reloaded while the device
 // is connected (HA loses diag state but device won't resend unchanged values
-// unless the sentinels are reset here).
+// unless the sentinels are reset).
 static int8_t s_lastLedWhite = -1;
 static int8_t s_lastBeep     = -1;
+static int8_t s_lastConnType = -1;  // PID_CONN_TYPE sentinel: 1=WiFi, 2=Cellular
 
 // Pull-OTA constants used in initialize(), standby(), performPullOtaFlash(),
 // and performPullOtaCheck().  Defined here (before any function body) so that
@@ -278,6 +281,9 @@ State state;
 // ---------------------------------------------------------------------------
 static volatile bool s_http_standby_enter = false;
 static volatile bool s_http_standby_exit  = false;
+// Set by handlerControl (cmd=CELL_DL_TEST) to trigger a cellular download test
+// from the telemetry loop.  Cleared after the test completes.
+volatile bool s_cell_dl_test_request = false;
 
 // Called from handlerControl (httpd task) to pause or resume the telemetry task.
 void httpControlStandby(bool enter) {
@@ -636,15 +642,17 @@ void initialize()
   // dump buffer data
   bufman.purge();
 
-  // Reset LED/beep sentinels so the current state is re-sent in the first buffer
-  // of the new telemetry session.  initialize() is called at the start of every
-  // logging session (boot and after each network disconnection), so resetting
-  // here ensures the device always reports its live LED/beep state to HA after
-  // a reconnect — preventing a permanent "Unbekannt" IST-Status when HA is
-  // reloaded while the device was connected (HA loses diag, device never resends
-  // the unchanged state unless the sentinels are reset here).
+  // Reset LED/beep/conn_type sentinels so the current state is re-sent in the
+  // first buffer of the new telemetry session.  initialize() is called at the
+  // start of every logging session (boot and after each network disconnection),
+  // so resetting here ensures the device always reports its live LED/beep state
+  // and active transport type to HA after a reconnect — preventing a permanent
+  // "Unbekannt" IST-Status when HA is reloaded while the device was connected
+  // (HA loses diag state, device never resends unchanged values unless the
+  // sentinels are reset).
   s_lastLedWhite = -1;
   s_lastBeep     = -1;
+  s_lastConnType = -1;
 
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
@@ -976,10 +984,11 @@ void process()
 
   // Report white-LED and beep runtime state so HA can display live IST-Status.
   // Uses the file-scope sentinels s_lastLedWhite / s_lastBeep (both initialised
-  // to -1 and reset to -1 on every telemetry reconnect via initialize()) so
-  // the current state is always re-sent after a connection drop, preventing a
-  // permanent "Unbekannt" IST-Status in Home Assistant when the very first
-  // transmission attempt fails and the buffer is subsequently purged.
+  // to -1 and reset to -1 on every telemetry reconnect via initialize() and on
+  // every new WiFi/cellular connection) so the current state is always re-sent
+  // after a connection drop, preventing a permanent "Unbekannt" IST-Status in
+  // Home Assistant when the very first transmission attempt fails and the buffer
+  // is subsequently purged.
   {
     uint8_t lwv = enableLedWhite ? 1 : 0;
     uint8_t bv  = enableBeep     ? 1 : 0;
@@ -990,6 +999,22 @@ void process()
     if ((int8_t)bv != s_lastBeep) {
       s_lastBeep = (int8_t)bv;
       buffer->add(PID_BEEP_STATE, ELEMENT_UINT8, &bv, sizeof(bv));
+    }
+  }
+
+  // Report active transport type (WiFi vs Cellular) via PID_CONN_TYPE (0x88).
+  // Only added when a network connection is active (STATE_NET_READY) so the
+  // value is always meaningful — the device is either on WiFi or cellular,
+  // never in AP-only mode when this PID reaches HA.  The sentinel is reset on
+  // every new connection, so the first packet of each session always includes
+  // this PID, enabling HA to correctly update "WiFi letzte Verbindung" /
+  // "LTE letzte Verbindung" timestamps for both transports.
+  if (state.check(STATE_NET_READY)) {
+    // 1 = WiFi (STATE_WIFI_CONNECTED), 2 = Cellular (SIM7600 / LTE).
+    uint8_t ctv = state.check(STATE_WIFI_CONNECTED) ? 1 : 2;
+    if ((int8_t)ctv != s_lastConnType) {
+      s_lastConnType = (int8_t)ctv;
+      buffer->add(PID_CONN_TYPE, ELEMENT_UINT8, &ctv, sizeof(ctv));
     }
   }
 
@@ -1246,12 +1271,14 @@ void telemetry(void* inst)
       state.clear(STATE_NET_READY | STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
       teleClient.reset();
       bufman.purge();
-      // Reset LED/beep sentinels so the current state is re-sent in the first
-      // buffer after the connection is re-established.  Without this reset the
-      // state-change detection would suppress the PIDs (value unchanged) and
-      // Home Assistant would keep showing "Unbekannt" for the IST-Status.
+      // Reset LED/beep/conn_type sentinels so the current state is re-sent in
+      // the first buffer after the connection is re-established.  Without this
+      // reset the state-change detection would suppress the PIDs (value
+      // unchanged) and Home Assistant would keep showing "Unbekannt" for the
+      // IST-Status and the connection-type timestamps.
       s_lastLedWhite = -1;
       s_lastBeep     = -1;
+      s_lastConnType = -1;
 
       uint32_t t = millis();
       do {
@@ -1282,6 +1309,20 @@ void telemetry(void* inst)
       }
       continue;
     }
+
+#if STORAGE == STORAGE_SD
+    // After a pull-OTA download completes (firmware staged to SD), pause all
+    // telemetry until the device enters standby and flashes the new firmware.
+    // This mirrors the WiFi OTA flow: connection closed during download, then
+    // transmission stops until flash.  The device is either on WiFi, on
+    // cellular, or in AP mode — no need for complex "what if" handling here.
+    // standby() will set s_ota_active when it is ready to flash, which is
+    // already checked at the top of this loop.
+    if (s_ota_pending) {
+      delay(1000);
+      continue;
+    }
+#endif
 
 #if ENABLE_WIFI
     if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
@@ -1315,6 +1356,13 @@ void telemetry(void* inst)
           if (teleClient.connect()) {
             state.set(STATE_WIFI_CONNECTED | STATE_NET_READY);
             if (enableBeep) beep(50);
+            // Reset sentinels so the first WiFi packet always re-transmits the
+            // LED/beep state and connection type to HA.  Without this, the
+            // sentinels retain their values from the previous cellular session
+            // and HA would keep showing stale IST-Status values.
+            s_lastLedWhite = -1;
+            s_lastBeep     = -1;
+            s_lastConnType = -1;
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
               teleClient.cell.end();
@@ -1354,6 +1402,13 @@ void telemetry(void* inst)
         Serial.println("[CELL] In service");
         state.set(STATE_NET_READY);
         if (enableBeep) beep(50);
+        // Reset sentinels so the first cellular packet always re-transmits the
+        // LED/beep state and connection type to HA.  Without this, the sentinels
+        // retain their values from the previous WiFi session and HA would keep
+        // showing stale IST-Status values and incorrect connection timestamps.
+        s_lastLedWhite = -1;
+        s_lastBeep     = -1;
+        s_lastConnType = -1;
       }
 
       if (millis() - lastRssiTime > SIGNAL_CHECK_INTERVAL * 1000) {
@@ -1406,6 +1461,15 @@ void telemetry(void* inst)
             while (true) delay(1000);
           }
         }
+      }
+
+      // Cellular download connectivity test (triggered by cmd=CELL_DL_TEST via HTTPD).
+      // Runs the download through hooks.nabu.casa with a 1 KB known-pattern payload
+      // so the user can verify the full cellular binary-download path works before
+      // attempting a real OTA firmware update.  Only runs over cellular.
+      if (s_cell_dl_test_request && state.check(STATE_CELL_CONNECTED)) {
+        s_cell_dl_test_request = false;
+        performCellularDlTest();
       }
 
       // get data from buffer
@@ -2154,6 +2218,116 @@ static String _maskOtaHost(const char* host) {
 }
 
 // ---------------------------------------------------------------------------
+// performCellularDlTest()
+//
+// Temporary diagnostic: tests the full cellular binary-download path through
+// hooks.nabu.casa without touching the real firmware binary.
+//
+// The HA webhook GET handler responds to ?type=test with a 1 KB payload of a
+// known byte pattern (bytes 0x00–0xFF repeated 4×).  The firmware downloads it
+// via CellHTTP (same code path used for OTA firmware), verifies the byte count
+// and content, and logs PASS/FAIL to the serial console.
+//
+// Triggered by the HTTPD control command: GET /api/control?cmd=CELL_DL_TEST
+// (requires the device to have CELL_HOST + CELL_PATH provisioned in NVS).
+// ---------------------------------------------------------------------------
+static void performCellularDlTest()
+{
+  Serial.println("[CELL-TEST] Starting cellular download test via webhook");
+
+  if (!cellServerHost[0] || !cellWebhookPath[0]) {
+    Serial.println("[CELL-TEST] FAIL: CELL_HOST / CELL_PATH not provisioned in NVS");
+    return;
+  }
+  if (!state.check(STATE_CELL_CONNECTED)) {
+    Serial.println("[CELL-TEST] FAIL: cellular not connected (STATE_CELL_CONNECTED not set)");
+    return;
+  }
+
+  // Build the test URL path: webhook_path + "?type=test"
+  // +16 is enough for "?type=test\0" (10 chars) plus a small safety margin.
+  char testPath[sizeof(cellWebhookPath) + 16];
+  snprintf(testPath, sizeof(testPath), "%s?type=test", cellWebhookPath);
+
+  Serial.printf("[CELL-TEST] GET https://%s%s\n",
+                _maskOtaHost(cellServerHost).c_str(), testPath);
+
+  teleClient.cell.close();
+  if (!teleClient.cell.open(cellServerHost, cellServerPort)) {
+    Serial.printf("[CELL-TEST] FAIL: connect to %s:%u failed\n",
+                  _maskOtaHost(cellServerHost).c_str(), (unsigned)cellServerPort);
+    return;
+  }
+
+  if (!teleClient.cell.send(METHOD_GET, cellServerHost, cellServerPort, testPath)) {
+    Serial.println("[CELL-TEST] FAIL: HTTP send failed");
+    teleClient.cell.close();
+    teleClient.login = false;
+    return;
+  }
+
+  int contentLength = 0;
+  int httpCode = teleClient.cell.receiveHeaders(&contentLength);
+  if (httpCode != 200) {
+    Serial.printf("[CELL-TEST] FAIL: HTTP %d (expected 200)\n", httpCode);
+    teleClient.cell.close();
+    teleClient.login = false;
+    return;
+  }
+  Serial.printf("[CELL-TEST] HTTP 200, Content-Length: %d\n", contentLength);
+  if (contentLength != 1024 && contentLength != 0) {
+    // Non-zero mismatch means the proxy changed the payload (chunked encoding, etc.)
+    Serial.printf("[CELL-TEST] WARN: Content-Length=%d (expected 1024) — "
+                  "proxy may be using Transfer-Encoding: chunked\n", contentLength);
+  }
+
+  // Receive all body bytes and verify the known pattern (byte[i] == i & 0xFF).
+  // Intentionally smaller than the 448-byte AT+CCHRECV limit so the test
+  // exercises multiple receiveBodyBytes() calls, matching the OTA download path.
+  static const int CELL_TEST_CHUNK = 64;
+  uint8_t buf[CELL_TEST_CHUNK];
+  int received = 0;
+  bool patternOk = true;
+  while (received < 1024) {
+    int n = teleClient.cell.receiveBodyBytes((char*)buf, CELL_TEST_CHUNK, 10000);
+    if (n < 0) {
+      Serial.println("[CELL-TEST] FAIL: modem does not support streaming (non-SIM7600)");
+      patternOk = false;
+      break;
+    }
+    if (n == 0) {
+      Serial.printf("[CELL-TEST] End of stream at offset %d\n", received);
+      break;
+    }
+    // Verify pattern
+    for (int i = 0; i < n; i++) {
+      if ((uint8_t)buf[i] != (uint8_t)((received + i) & 0xFF)) {
+        Serial.printf("[CELL-TEST] FAIL: byte[%d] = 0x%02X, expected 0x%02X\n",
+                      received + i, (uint8_t)buf[i],
+                      (uint8_t)((received + i) & 0xFF));
+        patternOk = false;
+        break;
+      }
+    }
+    if (!patternOk) break;
+    received += n;
+  }
+
+  teleClient.cell.close();
+  teleClient.login = false;  // Force telemetry reconnect after test
+
+  if (patternOk && received == 1024) {
+    Serial.println("[CELL-TEST] PASS: 1024 bytes received and pattern verified OK");
+    Serial.println("[CELL-TEST] hooks.nabu.casa cellular binary download path: WORKING");
+  } else {
+    Serial.printf("[CELL-TEST] FAIL: received=%d patternOk=%d\n",
+                  received, patternOk ? 1 : 0);
+    Serial.println("[CELL-TEST] hooks.nabu.casa cellular binary download path: BROKEN");
+    Serial.println("[CELL-TEST] Possible causes: timeout, size limit, chunked encoding");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // performPullOtaCheck()
 //
 // Fetches the pull-OTA metadata endpoint and, when a newer firmware version
@@ -2403,6 +2577,38 @@ bool performPullOtaCheck()
     }
   }
 
+  // Parse optional sha256 field for post-download integrity verification.
+  // When present, the downloaded firmware file is checked against this digest
+  // immediately after the download loop — before the companion meta file is
+  // written.  A mismatch (e.g. due to Transfer-Encoding: chunked manglings
+  // or cellular bit-errors) is caught here and the staging file is removed so
+  // the next OTA interval triggers a clean retry.  Missing field → skip check.
+  char fwSha256Hex[65] = "";
+  {
+    char* sf = strstr(metaBody, "\"sha256\":");
+    if (sf) {
+      char* s = strchr(sf + 9, '"');
+      if (s) {
+        s++;
+        char* e = strchr(s, '"');
+        if (e && (size_t)(e - s) == 64) {
+          memcpy(fwSha256Hex, s, 64);
+          fwSha256Hex[64] = '\0';
+          // Validate: all 64 chars must be valid hex [0-9a-fA-F] (upper or lower).
+          // Non-hex content (e.g. malformed meta) is treated as absent (skip verify).
+          for (int _i = 0; _i < 64; _i++) {
+            char _c = fwSha256Hex[_i];
+            if (!((_c >= '0' && _c <= '9') || (_c >= 'a' && _c <= 'f') ||
+                  (_c >= 'A' && _c <= 'F'))) {
+              fwSha256Hex[0] = '\0';
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ---- Step 2: Download firmware ------------------------------------------
   char fwPath[384];
   snprintf(fwPath, sizeof(fwPath),
@@ -2429,6 +2635,16 @@ bool performPullOtaCheck()
     uint32_t dlStart = millis();
     size_t lastLogAt = 0;
     bool dlOk = true;
+
+    // Streaming SHA256 context — updated with every chunk written to SD.
+    // Verification happens after the download loop and before the meta file
+    // is written, so a corrupted download is detected without any flash attempt.
+    mbedtls_sha256_context sha256Ctx;
+    bool doSha256 = (fwSha256Hex[0] != '\0');
+    if (doSha256) {
+      mbedtls_sha256_init(&sha256Ctx);
+      mbedtls_sha256_starts_ret(&sha256Ctx, 0);
+    }
 
     if (useWifi) {
 #if ENABLE_WIFI
@@ -2520,6 +2736,7 @@ bool performPullOtaCheck()
           Serial.printf("[OTA-PULL] SD write retry succeeded at offset %u\n", (unsigned)written);
         }
         written += (size_t)n;
+        if (doSha256) mbedtls_sha256_update_ret(&sha256Ctx, s_otaChunkBuf, (size_t)n);
         if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
           lastLogAt = written;
           Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
@@ -2624,6 +2841,7 @@ bool performPullOtaCheck()
           break;
         }
         written += (size_t)n;
+        if (doSha256) mbedtls_sha256_update_ret(&sha256Ctx, s_otaChunkBuf, (size_t)n);
         if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
           lastLogAt = written;
           Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
@@ -2644,7 +2862,35 @@ bool performPullOtaCheck()
       Serial.printf("[OTA-PULL] Download incomplete (%u / %u bytes) — staging file removed\n",
                     (unsigned)written, (unsigned)fwSize);
       SD.remove(OTA_PENDING_PATH);
+      if (doSha256) mbedtls_sha256_free(&sha256Ctx);
       return false;
+    }
+
+    // Verify SHA256 of the downloaded firmware against the expected digest from
+    // meta.json.  Done BEFORE writing the companion meta file so that a corrupt
+    // download (e.g. chunked-encoding artefacts from the reverse-proxy, bit
+    // errors over cellular) is detected immediately and the staging file is
+    // removed — the next OTA check interval will retry with a clean download.
+    if (doSha256) {
+      static const int SHA256_DIGEST_BYTES = 32;  // SHA-256 produces a 256-bit (32-byte) digest
+      uint8_t digest[SHA256_DIGEST_BYTES];
+      mbedtls_sha256_finish_ret(&sha256Ctx, digest);
+      mbedtls_sha256_free(&sha256Ctx);
+      char actualHex[SHA256_DIGEST_BYTES * 2 + 1];
+      for (int i = 0; i < SHA256_DIGEST_BYTES; i++) snprintf(actualHex + i * 2, 3, "%02x", digest[i]);
+      actualHex[SHA256_DIGEST_BYTES * 2] = '\0';
+      if (strncmp(actualHex, fwSha256Hex, SHA256_DIGEST_BYTES * 2) != 0) {
+        Serial.printf("[OTA-PULL] SHA256 mismatch — staging file removed (retry at next interval)\n"
+                      "[OTA-PULL]   expected: %s\n"
+                      "[OTA-PULL]   actual:   %s\n",
+                      fwSha256Hex, actualHex);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SHA256");
+#endif
+        SD.remove(OTA_PENDING_PATH);
+        return false;
+      }
+      Serial.println("[OTA-PULL] SHA256 OK");
     }
 
     // Write companion meta file: expected byte count for integrity check.
