@@ -301,6 +301,11 @@ static volatile bool s_http_standby_exit  = false;
 // Set by handlerControl (cmd=CELL_DL_TEST) to trigger a cellular download test
 // from the telemetry loop.  Cleared after the test completes.
 volatile bool s_cell_dl_test_request = false;
+// Auto-trigger the Cell-DL test once on the first cellular connection after each
+// boot.  Gives immediate PASS/FAIL feedback on the cellular binary-download path
+// (hooks.nabu.casa) without requiring an HTTPD command from HA.
+// Cleared the first time cellular connects so the test only runs once per boot.
+static bool s_cell_dl_test_auto_pending = true;
 
 // Called from handlerControl (httpd task) to pause or resume the telemetry task.
 void httpControlStandby(bool enter) {
@@ -1437,6 +1442,13 @@ void telemetry(void* inst)
         s_lastBeep        = -1;
         s_lastConnType    = -1;
         s_send_state_pids = true;
+        // Auto-trigger the cellular download connectivity test once per boot so
+        // users get immediate PASS/FAIL feedback on the hooks.nabu.casa binary-
+        // download path without needing to send a manual HTTPD command from HA.
+        if (s_cell_dl_test_auto_pending) {
+          s_cell_dl_test_request    = true;
+          s_cell_dl_test_auto_pending = false;
+        }
       }
 
       if (millis() - lastRssiTime > SIGNAL_CHECK_INTERVAL * 1000) {
