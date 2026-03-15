@@ -17,6 +17,7 @@
 
 #include <FreematicsPlus.h>
 #include <httpd.h>
+#include <mbedtls/sha256.h>
 #include "config.h"
 #include "telestore.h"
 #include "teleclient.h"
@@ -2454,6 +2455,38 @@ bool performPullOtaCheck()
     }
   }
 
+  // Parse optional sha256 field for post-download integrity verification.
+  // When present, the downloaded firmware file is checked against this digest
+  // immediately after the download loop — before the companion meta file is
+  // written.  A mismatch (e.g. due to Transfer-Encoding: chunked manglings
+  // or cellular bit-errors) is caught here and the staging file is removed so
+  // the next OTA interval triggers a clean retry.  Missing field → skip check.
+  char fwSha256Hex[65] = "";
+  {
+    char* sf = strstr(metaBody, "\"sha256\":");
+    if (sf) {
+      char* s = strchr(sf + 9, '"');
+      if (s) {
+        s++;
+        char* e = strchr(s, '"');
+        if (e && (size_t)(e - s) == 64) {
+          memcpy(fwSha256Hex, s, 64);
+          fwSha256Hex[64] = '\0';
+          // Validate: all 64 chars must be lowercase hex [0-9a-f].
+          // Non-hex content (e.g. malformed meta) is treated as absent (skip verify).
+          for (int _i = 0; _i < 64; _i++) {
+            char _c = fwSha256Hex[_i];
+            if (!((_c >= '0' && _c <= '9') || (_c >= 'a' && _c <= 'f') ||
+                  (_c >= 'A' && _c <= 'F'))) {
+              fwSha256Hex[0] = '\0';
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ---- Step 2: Download firmware ------------------------------------------
   char fwPath[384];
   snprintf(fwPath, sizeof(fwPath),
@@ -2480,6 +2513,16 @@ bool performPullOtaCheck()
     uint32_t dlStart = millis();
     size_t lastLogAt = 0;
     bool dlOk = true;
+
+    // Streaming SHA256 context — updated with every chunk written to SD.
+    // Verification happens after the download loop and before the meta file
+    // is written, so a corrupted download is detected without any flash attempt.
+    mbedtls_sha256_context sha256Ctx;
+    bool doSha256 = (fwSha256Hex[0] != '\0');
+    if (doSha256) {
+      mbedtls_sha256_init(&sha256Ctx);
+      mbedtls_sha256_starts_ret(&sha256Ctx, 0);
+    }
 
     if (useWifi) {
 #if ENABLE_WIFI
@@ -2571,6 +2614,7 @@ bool performPullOtaCheck()
           Serial.printf("[OTA-PULL] SD write retry succeeded at offset %u\n", (unsigned)written);
         }
         written += (size_t)n;
+        if (doSha256) mbedtls_sha256_update_ret(&sha256Ctx, s_otaChunkBuf, (size_t)n);
         if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
           lastLogAt = written;
           Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
@@ -2675,6 +2719,7 @@ bool performPullOtaCheck()
           break;
         }
         written += (size_t)n;
+        if (doSha256) mbedtls_sha256_update_ret(&sha256Ctx, s_otaChunkBuf, (size_t)n);
         if (written - lastLogAt >= (fwSize / 10 ? fwSize / 10 : 1)) {
           lastLogAt = written;
           Serial.printf("[OTA-PULL] %u / %u bytes (%.0f%%) in %u ms\n",
@@ -2695,7 +2740,34 @@ bool performPullOtaCheck()
       Serial.printf("[OTA-PULL] Download incomplete (%u / %u bytes) — staging file removed\n",
                     (unsigned)written, (unsigned)fwSize);
       SD.remove(OTA_PENDING_PATH);
+      if (doSha256) mbedtls_sha256_free(&sha256Ctx);
       return false;
+    }
+
+    // Verify SHA256 of the downloaded firmware against the expected digest from
+    // meta.json.  Done BEFORE writing the companion meta file so that a corrupt
+    // download (e.g. chunked-encoding artefacts from the reverse-proxy, bit
+    // errors over cellular) is detected immediately and the staging file is
+    // removed — the next OTA check interval will retry with a clean download.
+    if (doSha256) {
+      uint8_t digest[32];
+      mbedtls_sha256_finish_ret(&sha256Ctx, digest);
+      mbedtls_sha256_free(&sha256Ctx);
+      char actualHex[65];
+      for (int i = 0; i < 32; i++) snprintf(actualHex + i * 2, 3, "%02x", digest[i]);
+      actualHex[64] = '\0';
+      if (strncmp(actualHex, fwSha256Hex, 64) != 0) {
+        Serial.printf("[OTA-PULL] SHA256 mismatch — staging file removed (retry at next interval)\n"
+                      "[OTA-PULL]   expected: %s\n"
+                      "[OTA-PULL]   actual:   %s\n",
+                      fwSha256Hex, actualHex);
+#if STORAGE != STORAGE_NONE
+        if (state.check(STATE_STORAGE_READY)) logger.logEvent("OTA-PULL ERR=SHA256");
+#endif
+        SD.remove(OTA_PENDING_PATH);
+        return false;
+      }
+      Serial.println("[OTA-PULL] SHA256 OK");
     }
 
     // Write companion meta file: expected byte count for integrity check.

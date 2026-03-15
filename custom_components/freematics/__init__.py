@@ -567,11 +567,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         #   - conn_mode 3 (WiFi+LTE) without PID: update both timestamps so
         #     neither shows "Unbekannt" forever (we can't distinguish the transport
         #     at the HTTP level when both WiFi and cellular use the same cloud hook).
-        _reported_conn_type = data.get("conn_type")  # PID 0x88 value (float or None)
-        if _reported_conn_type == PID_CONN_TYPE_CELLULAR:
+        reported_conn_type = data.get("conn_type")  # PID 0x88 value (float or None)
+        if reported_conn_type == PID_CONN_TYPE_CELLULAR:
             # Firmware explicitly reports cellular transport.
             diag["last_lte_connection"] = now_iso
-        elif _reported_conn_type == PID_CONN_TYPE_WIFI:
+        elif reported_conn_type == PID_CONN_TYPE_WIFI:
             # Firmware explicitly reports WiFi transport.
             diag["last_wifi_connection"] = now_iso
         elif conn_mode == 1:
