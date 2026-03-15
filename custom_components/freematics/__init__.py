@@ -46,6 +46,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .const import (
+    CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
@@ -424,15 +425,58 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
           /api/freematics/ota_pull/{token}/meta.json endpoint serves, allowing
           the device to discover available firmware updates over cellular.
         """
-        # ── Cellular OTA meta check (GET) ───────────────────────────────────
-        # The firmware sends GET {cell_webhook_path} when it wants to check
-        # for OTA updates over cellular.  Return OTA meta JSON and exit early.
+        # ── Cellular OTA (GET) ──────────────────────────────────────────────
+        # GET requests come from the firmware's cellular OTA subsystem routed
+        # through the Nabu Casa cloud webhook (hooks.nabu.casa) because
+        # SIM7600E-H modems cannot complete TLS to *.ui.nabu.casa (error 15).
+        #
+        # Two sub-cases:
+        #   ?type=firmware  – serve the firmware binary (cellular FW download)
+        #   ?type=nvs       – serve the generated NVS binary (cellular NVS dl)
+        #   (no ?type)      – return OTA meta JSON (cellular OTA meta check)
         if request.method == "GET":
             from aiohttp import web as _web  # noqa: PLC0415
+            _req_type = request.rel_url.query.get("type", "")
+
+            # ── Cellular firmware/NVS binary download ─────────────────────
+            if _req_type in ("firmware", "nvs"):
+                if not _ota_token:
+                    return _web.Response(status=403, text="OTA not configured")
+                from .views import (  # noqa: PLC0415
+                    FreematicsOtaPullView as _OtaView,
+                    FIRMWARE_PATH as _FW_PATH,
+                )
+                filename = "firmware.bin" if _req_type == "firmware" else "nvs.bin"
+                # Reuse the pull-OTA view's GET handler by constructing a
+                # synthetic request with the token and filename path params.
+                try:
+                    return await _OtaView().get(request, _ota_token, filename)
+                except Exception as _exc:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Freematics cellular OTA %s download via webhook failed: %s",
+                        filename, _exc,
+                    )
+                    return _web.Response(status=500, text="Internal error")
+
+            # ── Cellular OTA meta check ───────────────────────────────────
             if _ota_token:
                 from .views import _get_ota_pull_meta  # noqa: PLC0415
+                # Derive the cell webhook path from the stored cloud-hook URL
+                # so the meta.json response includes cell_firmware_path /
+                # cell_nvs_path for the firmware to use for cellular downloads.
+                _cloud_hook_url: str = entry.data.get(CONF_CLOUD_HOOK_URL, "")
+                _cell_wh_path: str = ""
+                if _cloud_hook_url:
+                    try:
+                        from urllib.parse import urlparse as _urlparse  # noqa: PLC0415
+                        _cell_wh_path = _urlparse(_cloud_hook_url).path or ""
+                    except Exception:  # noqa: BLE001
+                        pass
                 try:
-                    return await _get_ota_pull_meta(hass, entry, _ota_token)
+                    return await _get_ota_pull_meta(
+                        hass, entry, _ota_token,
+                        cell_webhook_path=_cell_wh_path,
+                    )
                 except Exception as _exc:  # noqa: BLE001
                     _LOGGER.warning(
                         "Freematics OTA meta check via cellular webhook failed: %s", _exc
@@ -547,6 +591,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             diag["led_white_device"] = bool(data["led_white_state"])
         if "beep_state" in data:
             diag["beep_device"] = bool(data["beep_state"])
+
+        # Live SD card status – firmware sends PID 0x86 (sd_total_mb) and
+        # 0x87 (sd_free_mb) once per minute.  sd_total_mb == 0 means no card.
+        # Both PIDs are always transmitted together in the same buffer, but
+        # we guard on both being present to avoid showing stale free-space
+        # data if a single packet arrives that only contains one of them.
+        if "sd_total_mb" in data and "sd_free_mb" in data:
+            _sd_total = int(data["sd_total_mb"])
+            _sd_free = int(data["sd_free_mb"])
+            if _sd_total > 0:
+                _sd_used = max(0, _sd_total - _sd_free)
+                diag["sd_present"] = "Ja"
+                diag["sd_storage"] = f"{_sd_total} MB total, {_sd_used} MB verwendet"
+            else:
+                diag["sd_present"] = "Nein"
+                diag["sd_storage"] = "0 MB"
+        elif "sd_total_mb" in data:
+            # Only sd_total_mb received (sd_free_mb missing): update presence only.
+            _sd_total = int(data["sd_total_mb"])
+            diag["sd_present"] = "Ja" if _sd_total > 0 else "Nein"
 
         # Rate-limited device info refresh (SD card stats) via /api/info.
         # Only runs when CONF_DEVICE_IP is configured in the integration.

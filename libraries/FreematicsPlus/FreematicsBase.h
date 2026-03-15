@@ -37,6 +37,11 @@
 // 0 = disabled/off, 1 = enabled/on.
 #define PID_LED_WHITE_STATE 0x84  // enableLedWhite: white/network LED runtime state
 #define PID_BEEP_STATE      0x85  // enableBeep: connection-beep runtime state
+// SD card status PIDs: sent periodically in telemetry so HA can display SD
+// presence and usage even when the device is not directly reachable via HTTP.
+// Values are in MiB (1 MiB = 2^20 bytes).  sd_total_mb == 0 means no SD card.
+#define PID_SD_TOTAL_MB     0x86  // total SD capacity in MiB (0 = no card / not ready)
+#define PID_SD_FREE_MB      0x87  // free SD space in MiB
 #define PID_EXT_SENSOR1 0x90
 #define PID_EXT_SENSOR2 0x91
 

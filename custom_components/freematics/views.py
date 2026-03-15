@@ -1438,7 +1438,9 @@ class FreematicsOtaTokenView(HomeAssistantView):
         )
 
 
-async def _get_ota_pull_meta(hass, entry, token: str) -> web.Response:
+async def _get_ota_pull_meta(
+    hass, entry, token: str, *, cell_webhook_path: str = ""
+) -> web.Response:
     """Return the OTA meta.json response for a given config entry and token.
 
     This is the shared implementation for the meta.json OTA check, called from
@@ -1455,6 +1457,12 @@ async def _get_ota_pull_meta(hass, entry, token: str) -> web.Response:
        the telemetry webhook, this function returns the same JSON that the direct
        endpoint would serve, so the device can check for OTA updates even without
        WiFi.
+
+    When ``cell_webhook_path`` is provided (non-empty string), the response JSON
+    includes ``cell_firmware_path`` and ``cell_nvs_path`` fields.  The firmware
+    uses these paths (combined with ``cellServerHost:cellServerPort``) for
+    downloading the firmware and NVS binaries over cellular — working around the
+    TLS incompatibility with ``*.ui.nabu.casa`` on SIM7600 modems.
     """
     import hashlib  # noqa: PLC0415
     import re  # noqa: PLC0415
@@ -1481,6 +1489,17 @@ async def _get_ota_pull_meta(hass, entry, token: str) -> web.Response:
     effective_version = (
         f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
     )
+
+    # Extra fields for cellular download via hooks.nabu.casa (avoids TLS error
+    # 15 on SIM7600E-H when the direct *.ui.nabu.casa OTA host is used).
+    # Only included when cell_webhook_path is provided (i.e. called from the
+    # telemetry-webhook GET handler, not from the direct meta.json endpoint).
+    _cell_extra: dict = {}
+    if cell_webhook_path:
+        _cell_extra = {
+            "cell_firmware_path": cell_webhook_path + "?type=firmware",
+            "cell_nvs_path": cell_webhook_path + "?type=nvs",
+        }
     _nvs_url = f"/api/freematics/ota_pull/{token}/nvs.bin"
 
     if _ota_mode == OTA_MODE_PULL:
@@ -1532,6 +1551,7 @@ async def _get_ota_pull_meta(hass, entry, token: str) -> web.Response:
                 "sha256": fw_sha256,
                 "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
                 "nvs_url": _nvs_url,
+                **_cell_extra,
             }).encode("utf-8"),
             content_type="application/json",
         )
@@ -1599,6 +1619,7 @@ async def _get_ota_pull_meta(hass, entry, token: str) -> web.Response:
                 "sha256": fw_sha256,
                 "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
                 "nvs_url": _nvs_url,
+                **_cell_extra,
             }).encode("utf-8"),
             content_type="application/json",
         )

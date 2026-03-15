@@ -150,6 +150,8 @@ PID_MAP: dict[str, _PidMapping] = {
     "82":  ("device_temp",     1.0),   # PID_DEVICE_TEMP (°C)
     "84":  ("led_white_state", 1.0),   # PID_LED_WHITE_STATE: 1=on, 0=off (runtime enableLedWhite)
     "85":  ("beep_state",      1.0),   # PID_BEEP_STATE: 1=on, 0=off (runtime enableBeep)
+    "86":  ("sd_total_mb",     1.0),   # PID_SD_TOTAL_MB: SD total capacity in MiB (0 = no card)
+    "87":  ("sd_free_mb",      1.0),   # PID_SD_FREE_MB: SD free space in MiB
     # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
     "104": ("engine_load",        1.0),   # PID_ENGINE_LOAD (%)
     "105": ("coolant_temp",       1.0),   # PID_COOLANT_TEMP (°C)

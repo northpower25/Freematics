@@ -188,9 +188,11 @@ static volatile bool s_ota_pending = false;
 
 // Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85).
 // Initialised to -1 so the first call to process() always adds the PIDs to the
-// buffer.  Reset back to -1 whenever the telemetry connection drops (bufman is
-// purged) so the current state is re-sent after every reconnect — preventing a
-// "Unbekannt" IST-Status in Home Assistant when the first transmission fails.
+// buffer.  Reset back to -1 by initialize() on every new telemetry session so
+// the current state is always re-sent after a reconnect — preventing a permanent
+// "Unbekannt" IST-Status in Home Assistant when HA is reloaded while the device
+// is connected (HA loses diag state but device won't resend unchanged values
+// unless the sentinels are reset here).
 static int8_t s_lastLedWhite = -1;
 static int8_t s_lastBeep     = -1;
 
@@ -634,6 +636,16 @@ void initialize()
   // dump buffer data
   bufman.purge();
 
+  // Reset LED/beep sentinels so the current state is re-sent in the first buffer
+  // of the new telemetry session.  initialize() is called at the start of every
+  // logging session (boot and after each network disconnection), so resetting
+  // here ensures the device always reports its live LED/beep state to HA after
+  // a reconnect — preventing a permanent "Unbekannt" IST-Status when HA is
+  // reloaded while the device was connected (HA loses diag, device never resends
+  // the unchanged state unless the sentinels are reset here).
+  s_lastLedWhite = -1;
+  s_lastBeep     = -1;
+
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
     calibrateMEMS();
@@ -964,7 +976,7 @@ void process()
 
   // Report white-LED and beep runtime state so HA can display live IST-Status.
   // Uses the file-scope sentinels s_lastLedWhite / s_lastBeep (both initialised
-  // to -1 and reset to -1 on every telemetry reconnect via bufman.purge()) so
+  // to -1 and reset to -1 on every telemetry reconnect via initialize()) so
   // the current state is always re-sent after a connection drop, preventing a
   // permanent "Unbekannt" IST-Status in Home Assistant when the very first
   // transmission attempt fails and the buffer is subsequently purged.
@@ -980,6 +992,29 @@ void process()
       buffer->add(PID_BEEP_STATE, ELEMENT_UINT8, &bv, sizeof(bv));
     }
   }
+
+#if STORAGE == STORAGE_SD
+  // Report SD card total/free space once per minute so HA can display SD
+  // presence and usage without a direct HTTP connection to the device.
+  // PID_SD_TOTAL_MB = 0 signals "no card / not ready" to HA.
+  {
+    static uint32_t lastSdReportMs = 0;
+    uint32_t nowMs = millis();
+    if (lastSdReportMs == 0 || nowMs - lastSdReportMs >= 60000UL) {
+      lastSdReportMs = nowMs;
+      uint32_t sdTotalMb = 0;
+      uint32_t sdFreeMb  = 0;
+      if (state.check(STATE_STORAGE_READY)) {
+        uint64_t tot = SD.totalBytes();
+        uint64_t used = SD.usedBytes();
+        sdTotalMb = (uint32_t)(tot >> 20);
+        sdFreeMb  = (uint32_t)((tot > used ? tot - used : 0) >> 20);
+      }
+      buffer->add(PID_SD_TOTAL_MB, ELEMENT_UINT32, &sdTotalMb, sizeof(sdTotalMb));
+      buffer->add(PID_SD_FREE_MB,  ELEMENT_UINT32, &sdFreeMb,  sizeof(sdFreeMb));
+    }
+  }
+#endif
 
   buffer->timestamp = millis();
   buffer->state = BUFFER_STATE_FILLED;
@@ -2330,6 +2365,44 @@ bool performPullOtaCheck()
     }
   }
 
+  // Parse optional cell_firmware_path field (present when meta.json was
+  // returned via the cloud-webhook GET handler).  When non-empty and on
+  // cellular, the firmware uses this path with cellServerHost:cellServerPort
+  // instead of otaHost:otaPort, working around the TLS error 15 on SIM7600E-H
+  // modems for the *.ui.nabu.casa Remote UI domain.
+  char cellFwPath[384] = "";
+  char cellNvsPath[256] = "";
+  if (useCell) {
+    {
+      char* fld = strstr(metaBody, "\"cell_firmware_path\":");
+      if (fld) {
+        char* s = strchr(fld + 21, '"');
+        if (s) {
+          s++;
+          char* e = strchr(s, '"');
+          if (e && (size_t)(e - s) < sizeof(cellFwPath) - 1) {
+            memcpy(cellFwPath, s, e - s);
+            cellFwPath[e - s] = '\0';
+          }
+        }
+      }
+    }
+    {
+      char* fld = strstr(metaBody, "\"cell_nvs_path\":");
+      if (fld) {
+        char* s = strchr(fld + 16, '"');
+        if (s) {
+          s++;
+          char* e = strchr(s, '"');
+          if (e && (size_t)(e - s) < sizeof(cellNvsPath) - 1) {
+            memcpy(cellNvsPath, s, e - s);
+            cellNvsPath[e - s] = '\0';
+          }
+        }
+      }
+    }
+  }
+
   // ---- Step 2: Download firmware ------------------------------------------
   char fwPath[384];
   snprintf(fwPath, sizeof(fwPath),
@@ -2463,8 +2536,18 @@ bool performPullOtaCheck()
       // firmware binary to SD in ≤448-byte chunks (SIM7600 only).
       // Telemetry is paused for the duration of the download; the telemetry
       // loop reconnects automatically after this function returns.
-      if (!teleClient.cell.open(otaHost, otaPort)) {
-        Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
+      //
+      // When cell_firmware_path was provided in meta.json (hooks.nabu.casa
+      // path + "?type=firmware"), use cellServerHost:cellServerPort for the
+      // download.  This avoids TLS error 15 that SIM7600E-H modems encounter
+      // when connecting to *.ui.nabu.casa (the standard OTA_HOST).
+      const char* cellFwHost = (cellFwPath[0] && cellServerHost[0]) ? cellServerHost : otaHost;
+      uint16_t    cellFwPort = (cellFwPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
+      const char* cellFwDlPath = cellFwPath[0] ? cellFwPath : fwPath;
+      Serial.printf("[OTA-PULL] Cellular FW download from %s (path: %s)\n",
+                    _maskOtaHost(cellFwHost).c_str(), cellFwPath[0] ? "webhook" : "direct");
+      if (!teleClient.cell.open(cellFwHost, cellFwPort)) {
+        Serial.printf("[OTA-PULL] FW connect failed to %s:%u\n", _maskOtaHost(cellFwHost).c_str(), (unsigned)cellFwPort);
         fwFile.close();
         SD.remove(OTA_PENDING_PATH);
 #if STORAGE != STORAGE_NONE
@@ -2473,7 +2556,7 @@ bool performPullOtaCheck()
         return false;
       }
 
-      if (!teleClient.cell.send(METHOD_GET, otaHost, otaPort, fwPath)) {
+      if (!teleClient.cell.send(METHOD_GET, cellFwHost, cellFwPort, cellFwDlPath)) {
         Serial.println("[OTA-PULL] FW send failed");
         teleClient.cell.close();
         fwFile.close();
@@ -2625,8 +2708,13 @@ bool performPullOtaCheck()
 #endif  // ENABLE_WIFI
       } else {
         // Cellular NVS download (streaming, same approach as firmware).
-        if (teleClient.cell.open(otaHost, otaPort) &&
-            teleClient.cell.send(METHOD_GET, otaHost, otaPort, nvsPath)) {
+        // Use cellNvsPath / cellServerHost when provided (avoids TLS error 15
+        // on SIM7600E-H for *.ui.nabu.casa).
+        const char* cellNvsHost = (cellNvsPath[0] && cellServerHost[0]) ? cellServerHost : otaHost;
+        uint16_t    cellNvsPort = (cellNvsPath[0] && cellServerHost[0]) ? cellServerPort : otaPort;
+        const char* cellNvsDlPath = cellNvsPath[0] ? cellNvsPath : nvsPath;
+        if (teleClient.cell.open(cellNvsHost, cellNvsPort) &&
+            teleClient.cell.send(METHOD_GET, cellNvsHost, cellNvsPort, cellNvsDlPath)) {
           int nvsContentLen = 0;
           int nvsHttpCode = teleClient.cell.receiveHeaders(&nvsContentLen);
           if (nvsHttpCode == 200 && nvsContentLen > 0) {
