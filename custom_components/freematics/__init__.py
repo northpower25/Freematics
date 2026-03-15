@@ -596,7 +596,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Freematics webhook received empty or unparseable payload")
             diag["conn_errors"] += 1
             # Still notify debug sensor so errors / raw history are visible.
+            # Also update last_packet_time so the user can tell the device IS
+            # talking to HA even when the payload cannot be parsed (e.g. during
+            # a firmware format change or a connectivity test POST).
             if raw_body:
+                diag["last_packet_time"] = now_iso
                 async_dispatcher_send(
                     hass,
                     f"{DOMAIN}_{webhook_id}_debug",
@@ -605,6 +609,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _httpd_port, _ble_enabled,
                         _ota_mode, _ota_token_set, _ota_interval_s,
                         _led_white_en, _beep_en,
+                        _ota_meta_url,
                     ),
                 )
             return
