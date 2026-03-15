@@ -84,13 +84,8 @@ from .views import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "button", "device_tracker"]
 
-# Cellular download test payload: 1 KB with a known byte pattern (0x00–0xFF × 4).
-# The firmware's CELL_DL_TEST command downloads this and checks every byte so any
-# proxy mangling (chunked encoding, truncation) is detected immediately.
-# SHA-256: 785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9
-_CELL_TEST_PAYLOAD: bytes = bytes(i & 0xFF for i in range(1024))
+PLATFORMS = ["sensor", "button", "device_tracker"]
 
 
 def _parse_freematics_payload(body: str) -> dict:
@@ -422,131 +417,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     async def handle_webhook(hass, webhook_id, request):
-        """Handle incoming telemetry data or OTA meta check from the Freematics device.
+        """Handle incoming telemetry data from the Freematics device.
 
-        POST requests carry telemetry data (existing behaviour).
-        OTA requests use explicit ?type= query parameters and work for both GET
-        and POST.  hooks.nabu.casa cloud webhooks do not return response bodies
-        for GET requests (they are fire-and-forget); the firmware therefore uses
-        POST for all cellular OTA operations (?type=ota_meta / firmware / nvs /
-        test).  Plain GET with no type parameter is kept for backward
-        compatibility with setups that do return GET response bodies (e.g. direct
-        HA connections without the Nabu Casa cloud proxy).
+        POST requests carry telemetry data in Freematics text format wrapped in
+        a JSON body (firmware cloud-webhook mode) or as plain text (direct HA).
         """
         from aiohttp import web as _web  # noqa: PLC0415
-
-        # ── Helper: read OTA token fresh from entry at request time ─────────
-        # _ota_token is captured as a plain string in the closure at
-        # async_setup_entry time.  If the token is auto-generated later by
-        # _build_nvs_kwargs (e.g. on first "Send Config" press) and saved to
-        # entry.data via async_update_entry, the closure string stays stale
-        # (entry.data changes are NOT covered by add_update_listener which only
-        # fires for options changes).  Reading directly from entry.data /
-        # entry.options at request time ensures we always use the current token.
-        def _live_ota_token() -> str:
-            return {**(entry.data or {}), **(entry.options or {})}.get(
-                CONF_OTA_TOKEN, ""
-            )
-
-        # ── Helper: derive cell webhook path from stored cloud-hook URL ─────
-        def _cell_webhook_path() -> str:
-            _cloud_hook_url: str = entry.data.get(CONF_CLOUD_HOOK_URL, "")
-            if _cloud_hook_url:
-                try:
-                    from urllib.parse import urlparse as _up  # noqa: PLC0415
-                    return _up(_cloud_hook_url).path or ""
-                except Exception as _exc:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "Freematics: could not parse cloud hook URL %r for "
-                        "cell webhook path derivation: %s",
-                        _cloud_hook_url, _exc,
-                    )
-            return ""
-
-        # ── OTA requests via explicit ?type= parameter (GET or POST) ────────
-        # The firmware uses these for all cellular OTA operations routed through
-        # hooks.nabu.casa.  Cloud webhooks return an empty body for GET requests
-        # so the firmware sends POST with ?type=<kind> instead.  These handlers
-        # are intentionally method-agnostic so they work for both GET (direct HA
-        # connections) and POST (hooks.nabu.casa cellular path).
-        #
-        #   ?type=ota_meta   – return OTA meta JSON (cellular meta check)
-        #   ?type=firmware   – serve the firmware binary (cellular FW download)
-        #   ?type=nvs        – serve the generated NVS binary (cellular NVS dl)
-        #   ?type=test       – serve 1 KB test payload (CELL_DL_TEST)
-        _req_type = request.rel_url.query.get("type", "")
-        if _req_type in ("ota_meta", "firmware", "nvs", "test"):
-            # ── Cellular firmware/NVS binary download ─────────────────────
-            if _req_type in ("firmware", "nvs"):
-                _tok = _live_ota_token()
-                if not _tok:
-                    return _web.Response(status=403, text="OTA not configured")
-                from .views import FreematicsOtaPullView as _OtaView  # noqa: PLC0415
-                filename = "firmware.bin" if _req_type == "firmware" else "nvs.bin"
-                try:
-                    return await _OtaView().get(request, _tok, filename)
-                except Exception as _exc:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Freematics cellular OTA %s download via webhook failed: %s",
-                        filename, _exc,
-                    )
-                    return _web.Response(status=500, text="Internal error")
-
-            # ── Cellular connectivity test ─────────────────────────────────
-            # ?type=test is requested by the firmware's CELL_DL_TEST command
-            # (triggered via /api/control?cmd=CELL_DL_TEST on the device HTTPD).
-            # Returns a 1 KB payload with a known byte pattern so the firmware can
-            # verify the full download path through hooks.nabu.casa end-to-end
-            # without touching the real firmware binary.
-            # Pattern: bytes 0x00–0xFF repeated 4×  (1024 bytes total)
-            # SHA-256:  785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9
-            if _req_type == "test":
-                return _web.Response(
-                    body=_CELL_TEST_PAYLOAD,
-                    content_type="application/octet-stream",
-                    headers={"Content-Length": "1024"},
-                )
-
-            # ── Cellular OTA meta check (?type=ota_meta) ──────────────────
-            _tok = _live_ota_token()
-            if _tok:
-                from .views import _get_ota_pull_meta  # noqa: PLC0415
-                try:
-                    return await _get_ota_pull_meta(
-                        hass, entry, _tok,
-                        cell_webhook_path=_cell_webhook_path(),
-                    )
-                except Exception as _exc:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Freematics OTA meta check via cellular webhook failed: %s", _exc
-                    )
-            return _web.Response(
-                body=b'{"available":false}',
-                content_type="application/json",
-            )
-
-        # ── Cellular OTA (plain GET, no ?type) ──────────────────────────────
-        # Backward-compatible path: plain GET to the webhook URL (no ?type
-        # parameter) returns the OTA meta JSON.  Kept for setups where the
-        # proxy does return GET response bodies (e.g. direct HA connections).
-        if request.method == "GET":
-            # ── Cellular OTA meta check ───────────────────────────────────
-            _tok = _live_ota_token()
-            if _tok:
-                from .views import _get_ota_pull_meta  # noqa: PLC0415
-                try:
-                    return await _get_ota_pull_meta(
-                        hass, entry, _tok,
-                        cell_webhook_path=_cell_webhook_path(),
-                    )
-                except Exception as _exc:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Freematics OTA meta check via cellular webhook failed: %s", _exc
-                    )
-            return _web.Response(
-                body=b'{"available":false}',
-                content_type="application/json",
-            )
 
         # ── Telemetry POST ───────────────────────────────────────────────────
         # The firmware sends telemetry in Freematics text format:
