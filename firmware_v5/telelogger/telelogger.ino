@@ -1462,13 +1462,13 @@ void telemetry(void* inst)
 #endif
       }
 
-      // Periodic pull-OTA check: runs whenever WiFi or cellular is connected
-      // and OTA_TOKEN + OTA_INTERVAL are provisioned.  Moved here (before the
-      // empty-buffer continue) so the check fires even when OBD2/GPS are
-      // inactive and no telemetry data is being collected — the previous
-      // placement after the buffer-serialisation block caused the check to be
-      // skipped entirely whenever the buffer was empty.  The check is
-      // rate-limited by otaCheckIntervalS; 0 means disabled.
+      // Periodic pull-OTA check: runs only when WiFi is connected and
+      // OTA_TOKEN + OTA_INTERVAL are provisioned.  OTA is WiFi-only; the
+      // SIM7600E-H cellular modem cannot reliably connect to the OTA endpoint
+      // (TLS error 15 against *.ui.nabu.casa / Cloudflare).  The check is
+      // placed here (before the empty-buffer continue) so it fires even when
+      // OBD2/GPS are inactive and no telemetry data is being collected.
+      // Rate-limited by otaCheckIntervalS; 0 means disabled.
       //
       // For STORAGE_SD: performPullOtaCheck() downloads the binary to SD and
       // returns false (no reboot yet).  The flash happens in standby().
