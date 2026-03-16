@@ -21,8 +21,11 @@ Serves the following endpoints:
   GET  /api/freematics/ota_token        – (auth required) Issue or retrieve the
                                           long-lived pull-OTA token for the device.
   GET  /api/freematics/ota_pull/{token}/{filename} – Pull-OTA firmware endpoint
-                                          Serves meta.json (version/size/sha256) or
-                                          firmware.bin authenticated by URL token.
+                                          Serves meta.json (version/size/sha256),
+                                          firmware.bin, nvs.bin, or accepts
+                                          ota_confirm (device-confirmed download),
+                                          all authenticated by URL token.
+                                          OTA is WiFi-only; cellular is not supported.
 
 The flasher page uses the Web Serial API (Chrome/Edge 89+) so the user can
 flash the Freematics ONE+ that is connected to *their own computer's* USB port,
@@ -1695,7 +1698,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         if not token or entry_id is None:
             return web.Response(status=401, text="Invalid or unknown OTA token")
 
-        if filename not in ("meta.json", "firmware.bin", "nvs.bin"):
+        if filename not in ("meta.json", "firmware.bin", "nvs.bin", "ota_confirm"):
             return web.Response(status=404, text="Not found")
 
         # Locate this device's published firmware in the www/ directory.
@@ -1836,6 +1839,86 @@ class FreematicsOtaPullView(HomeAssistantView):
                     "Content-Disposition": "attachment; filename=config_nvs.bin",
                     "Cache-Control": "no-store",
                 },
+            )
+
+        if filename == "ota_confirm":
+            # The device calls this endpoint (GET .../ota_confirm) after it has
+            # successfully downloaded the firmware binary AND verified its SHA256
+            # digest on the device side.  Only at this point do we update
+            # ota_last_success ("OTA letzte Übertragung"), because previously
+            # that attribute was set as soon as HA finished transmitting the
+            # bytes — misleading when the device-side verification later failed
+            # (SHA256 mismatch, SD write error, etc.).
+            #
+            # OTA is WiFi-only.  Cellular firmware downloads are not supported.
+            # The firmware only calls this endpoint when WiFi is connected
+            # (STATE_WIFI_CONNECTED guard in telelogger.ino).
+            if _ota_mode == OTA_MODE_DISABLED:
+                return web.Response(status=404, text="OTA is disabled for this device")
+
+            _now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+            # Determine the human-readable version that was just confirmed.
+            if _ota_mode == OTA_MODE_CLOUD:
+                _pub_c = await hass.async_add_executor_job(_read_version_json)
+                _confirmed_version = _pub_c.get("version") or effective_version
+            else:
+                _confirmed_version = effective_version
+
+            # Persist confirmed_at in ota_pull_state.json alongside the
+            # downloaded_at that was written by the firmware.bin handler.
+            _confirm_state_file = _www_dir / "ota_pull_state.json"
+
+            def _write_confirmed_state() -> None:
+                _www_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    try:
+                        _cs = json.loads(
+                            _confirm_state_file.read_text(encoding="utf-8")
+                        )
+                    except (OSError, json.JSONDecodeError):
+                        _cs = {}
+                    _cs["confirmed_at"] = _now_iso
+                    _confirm_state_file.write_text(
+                        json.dumps(_cs, indent=2), encoding="utf-8"
+                    )
+                except OSError as _exc:
+                    _LOGGER.warning(
+                        "Freematics OTA confirm: could not update ota_pull_state.json: %s",
+                        _exc,
+                    )
+
+            await hass.async_add_executor_job(_write_confirmed_state)
+
+            # Update the debug sensor: ota_last_success is now set here
+            # (device-confirmed) instead of in the firmware.bin handler
+            # (HA-side transmission complete).
+            _entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
+            if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
+                _diag = _entry_data["diag"]
+                _diag["ota_last_success"] = _now_iso
+                _diag["ota_last_error"] = "Kein Fehler"
+                _diag["ota_last_version"] = _confirmed_version
+                async_dispatcher_send(
+                    hass,
+                    f"{DOMAIN}_{_webhook_id}_debug",
+                    {
+                        "ota_last_success": _now_iso,
+                        "ota_last_error": "Kein Fehler",
+                        "ota_last_version": _confirmed_version,
+                    },
+                )
+                _LOGGER.info(
+                    "Freematics pull-OTA (%s): device confirmed successful "
+                    "download of firmware v%s (entry %s)",
+                    _ota_mode,
+                    _confirmed_version,
+                    entry_id,
+                )
+
+            return web.Response(
+                body=json.dumps({"ok": True}).encode("utf-8"),
+                content_type="application/json",
             )
 
         # filename == "firmware.bin"
@@ -2055,36 +2138,18 @@ class FreematicsOtaPullView(HomeAssistantView):
 
                 await hass.async_add_executor_job(_write_pull_state)
 
-            # Update the debug sensor to reflect the successful transmission.
-            # fw_version is NOT updated here because we can't confirm the device
-            # actually applied the firmware to its flash partition (it may still
-            # fail at the SD→flash step).  ota_last_version records the version
-            # that was transmitted so the user can see what the device last
-            # attempted to stage, even without confirmed application.
-            for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
-                if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
-                    _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
-                    if _eid == entry_id:
-                        _diag = _entry_data["diag"]
-                        _diag["ota_last_success"] = now_iso
-                        _diag["ota_last_error"] = "Kein Fehler"
-                        _diag["ota_last_version"] = _fw_version
-                        async_dispatcher_send(
-                            hass,
-                            f"{DOMAIN}_{_webhook}_debug",
-                            {
-                                "ota_last_success": now_iso,
-                                "ota_last_error": "Kein Fehler",
-                                "ota_last_version": _fw_version,
-                            },
-                        )
-                        _LOGGER.info(
-                            "Freematics pull-OTA (%s): firmware v%s fully transmitted "
-                            "to device (entry %s)",
-                            _ota_mode,
-                            _fw_version,
-                            entry_id,
-                        )
-                        break
+            # Log the successful transmission.  ota_last_success is NOT updated
+            # here — it is only set when the device explicitly calls /ota_confirm
+            # after verifying the SHA256 digest on its side.  This prevents the
+            # "OTA letzte Übertragung" attribute from showing a success timestamp
+            # when the device-side verification later fails (SHA256 mismatch,
+            # SD write error, etc.).
+            _LOGGER.info(
+                "Freematics pull-OTA (%s): firmware v%s fully transmitted to device "
+                "(entry %s) — awaiting device confirmation via /ota_confirm",
+                _ota_mode,
+                _fw_version,
+                entry_id,
+            )
 
         return _stream_resp

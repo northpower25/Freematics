@@ -2625,6 +2625,29 @@ bool performPullOtaCheck()
       Serial.println("[OTA-PULL] SHA256 OK");
     }
 
+    // Notify HA that the firmware was downloaded and verified on the device.
+    // This is a WiFi-only, best-effort call — OTA proceeds even if it fails.
+    // The HA server only updates "OTA letzte Übertragung" upon receiving this
+    // request, ensuring the status reflects a device-confirmed download rather
+    // than merely a completed server-side transmission.
+#if ENABLE_WIFI
+    {
+      char _confirmPath[128];
+      snprintf(_confirmPath, sizeof(_confirmPath),
+               "/api/freematics/ota_pull/%s/ota_confirm", otaToken);
+      if (teleClient.wifi.open(otaHost, otaPort) &&
+          teleClient.wifi.send(METHOD_GET, _confirmPath)) {
+        int _confirmCode = 0;
+        teleClient.wifi.receiveHeaders(&_confirmCode);
+        Serial.printf("[OTA-PULL] Confirm %s (HTTP %d)\n",
+                      _confirmCode == 200 ? "OK" : "FAILED", _confirmCode);
+      } else {
+        Serial.println("[OTA-PULL] Confirm request failed (non-fatal)");
+      }
+      teleClient.wifi.close();
+    }
+#endif
+
     // Write companion meta file: expected byte count for integrity check.
     {
       File metaFile = SD.open(OTA_META_PATH, FILE_WRITE);
@@ -2832,6 +2855,24 @@ bool performPullOtaCheck()
     logger.logEvent(_ota_diag);
   }
 #endif
+  // Notify HA that firmware was written to flash (best-effort, WiFi-only).
+  // The HA server only updates "OTA letzte Übertragung" upon receiving this
+  // request, so the attribute accurately reflects a device-confirmed flash.
+  {
+    char _confirmPath[128];
+    snprintf(_confirmPath, sizeof(_confirmPath),
+             "/api/freematics/ota_pull/%s/ota_confirm", otaToken);
+    if (teleClient.wifi.open(otaHost, otaPort) &&
+        teleClient.wifi.send(METHOD_GET, _confirmPath)) {
+      int _confirmCode = 0;
+      teleClient.wifi.receiveHeaders(&_confirmCode);
+      Serial.printf("[OTA-PULL] Confirm %s (HTTP %d)\n",
+                    _confirmCode == 200 ? "OK" : "FAILED", _confirmCode);
+    } else {
+      Serial.println("[OTA-PULL] Confirm request failed (non-fatal)");
+    }
+    teleClient.wifi.close();
+  }
   // s_ota_active remains true; device reboots shortly.
   static esp_timer_handle_t s_pull_ota_timer = NULL;
   if (!s_pull_ota_timer) {
