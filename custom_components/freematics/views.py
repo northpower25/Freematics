@@ -1805,19 +1805,25 @@ class FreematicsOtaPullView(HomeAssistantView):
                 entry_id,
             )
 
-            # Record that the NVS settings binary was served so that subsequent
-            # meta.json checks can confirm nvs_version matches effective_version.
-            # This allows the server to re-deliver the NVS (alongside firmware)
-            # if settings change between two firmware downloads.
+            # Stream nvs.bin to the device.  nvs_version is written to
+            # ota_pull_state.json ONLY after the complete payload has been
+            # successfully transmitted — mirroring the firmware.bin /
+            # downloaded_at pattern.  Writing it earlier (before the HTTP
+            # response body is fully sent) caused a permanent "NVS up to date"
+            # situation whenever the device disconnected mid-transfer (e.g.
+            # due to WiFi hotspot instability): the state would show
+            # nvs_version matching effective_version, so meta.json returned
+            # available=false, and the device's LED/beep/OTA settings were
+            # never actually applied.
             _nvs_state_file = _www_dir / "ota_pull_state.json"
 
             def _update_nvs_version_in_state() -> None:
                 """Merge nvs_version into ota_pull_state.json (blocking I/O)."""
                 try:
-                    _state = json.loads(_nvs_state_file.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    _state = {}
-                try:
+                    try:
+                        _state = json.loads(_nvs_state_file.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        _state = {}
                     _state["nvs_version"] = effective_version
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     _nvs_state_file.write_text(
@@ -1830,16 +1836,49 @@ class FreematicsOtaPullView(HomeAssistantView):
                         _exc,
                     )
 
-            await hass.async_add_executor_job(_update_nvs_version_in_state)
-
-            return web.Response(
-                body=nvs_data,
-                content_type="application/octet-stream",
+            _nvs_chunk_size = 32768  # 32 KB chunks
+            _nvs_stream = web.StreamResponse(
+                status=200,
                 headers={
+                    "Content-Type": "application/octet-stream",
                     "Content-Disposition": "attachment; filename=config_nvs.bin",
                     "Cache-Control": "no-store",
+                    "Content-Length": str(len(nvs_data)),
                 },
             )
+            await _nvs_stream.prepare(request)
+
+            _nvs_sent = 0
+            _nvs_fully_sent = False
+            try:
+                while _nvs_sent < len(nvs_data):
+                    _chunk = nvs_data[_nvs_sent : _nvs_sent + _nvs_chunk_size]
+                    await _nvs_stream.write(_chunk)
+                    _nvs_sent += len(_chunk)
+                await _nvs_stream.write_eof()
+                _nvs_fully_sent = True
+            except OSError:
+                # Device closed the connection before receiving the full NVS
+                # binary (e.g. WiFi hotspot dropped or device reset).  Do NOT
+                # write nvs_version so that meta.json keeps returning
+                # available=true and the device retries on the next interval.
+                _LOGGER.info(
+                    "Freematics pull-OTA: device disconnected after %d / %d bytes "
+                    "of nvs.bin — nvs_version NOT written; device will retry",
+                    _nvs_sent,
+                    len(nvs_data),
+                )
+
+            if _nvs_fully_sent:
+                await hass.async_add_executor_job(_update_nvs_version_in_state)
+                _LOGGER.info(
+                    "Freematics pull-OTA: nvs.bin (%d bytes) fully transmitted "
+                    "to device (entry %s)",
+                    len(nvs_data),
+                    entry_id,
+                )
+
+            return _nvs_stream
 
         if filename == "ota_confirm":
             # The device calls this endpoint (GET .../ota_confirm) after it has

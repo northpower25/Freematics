@@ -3133,15 +3133,23 @@ void processBLE(int timeout)
 // the current OTA state immediately without needing to reboot.
 //
 // Outputs one of:
-//   OTA:disabled                       – OTA_TOKEN not in NVS
-//   OTA:TOKEN=<set> HOST=… PORT=… INTERVAL=Xs                   – fully active
-//   OTA:TOKEN=<set> HOST=… PORT=… INTERVAL=0s (checks disabled) – token set,
-//                                         but OTA_INTERVAL=0 so never fires
+//   OTA:disabled                                    – OTA_TOKEN not in NVS
+//   OTA:TOKEN=38f90170... HOST=… PORT=… INTERVAL=Xs – fully active
+//   OTA:TOKEN=38f90170... HOST=… PORT=… INTERVAL=0s (checks disabled)
+//                                                   – token set, INTERVAL=0
+// The first 8 hex characters of the token are shown so it is recognisable
+// in the serial log without exposing the full 64-character secret.
 // ---------------------------------------------------------------------------
 void printOtaStatus()
 {
   if (otaToken[0]) {
-    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us%s\n",
+    // Show only the first 8 hex chars of the token so the log entry is
+    // unambiguous (no angle-bracket confusion) while keeping the secret safe.
+    char _tok8[9];
+    strncpy(_tok8, otaToken, 8);
+    _tok8[8] = '\0';
+    Serial.printf("OTA:TOKEN=%s... HOST=%s PORT=%u INTERVAL=%us%s\n",
+                  _tok8,
                   otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
                   (unsigned)otaPort,
                   (unsigned)otaCheckIntervalS,
