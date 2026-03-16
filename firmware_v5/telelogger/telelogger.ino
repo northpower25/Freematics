@@ -2380,7 +2380,14 @@ bool performPullOtaCheck()
     return false;
   }
   metaBuf[metaBytes < (int)sizeof(metaBuf) - 1 ? metaBytes : (int)sizeof(metaBuf) - 1] = '\0';
-  teleClient.wifi.close();
+  // Do NOT close the WiFi connection here: keep it alive so both the next
+  // telemetry packet and the next OTA check (60 s later) can reuse the same
+  // TLS session.  receive() has already updated m_state (HTTP_CONNECTED when
+  // the server sent keep-alive, HTTP_DISCONNECTED when it sent Connection:close).
+  // In the keep-alive case this avoids one needless TLS teardown+handshake cycle
+  // per OTA check interval.  In the close case open() will call client.stop()
+  // immediately before client.connect(), preventing heap fragmentation by other
+  // tasks from grabbing the freed TLS block between the two calls.
 #endif  // ENABLE_WIFI
 
   // ---- Parse metadata JSON ------------------------------------------------

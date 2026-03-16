@@ -279,7 +279,22 @@ char* WifiHTTP::receive(char* buffer, int bufsize, int* pbytes, unsigned int tim
 
   m_state = HTTP_CONNECTED;
   if (pbytes) *pbytes = contentBytes;
-  if (!keepAlive) close();
+  // When the server signals it will close the connection ("Connection: close")
+  // we mark the state as disconnected but do NOT call close() / client.stop()
+  // here.  Eagerly stopping the TLS context immediately after each response
+  // (and well before the next request) gives other heap-allocating tasks a
+  // 2-second window to grab the freed ~70 KB TLS block.  After ~30 such cycles
+  // the DRAM heap is fragmented enough that a new TLS context cannot be
+  // allocated (MBEDTLS_ERR_SSL_ALLOC_FAILED / -32512), breaking all subsequent
+  // HTTPS connections until reboot.
+  //
+  // Deferring the actual stop() to the next open() call ensures it executes
+  // immediately before connect(), giving the allocator the best chance of
+  // finding a contiguous block.  open() already has the correct logic:
+  // if m_state != HTTP_CONNECTED it calls client.stop() then client.connect().
+  if (!keepAlive) {
+    m_state = HTTP_DISCONNECTED;  // will be reconnected on next open()
+  }
   return content;
 }
 
