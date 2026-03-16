@@ -854,6 +854,13 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     beep_en = bool(cfg.get(CONF_BEEP_EN, True))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
+    # NVS settings version: "<firmware_version>.<settings_timestamp>" so the
+    # firmware can log it at boot and the user can verify the correct NVS was
+    # written (e.g. after serial flash or OTA NVS update).
+    _settings_version = cfg.get(CONF_SETTINGS_VERSION, "")
+    nvs_version = (
+        f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
+    )
     # Pull-OTA configuration (Variant 1: authenticated HA endpoint).
     # When ota_mode is disabled, suppress OTA NVS keys so the device never polls.
     _ota_mode = cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
@@ -1164,6 +1171,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "ota_host": ota_host,
         "ota_port": ota_port,
         "ota_check_interval_s": ota_check_interval_s,
+        "nvs_version": nvs_version,
     }
 
 

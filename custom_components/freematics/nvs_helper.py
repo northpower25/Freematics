@@ -37,6 +37,12 @@ Stored NVS keys (namespace "storage"):
                   May differ from SERVER_HOST when Nabu Casa cloud is active.
   OTA_PORT      – TCP port for OTA_HOST (u16, firmware v5.2+, default 443).
   OTA_INTERVAL  – Seconds between pull-OTA checks (u16, firmware v5.2+, 0 = off).
+  NVS_VER       – Settings version string (firmware v5.2+).  Written by the HA
+                  integration to record which settings revision was flashed.
+                  The firmware prints this string at boot so the user can
+                  verify the correct NVS partition was applied.  Format:
+                  "<firmware_version>.<settings_timestamp>", e.g.
+                  "5.1.2026-03-16T16:11:20+00:00".
 
 Single-file flash image (esptool)
 ----------------------------------
@@ -213,6 +219,7 @@ def generate_nvs_partition(
     ota_host: str = "",
     ota_port: int = 443,
     ota_check_interval_s: int = 0,
+    nvs_version: str = "",
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -262,6 +269,12 @@ def generate_nvs_partition(
         ota_check_interval_s: How often (seconds) the firmware should check
             for a new firmware version (OTA_INTERVAL NVS key, u16).
             0 = disabled (default).
+        nvs_version: Settings version string written to the NVS_VER key.
+            Read by the firmware at boot and printed to the serial console so
+            the user can verify which settings revision was flashed.  Format:
+            "<firmware_version>.<settings_timestamp>", e.g.
+            "5.1.2026-03-16T16:11:20+00:00".  Empty string = key not written
+            (legacy NVS partitions without this key are silently unaffected).
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -363,6 +376,12 @@ def generate_nvs_partition(
         _add_u16("OTA_PORT", _ota_port)
     if ota_check_interval_s and ota_check_interval_s > 0:
         _add_u16("OTA_INTERVAL", ota_check_interval_s)
+    # NVS settings version (NVS_VER key, firmware v5.2+).  Stores the HA
+    # effective_version string so the firmware can print it at boot, letting
+    # the user verify that the current NVS was written during the last serial
+    # flash or OTA NVS update.
+    if nvs_version:
+        _add_str("NVS_VER", nvs_version)
 
     csv_content = "\n".join(rows) + "\n"
 

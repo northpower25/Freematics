@@ -184,6 +184,17 @@ void WifiUDP::close()
 bool WifiHTTP::open(const char* host, uint16_t port)
 {
   if (!host) return true;
+  // Reuse the existing keep-alive connection when already connected to the
+  // same host.  Tearing down and re-establishing a TLS session for every
+  // request (each telemetry packet, each OTA meta check, etc.) creates
+  // many alloc/free cycles in the mbedTLS heap.  The ESP32 heap allocator
+  // is not a perfect buddy-allocator; after ~30 TLS session cycles the heap
+  // becomes fragmented enough that a fresh TLS context allocation fails with
+  // MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512), breaking all subsequent HTTPS
+  // connections until the device reboots.
+  if (m_state == HTTP_CONNECTED && m_host == host) {
+    return true;
+  }
   // Ensure any previous (possibly failed) TLS session is fully torn down
   // before starting a new handshake.  WiFiClientSecure::connect() does not
   // always release the mbedTLS context on a partially-initialised connection,
@@ -195,10 +206,14 @@ bool WifiHTTP::open(const char* host, uint16_t port)
     m_state = HTTP_CONNECTED;
     m_host = host;
     return true;
-  } else {
-    m_state = HTTP_ERROR;
-    return false;
   }
+  // Free any partial TLS context that connect() may have left allocated on
+  // failure.  Without this second stop(), a failed connect() can leak
+  // mbedTLS heap structures, causing the next connect() to also fail with
+  // MBEDTLS_ERR_SSL_ALLOC_FAILED and eventually crashing all HTTPS traffic.
+  client.stop();
+  m_state = HTTP_ERROR;
+  return false;
 }
 
 void WifiHTTP::close()
