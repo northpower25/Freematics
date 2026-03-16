@@ -2625,6 +2625,29 @@ bool performPullOtaCheck()
       Serial.println("[OTA-PULL] SHA256 OK");
     }
 
+    // Notify HA that the firmware was downloaded and verified on the device.
+    // This is a WiFi-only, best-effort call — OTA proceeds even if it fails.
+    // The HA server only updates "OTA letzte Übertragung" upon receiving this
+    // request, ensuring the status reflects a device-confirmed download rather
+    // than merely a completed server-side transmission.
+#if ENABLE_WIFI
+    {
+      char _confirmPath[128];
+      snprintf(_confirmPath, sizeof(_confirmPath),
+               "/api/freematics/ota_pull/%s/ota_confirm", otaToken);
+      if (teleClient.wifi.open(otaHost, otaPort) &&
+          teleClient.wifi.send(METHOD_GET, _confirmPath)) {
+        int _confirmCode = 0;
+        teleClient.wifi.receiveHeaders(&_confirmCode);
+        Serial.printf("[OTA-PULL] Confirm %s (HTTP %d)\n",
+                      _confirmCode == 200 ? "OK" : "FAILED", _confirmCode);
+      } else {
+        Serial.println("[OTA-PULL] Confirm request failed (non-fatal)");
+      }
+      teleClient.wifi.close();
+    }
+#endif
+
     // Write companion meta file: expected byte count for integrity check.
     {
       File metaFile = SD.open(OTA_META_PATH, FILE_WRITE);
@@ -2832,6 +2855,24 @@ bool performPullOtaCheck()
     logger.logEvent(_ota_diag);
   }
 #endif
+  // Notify HA that firmware was written to flash (best-effort, WiFi-only).
+  // The HA server only updates "OTA letzte Übertragung" upon receiving this
+  // request, so the attribute accurately reflects a device-confirmed flash.
+  {
+    char _confirmPath[128];
+    snprintf(_confirmPath, sizeof(_confirmPath),
+             "/api/freematics/ota_pull/%s/ota_confirm", otaToken);
+    if (teleClient.wifi.open(otaHost, otaPort) &&
+        teleClient.wifi.send(METHOD_GET, _confirmPath)) {
+      int _confirmCode = 0;
+      teleClient.wifi.receiveHeaders(&_confirmCode);
+      Serial.printf("[OTA-PULL] Confirm %s (HTTP %d)\n",
+                    _confirmCode == 200 ? "OK" : "FAILED", _confirmCode);
+    } else {
+      Serial.println("[OTA-PULL] Confirm request failed (non-fatal)");
+    }
+    teleClient.wifi.close();
+  }
   // s_ota_active remains true; device reboots shortly.
   static esp_timer_handle_t s_pull_ota_timer = NULL;
   if (!s_pull_ota_timer) {
@@ -3092,15 +3133,23 @@ void processBLE(int timeout)
 // the current OTA state immediately without needing to reboot.
 //
 // Outputs one of:
-//   OTA:disabled                       – OTA_TOKEN not in NVS
-//   OTA:TOKEN=<set> HOST=… PORT=… INTERVAL=Xs                   – fully active
-//   OTA:TOKEN=<set> HOST=… PORT=… INTERVAL=0s (checks disabled) – token set,
-//                                         but OTA_INTERVAL=0 so never fires
+//   OTA:disabled                                    – OTA_TOKEN not in NVS
+//   OTA:TOKEN=38f90170... HOST=… PORT=… INTERVAL=Xs – fully active
+//   OTA:TOKEN=38f90170... HOST=… PORT=… INTERVAL=0s (checks disabled)
+//                                                   – token set, INTERVAL=0
+// The first 8 hex characters of the token are shown so it is recognisable
+// in the serial log without exposing the full 64-character secret.
 // ---------------------------------------------------------------------------
 void printOtaStatus()
 {
   if (otaToken[0]) {
-    Serial.printf("OTA:TOKEN=<set> HOST=%s PORT=%u INTERVAL=%us%s\n",
+    // Show only the first 8 hex chars of the token so the log entry is
+    // unambiguous (no angle-bracket confusion) while keeping the secret safe.
+    char _tok8[9];
+    strncpy(_tok8, otaToken, 8);
+    _tok8[8] = '\0';
+    Serial.printf("OTA:TOKEN=%s... HOST=%s PORT=%u INTERVAL=%us%s\n",
+                  _tok8,
                   otaHost[0] ? _maskOtaHost(otaHost).c_str() : "(server fallback)",
                   (unsigned)otaPort,
                   (unsigned)otaCheckIntervalS,
