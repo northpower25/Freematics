@@ -42,10 +42,14 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   header += p;
   header += " HTTP/1.1\r\nHost: ";
   header += m_host;
-  // Use Connection: close to ensure the server closes the TCP session after
-  // each response.  This avoids keep-alive edge cases (un-drained buffers,
-  // stale sessions) that are particularly problematic over cellular links.
-  header += "\r\nConnection: close";
+  // HTTP/1.1 keep-alive is the default; we rely on the modem's +CCH_PEER_CLOSED
+  // URC (handled by inbound()) to detect server-initiated closes and update
+  // m_state = HTTP_DISCONNECTED so that the next transmit() reconnects.
+  // Sending "Connection: close" was previously added to avoid stale-session
+  // edge cases, but it forces a full TLS teardown and re-handshake for every
+  // single packet.  Combined with MIN_TLS_HANDSHAKE_MS, this caused the modem
+  // to falsely reject legitimate fast TLS reconnects to hooks.nabu.casa
+  // (AWS ALB, EU), breaking all cellular telemetry delivery.
   if (method != METHOD_GET) {
     header += "\r\nContent-Type: application/json\r\nContent-Length: ";
     header += String(payloadSize);
