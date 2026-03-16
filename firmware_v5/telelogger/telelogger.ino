@@ -115,6 +115,11 @@ uint8_t enableHttpd = ENABLE_HTTPD;
 // Only takes effect when the firmware is compiled with ENABLE_BLE=1.
 uint8_t enableBle = 1;
 nvs_handle_t nvs;
+// NVS settings version string (NVS_VER key): written by the HA integration
+// when generating the NVS partition so the firmware can report which settings
+// are active.  Format: "<FIRMWARE_VERSION>.<settings_timestamp>" e.g.
+// "5.1.2026-03-16T16:11:20+00:00".  Empty when NVS was not provisioned by HA.
+char nvsVersion[64] = "";
 
 // ---------------------------------------------------------------------------
 // Pull-OTA configuration (loaded from NVS by loadConfig(), firmware v5.2+).
@@ -1758,6 +1763,10 @@ void showSysInfo()
   Serial.print(__DATE__);
   Serial.print(" ");
   Serial.println(__TIME__);
+  if (nvsVersion[0]) {
+    Serial.print("NVS:");
+    Serial.println(nvsVersion);
+  }
 }
 
 void loadConfig()
@@ -1908,6 +1917,14 @@ void loadConfig()
   uint16_t nvsOtaInterval = 0;
   nvs_get_u16(nvs, "OTA_INTERVAL", &nvsOtaInterval);
   otaCheckIntervalS = nvsOtaInterval;
+
+  // NVS settings version (NVS_VER key).  Written by the HA integration when
+  // generating the NVS partition image.  Logged at boot so the user can verify
+  // which settings version is active on the device (especially after a serial
+  // flash or OTA NVS update).  Absent on devices never provisioned by HA.
+  len = sizeof(nvsVersion);
+  nvsVersion[0] = 0;
+  nvs_get_str(nvs, "NVS_VER", nvsVersion, &len);
 }
 
 // ---------------------------------------------------------------------------
@@ -2328,10 +2345,10 @@ bool performPullOtaCheck()
   char* metaBody = nullptr;
 
 #if ENABLE_WIFI
-  // Temporarily disconnect the telemetry client so we can reuse the WiFi
-  // stack for the OTA metadata fetch.
-  teleClient.wifi.close();
-
+  // open() reuses the existing keep-alive connection when otaHost matches the
+  // current telemetry host (common with Nabu Casa Remote UI), avoiding a
+  // costly TLS teardown/handshake cycle that fragments the ESP32 mbedTLS heap.
+  // When the hosts differ, open() closes the old session and reconnects.
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE
