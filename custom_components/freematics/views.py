@@ -1571,18 +1571,50 @@ async def _get_ota_pull_meta(
                 content_type="application/json",
             )
 
-        if not FIRMWARE_PATH.exists():
-            return web.Response(status=503, text="Firmware binary not found")
-
-        def _compute_meta_cloud() -> tuple[int, str]:
-            data = FIRMWARE_PATH.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            return len(data), digest
-
+        # Use the sha256 and size that were recorded when the user pressed
+        # "Publish Firmware for Cloud OTA".  This avoids re-reading the 1.8 MB
+        # firmware binary on every OTA meta check, and guarantees that the
+        # digest in meta.json matches the binary that firmware.bin will serve
+        # (the published copy in www/FreematicsONE/{id}/firmware.bin).
+        fw_sha256 = published.get("sha256", "")
+        fw_size_raw = published.get("size", 0)
         try:
-            fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_cloud)
-        except OSError as exc:
-            return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+            fw_size = int(fw_size_raw)
+        except (TypeError, ValueError):
+            fw_size = 0
+
+        if not fw_sha256 or not fw_size:
+            # Legacy version.json without pre-computed sha256/size: fall back
+            # to reading the bundled firmware binary directly.
+            if not FIRMWARE_PATH.exists():
+                return web.Response(status=503, text="Firmware binary not found")
+
+            def _compute_meta_cloud() -> tuple[int, str]:
+                data = FIRMWARE_PATH.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()
+                return len(data), digest
+
+            try:
+                fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_cloud)
+            except OSError as exc:
+                return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+        else:
+            # Verify the published firmware copy exists so the device won't
+            # attempt a download that would fail with 404/503.
+            _pub_fw = _www_dir / "firmware.bin"
+
+            def _pub_fw_exists() -> bool:
+                return _pub_fw.exists()
+
+            if not await hass.async_add_executor_job(_pub_fw_exists):
+                return web.Response(
+                    status=503,
+                    text=(
+                        "Published firmware binary not found. "
+                        "Press 'Publish Firmware for Cloud OTA' to make a new "
+                        "version available."
+                    ),
+                )
 
         return web.Response(
             body=json.dumps({
@@ -1682,14 +1714,17 @@ class FreematicsOtaPullView(HomeAssistantView):
         _www_dir = Path(hass.config.config_dir) / "www" / "FreematicsONE" / _device_id
         _version_json = _www_dir / "version.json"
 
-        def _write_version_json(data: dict) -> None:
-            """Write updated version.json (blocking I/O)."""
+        def _read_version_json() -> dict:
+            """Read and parse version.json written by PublishCloudOtaButton (blocking I/O)."""
             try:
-                _version_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            except OSError as _exc:
+                return json.loads(_version_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, ValueError) as _exc:
                 _LOGGER.warning(
-                    "Freematics pull-OTA: could not update version.json: %s", _exc
+                    "Freematics pull-OTA: could not read version.json at %s: %s",
+                    _version_json,
+                    _exc,
                 )
+                return {}
 
         # Determine OTA mode from the config entry so we can apply the correct
         # availability policy:
@@ -1853,20 +1888,42 @@ class FreematicsOtaPullView(HomeAssistantView):
                         "Press 'Publish Firmware for Cloud OTA' to make a new version available."
                     ),
                 )
-        else:
-            # Variant 1: no gate; read published dict as empty placeholder so
-            # the logging/diag code below can reference it uniformly.
-            published = {}
 
-        if not FIRMWARE_PATH.exists():
+            # For Cloud OTA, serve the firmware copy that was written to
+            # www/FreematicsONE/{device_id}/ by the "Publish" button.  Serving
+            # the published copy (rather than reading FIRMWARE_PATH directly)
+            # ensures the binary matches the sha256 advertised in meta.json and
+            # avoids any potential I/O issues with the bundled firmware path.
+            _fw_source = _www_dir / "firmware.bin"
+            if not _fw_source.exists():
+                return web.Response(
+                    status=503,
+                    text=(
+                        "Published firmware binary not found. "
+                        "Press 'Publish Firmware for Cloud OTA' to make a new version available."
+                    ),
+                )
+        else:
+            # Variant 1: no gate; serve from the bundled FIRMWARE_PATH.
+            # published is set to an empty dict so the logging/diag code below
+            # can reference it uniformly.
+            published = {}
+            _fw_source = FIRMWARE_PATH
+
+        if not _fw_source.exists():
             return web.Response(status=503, text="Firmware binary not found")
 
         try:
             firmware_data: bytes = await hass.async_add_executor_job(
-                FIRMWARE_PATH.read_bytes
+                _fw_source.read_bytes
             )
-        except OSError as exc:
-            return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+        except (OSError, MemoryError) as exc:
+            _LOGGER.error(
+                "Freematics pull-OTA: failed to read firmware from %s: %s",
+                _fw_source,
+                exc,
+            )
+            return web.Response(status=503, text=f"Cannot read firmware: {exc}")
 
         _fw_version = published.get("version") or effective_version
 
