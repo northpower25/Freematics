@@ -61,14 +61,20 @@ extern uint8_t cellNetDebug;
 // is restarted.  This threshold gives a conservative safety margin so that
 // WifiHTTP::open() declines the connect attempt early (without tearing down
 // the existing session) and the caller can request a WiFi restart instead.
-// 40 KB is chosen as the minimum largest-contiguous-block size: mbedTLS
+// 38 KB is chosen as the minimum largest-contiguous-block size: mbedTLS
 // allocates ~2×17 KB TLS record buffers inside mbedtls_ssl_setup() and these
 // must fit in contiguous DRAM.  Values below ~34 KB will consistently fail;
-// the 40 KB margin accounts for additional smaller context allocations.
+// the 38 KB margin accounts for additional smaller context allocations.
+// The previous 40 KB threshold was too close to the ~40-41 KB max contiguous
+// block available after a clean WiFi restart (no active TLS sessions), causing
+// Guard 2 in WifiHTTP::open() to fire immediately after WiFi reconnect and
+// preventing telemetry from re-establishing its TLS session.  38 KB still
+// provides a 4 KB margin above the ~34 KB minimum and allows the post-close
+// heap (~40-41 KB on this hardware) to pass the guard reliably.
 // ESP.getMaxAllocHeap() returns the largest single contiguous free block,
 // which is the correct metric for fragmentation detection (total free heap
 // can be high while no individual block is large enough for TLS).
-#define TLS_MIN_FREE_HEAP (40 * 1024)
+#define TLS_MIN_FREE_HEAP (38 * 1024)
 
 typedef enum {
   METHOD_GET = 0,
