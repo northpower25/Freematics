@@ -188,12 +188,47 @@ bool WifiHTTP::open(const char* host, uint16_t port)
   // same host.  Tearing down and re-establishing a TLS session for every
   // request (each telemetry packet, each OTA meta check, etc.) creates
   // many alloc/free cycles in the mbedTLS heap.  The ESP32 heap allocator
-  // is not a perfect buddy-allocator; after ~30 TLS session cycles the heap
+  // is not a perfect buddy-allocator; after a few TLS session cycles the heap
   // becomes fragmented enough that a fresh TLS context allocation fails with
   // MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512), breaking all subsequent HTTPS
   // connections until the device reboots.
   if (m_state == HTTP_CONNECTED && m_host == host) {
     return true;
+  }
+  // When the server signalled "Connection: close" on the last response
+  // (receive() set m_state = HTTP_DISCONNECTED without calling stop()), the
+  // underlying TCP/TLS socket is still physically open for a short window
+  // while the server's FIN propagates through the network.  If the host
+  // matches and the socket reports connected, reuse the session without a
+  // TLS teardown+handshake cycle: this eliminates one alloc/free round-trip
+  // in the mbedTLS heap that would otherwise fragment DRAM.  If the socket
+  // is already dead the next send() will detect the failure (write returns 0,
+  // m_state → HTTP_DISCONNECTED) and the caller will retry via open() again,
+  // falling through to the stop+connect path below.
+  if (m_state == HTTP_DISCONNECTED && m_host == host && client.connected()) {
+    m_state = HTTP_CONNECTED;
+    return true;
+  }
+  // Before tearing down the current TLS session to establish a new one,
+  // check whether the heap is fragmented enough that a new TLS context would
+  // fail (MBEDTLS_ERR_SSL_ALLOC_FAILED).  mbedtls_ssl_setup() allocates two
+  // ~17 KB TLS record buffers in contiguous blocks; if the heap is already
+  // fragmented these fail even when total free memory looks adequate.
+  // ESP.getMaxAllocHeap() returns the largest single contiguous free block,
+  // which is the correct fragmentation indicator.
+  //
+  // Guard 1: if the current session is active (HTTP_CONNECTED) for a different
+  // host AND the heap is too fragmented for a new TLS context, do NOT tear down
+  // the existing session.  Destroying a working session without being able to
+  // establish a replacement leaves the device with no HTTPS connectivity until
+  // the WiFi stack is restarted.  Return false so the caller can request a
+  // WiFi restart (wifi.end()) which frees the WiFi-driver DRAM, coalesces the
+  // heap, and allows the next attempt to succeed.
+  if (m_state == HTTP_CONNECTED && ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+    Serial.printf("[WIFI] Low heap (%u bytes max block), not switching TLS host\n",
+                  (unsigned)ESP.getMaxAllocHeap());
+    m_state = HTTP_ERROR;
+    return false;
   }
   // Ensure any previous (possibly failed) TLS session is fully torn down
   // before starting a new handshake.  WiFiClientSecure::connect() does not
@@ -202,6 +237,16 @@ bool WifiHTTP::open(const char* host, uint16_t port)
   // MBEDTLS_ERR_SSL_ALLOC_FAILED / RSA BIGNUM alloc failures.
   client.stop();
   client.setInsecure(); // skip certificate verification for HTTPS
+  // Guard 2: after cleaning up the old session, re-check the heap before the
+  // new connect() call.  If the heap is still too fragmented (the cleanup did
+  // not free enough memory) skip the TLS handshake to avoid another ALLOC_FAILED
+  // cycle that would leave partial state behind.
+  if (ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+    Serial.printf("[WIFI] Low heap (%u bytes max block) after cleanup, skipping TLS connect\n",
+                  (unsigned)ESP.getMaxAllocHeap());
+    m_state = HTTP_ERROR;
+    return false;
+  }
   if (client.connect(host, port)) {
     m_state = HTTP_CONNECTED;
     m_host = host;

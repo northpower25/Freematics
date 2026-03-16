@@ -52,6 +52,24 @@ extern uint8_t cellNetDebug;
 
 #define RECV_BUF_SIZE 512
 
+// Minimum total free DRAM required before attempting a new TLS handshake.
+// A TLS session (mbedTLS context, handshake buffers, etc.) uses roughly
+// 20–50 KB spread across many small allocations.  When the heap is already
+// fragmented by prior TLS teardown/creation cycles, individual allocations
+// inside mbedtls_ssl_setup() etc. fail with MBEDTLS_ERR_SSL_ALLOC_FAILED
+// (-32512), breaking ALL subsequent HTTPS connections until the WiFi stack
+// is restarted.  This threshold gives a conservative safety margin so that
+// WifiHTTP::open() declines the connect attempt early (without tearing down
+// the existing session) and the caller can request a WiFi restart instead.
+// 40 KB is chosen as the minimum largest-contiguous-block size: mbedTLS
+// allocates ~2×17 KB TLS record buffers inside mbedtls_ssl_setup() and these
+// must fit in contiguous DRAM.  Values below ~34 KB will consistently fail;
+// the 40 KB margin accounts for additional smaller context allocations.
+// ESP.getMaxAllocHeap() returns the largest single contiguous free block,
+// which is the correct metric for fragmentation detection (total free heap
+// can be high while no individual block is large enough for TLS).
+#define TLS_MIN_FREE_HEAP (40 * 1024)
+
 typedef enum {
   METHOD_GET = 0,
   METHOD_POST,
