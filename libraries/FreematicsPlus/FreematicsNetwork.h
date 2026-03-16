@@ -33,7 +33,16 @@
 // Some SIM7600E-H firmware revisions silently fall back to plain TCP even
 // with the explicit 5-param ssl_ctx_id form; accepting such sessions leads to
 // repeated "400 The plain HTTP request was sent to HTTPS port" responses.
-#define MIN_TLS_HANDSHAKE_MS 300
+//
+// 150 ms is chosen to be safely above the plain-TCP fast-path (typically
+// <100 ms: modem acknowledges AT+CCHOPEN + TCP connect without TLS overhead)
+// while accepting legitimate TLS handshakes to cloud endpoints such as
+// hooks.nabu.casa (AWS ALB, EU) which complete in ~150–400 ms over cellular.
+// The previous 300 ms threshold was too aggressive: it falsely rejected real
+// TLS connections to hooks.nabu.casa when combined with Connection: close
+// (which forces a new TLS handshake for every packet), breaking all cellular
+// telemetry delivery.
+#define MIN_TLS_HANDSHAKE_MS 150
 
 // Runtime cellular debug flag.  Set to 1 via NVS key CELL_DEBUG (written by
 // the HA config/options flow) to enable verbose cellular diagnostic logging:
