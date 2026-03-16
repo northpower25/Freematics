@@ -6,6 +6,8 @@ Provides the following button entities:
 - Restart Device              – sends RESET command via device HTTP API
 - Publish Firmware for Cloud OTA – copies firmware to /config/www/FreematicsONE/{id}/
                                    (Variant 2: accessible via /local/ NabuCasa path)
+
+Note: CellDlTestButton was removed because cellular OTA was removed in v0.1.26.
 """
 
 from __future__ import annotations
