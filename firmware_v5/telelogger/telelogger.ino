@@ -1486,22 +1486,26 @@ void telemetry(void* inst)
         if (lastOtaCheckMs == 0 || nowMs - lastOtaCheckMs >= (uint32_t)otaCheckIntervalS * 1000UL) {
           lastOtaCheckMs = nowMs;
           Serial.println("[OTA-PULL] Checking for firmware update...");
+          // Close the active telemetry TLS session before the OTA check.
+          // With an active TLS session, the mbedTLS record buffers consume
+          // ~25 KB of heap, leaving too little contiguous DRAM for a second
+          // TLS handshake to the OTA endpoint (which is typically on a
+          // different host from the telemetry server).  Releasing the session
+          // here frees those buffers so performPullOtaCheck() starts with a
+          // clean ~40-41 KB max contiguous block.  Telemetry reconnects
+          // automatically via connect(true) inside the next transmit() call.
+#if ENABLE_WIFI
+          teleClient.wifi.close();
+#endif
           if (performPullOtaCheck()) {
             // Direct-flash path: firmware flash started; device will reboot
             // shortly.  Block here so the loop doesn't continue transmitting.
             while (true) delay(1000);
           }
-          // If the OTA check used a different TLS endpoint from the telemetry
-          // server (common when Nabu Casa cloud webhook is used for telemetry
-          // but the Remote UI URL is used for OTA), open() may have torn down
-          // the telemetry TLS session and failed to allocate a new one for OTA
-          // (MBEDTLS_ERR_SSL_ALLOC_FAILED).  The same fragmentation prevents
-          // the telemetry session from being re-established.  Detect this by
-          // checking whether the WiFi HTTP client is in HTTP_ERROR state (set
-          // by WifiHTTP::open() on a failed connect) AND the largest contiguous
-          // free DRAM block is below TLS_MIN_FREE_HEAP.  The heap check avoids
-          // spurious WiFi restarts when open() failed due to the remote server
-          // being temporarily unreachable (which would not deplete the heap).
+          // If OTA failed due to genuine heap fragmentation (e.g. a TLS
+          // teardown inside performPullOtaCheck() leaked mbedTLS state), the
+          // heap may still be too low to re-establish telemetry.  Detect this
+          // and restart WiFi to coalesce the heap.
 #if ENABLE_WIFI
           if (teleClient.wifi.state() == HTTP_ERROR &&
               state.check(STATE_WIFI_CONNECTED) &&
@@ -2392,10 +2396,9 @@ bool performPullOtaCheck()
   char* metaBody = nullptr;
 
 #if ENABLE_WIFI
-  // open() reuses the existing keep-alive connection when otaHost matches the
-  // current telemetry host (common with Nabu Casa Remote UI), avoiding a
-  // costly TLS teardown/handshake cycle that fragments the ESP32 mbedTLS heap.
-  // When the hosts differ, open() closes the old session and reconnects.
+  // The caller (telemetry loop) has already called wifi.close() to release
+  // the active telemetry TLS session before invoking this function, so the
+  // heap is free and open() always starts a fresh TLS handshake here.
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE
