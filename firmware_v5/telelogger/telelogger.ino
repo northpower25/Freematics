@@ -1491,6 +1491,28 @@ void telemetry(void* inst)
             // shortly.  Block here so the loop doesn't continue transmitting.
             while (true) delay(1000);
           }
+          // If the OTA check used a different TLS endpoint from the telemetry
+          // server (common when Nabu Casa cloud webhook is used for telemetry
+          // but the Remote UI URL is used for OTA), open() may have torn down
+          // the telemetry TLS session and failed to allocate a new one for OTA
+          // (MBEDTLS_ERR_SSL_ALLOC_FAILED).  The same fragmentation prevents
+          // the telemetry session from being re-established.  Detect this by
+          // checking whether the WiFi HTTP client is in HTTP_ERROR state (set
+          // by WifiHTTP::open() on a failed connect) AND the largest contiguous
+          // free DRAM block is below TLS_MIN_FREE_HEAP.  The heap check avoids
+          // spurious WiFi restarts when open() failed due to the remote server
+          // being temporarily unreachable (which would not deplete the heap).
+#if ENABLE_WIFI
+          if (teleClient.wifi.state() == HTTP_ERROR &&
+              state.check(STATE_WIFI_CONNECTED) &&
+              ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+            Serial.printf("[WIFI] Low heap (%u bytes max block) after OTA TLS fail, restarting WiFi\n",
+                          (unsigned)ESP.getMaxAllocHeap());
+            teleClient.wifi.end();
+            state.clear(STATE_NET_READY | STATE_WIFI_CONNECTED);
+            break;
+          }
+#endif
         }
       }
 
@@ -1568,7 +1590,32 @@ void telemetry(void* inst)
         printTimeoutStats();
         if (connErrors < MAX_CONN_ERRORS_RECONNECT) {
           // quick reconnect
-          teleClient.connect(true);
+          if (!teleClient.connect(true)) {
+            // Quick reconnect failed while the WiFi radio is still up.
+            // Check if this is a heap-fragmentation failure (the TLS handshake
+            // cannot allocate its internal buffers) rather than a transient
+            // server-side error.  ESP.getMaxAllocHeap() returns the largest
+            // contiguous free DRAM block; values below TLS_MIN_FREE_HEAP
+            // indicate that mbedtls_ssl_setup()'s 2×17 KB record buffers
+            // cannot be satisfied even if total free memory is nominally OK.
+            // In that case waiting for MAX_CONN_ERRORS_RECONNECT attempts
+            // wastes ~40 s in an unrecoverable state.  Disconnect WiFi now to
+            // trigger the outer loop's WiFi-restart path (begin + setup), which
+            // stops and re-starts the WiFi driver.  The driver's internal DRAM
+            // allocations are freed by esp_wifi_stop() and re-initialised by
+            // esp_wifi_start(), coalescing the fragmented heap and giving the
+            // next TLS handshake a contiguous block to work with.
+#if ENABLE_WIFI
+            if (state.check(STATE_WIFI_CONNECTED) &&
+                ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+              Serial.printf("[WIFI] Low heap (%u bytes max block) after TLS fail, restarting WiFi\n",
+                            (unsigned)ESP.getMaxAllocHeap());
+              teleClient.wifi.end();
+              state.clear(STATE_NET_READY | STATE_WIFI_CONNECTED);
+              break;
+            }
+#endif
+          }
         }
       }
 #ifdef PIN_LED
