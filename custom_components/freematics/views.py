@@ -1081,16 +1081,13 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     # available it is used as OTA_HOST for WiFi connections: the ESP32 mbedTLS
     # stack can reach *.ui.nabu.casa over WiFi without issues.
     #
-    # NOTE: SIM7600E-H cellular modems CANNOT connect to *.ui.nabu.casa (TLS
-    # error 15 – the modem's TLS stack is incompatible with the Remote UI
-    # proxy's TLS configuration).  Cellular OTA meta checks are instead routed
-    # through hooks.nabu.casa using a GET request to the existing telemetry
-    # webhook (see the GET handler in async_setup_entry() in __init__.py and
-    # _get_ota_pull_meta() in views.py).  No separate NVS key is needed for
-    # this: the firmware uses CELL_HOST / CELL_PATH (already provisioned for
-    # cellular telemetry) to perform the OTA meta check via GET when cellular
-    # is the active transport.  Falls back to get_url(prefer_external=True) for
-    # installations without Nabu Casa.
+    # NOTE: OTA firmware updates are WiFi-only.  SIM7600E-H cellular modems
+    # cannot connect to *.ui.nabu.casa (TLS error 15) and cellular OTA is not
+    # supported.  The firmware only performs OTA checks when WiFi is connected
+    # (STATE_WIFI_CONNECTED) and uses the dedicated /api/freematics/ota_pull/
+    # endpoint directly — not the telemetry webhook.
+    # Falls back to get_url(prefer_external=True) for installations without
+    # Nabu Casa.
     ota_host = ""
     ota_port = 443
     if ota_token:
@@ -1098,9 +1095,8 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
 
         # 1. Prefer Nabu Casa Remote UI (*.ui.nabu.casa) – reachable over WiFi
         #    for the OTA firmware download.  NOT reachable over SIM7600 cellular
-        #    (TLS error 15); cellular OTA meta checks use CELL_HOST / CELL_PATH
-        #    instead (see above).  async_remote_ui_url() raises when the Remote
-        #    UI is not active; we catch broadly and fall through.
+        #    (TLS error 15); OTA is WiFi-only.  async_remote_ui_url() raises when
+        #    the Remote UI is not active; we catch broadly and fall through.
         try:
             from homeassistant.components import cloud as _ota_cloud  # noqa: PLC0415
             if _ota_cloud.async_is_logged_in(hass):

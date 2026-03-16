@@ -638,12 +638,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webhook_id,
         handle_webhook,
         local_only=False,
-        # GET is used by the firmware for cellular OTA meta checks via
-        # hooks.nabu.casa.  SIM7600E-H modems cannot connect to *.ui.nabu.casa
-        # (TLS error 15) but can reach hooks.nabu.casa.  A GET to the telemetry
-        # webhook returns OTA meta JSON so the device can check for firmware
-        # updates even without WiFi.  POST is the normal telemetry path.
-        allowed_methods=["GET", "POST"],
+        # POST is the only method used: the firmware sends telemetry via HTTPS
+        # POST to the webhook URL.  OTA firmware updates are WiFi-only and use
+        # the dedicated /api/freematics/ota_pull/{token}/ endpoint, not this
+        # webhook.  GET is not needed here.
+        allowed_methods=["POST"],
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
