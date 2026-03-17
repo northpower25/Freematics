@@ -80,6 +80,9 @@ extern char serverHost[128]; // primary server hostname (fallback for otaHost)
 // live OTA config updates so users see the new state immediately without
 // needing to reboot.
 extern void printOtaStatus();
+// NVS settings version string (NVS_VER key): read at startup, reported via
+// api/control?cmd=NVS_VER? and api/info so HA can show the installed version.
+extern char nvsVersion[64];
 
 uint16_t hex2uint16(const char *p);
 
@@ -103,6 +106,13 @@ int handlerInfo(UrlHandlerParam* param)
     int deviceTemp = (int)temprature_sens_read() * 165 / 255 - 40;
     bytes += snprintf(buf + bytes, bufsize - bytes, "\"cpu\":{\"temperature\":%d,\"magnetic\":%d},\n",
         deviceTemp, hall_sens_read());
+
+    // Firmware version and NVS settings version (NVS_VER key).
+    // nvsVersion is empty when NVS settings have never been applied via OTA.
+    bytes += snprintf(buf + bytes, bufsize - bytes, "\"fw\":\"%s\",\n", FIRMWARE_VERSION);
+    if (nvsVersion[0]) {
+        bytes += snprintf(buf + bytes, bufsize - bytes, "\"nvs_ver\":\"%s\",\n", nvsVersion);
+    }
 
 #if STORAGE == STORAGE_SPIFFS
     bytes += snprintf(buf + bytes, bufsize - bytes, "\"spiffs\":{\"total\":%u,\"used\":%u}",
@@ -332,6 +342,12 @@ int handlerControl(UrlHandlerParam* param)
 
     if (!*cmd) {
         n = snprintf(buf, bufsize, "ERR");
+    } else if (!strcmp(cmd, "NVS_VER?")) {
+        // Return the NVS settings version string (NVS_VER key) so HA can
+        // display the installed settings version in the debug entity alongside
+        // the firmware version.  Returns "-" when NVS settings have never been
+        // applied via OTA (e.g. device was only serial-flashed without NVS update).
+        n = snprintf(buf, bufsize, "%s", nvsVersion[0] ? nvsVersion : "-");
 #if ENABLE_WIFI
     } else if (!strcmp(cmd, "SSID?")) {
         n = snprintf(buf, bufsize, "%s", wifiSSID[0] ? wifiSSID : "-");
