@@ -100,7 +100,11 @@ char webhookPath[256] = "";
 // cloud-hook token path by the HA integration when Nabu Casa cloud is active,
 // so that cellular devices reach the cloud webhook endpoint directly rather than
 // the Remote UI proxy (*.ui.nabu.casa) which the SIM7600 TLS stack cannot use.
-// WiFi connections continue to use SERVER_HOST / WEBHOOK_PATH.
+// WiFi connections use SERVER_HOST / WEBHOOK_PATH, which the HA integration sets
+// from get_url(prefer_external=True) – typically *.ui.nabu.casa (Nabu Casa Remote
+// UI).  Using the Remote UI for WiFi ensures WiFi telemetry and WiFi OTA (which
+// always uses *.ui.nabu.casa) share the same TLS session, avoiding mbedTLS heap
+// fragmentation from repeated TLS host switching on the ESP32.
 char cellServerHost[128] = "";
 uint16_t cellServerPort = 443;
 char cellWebhookPath[256] = "";
