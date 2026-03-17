@@ -1055,7 +1055,7 @@ void process()
       uint32_t sdFreeMb  = 0;
       if (state.check(STATE_STORAGE_READY)) {
         // Purge oldest 20% of log files when SD >= 80% full.
-        if (logger.purge()) {
+        if (logger.purgeOldFiles()) {
           logger.logEvent("SD:PURGE");
         }
         uint64_t tot = SD.totalBytes();

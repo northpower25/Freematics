@@ -215,7 +215,7 @@ void SDLogger::flush()
     }
 }
 
-bool SDLogger::purge()
+bool SDLogger::purgeOldFiles()
 {
     // Check if cleanup is needed: only purge when SD is >= 80% full.
     uint64_t total = SD.totalBytes();

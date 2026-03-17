@@ -92,7 +92,8 @@ public:
     // Deletes files in ascending ID order (oldest first) until at least 20%
     // of the total SD capacity is free.  The file currently being written
     // (m_id) is never deleted.  Returns true if any files were removed.
-    bool purge();
+    // Named purgeOldFiles() (not purge()) to avoid shadowing CStorage::purge().
+    bool purgeOldFiles();
 };
 
 class SPIFFSLogger : public FileLogger {
