@@ -107,9 +107,10 @@ int handlerInfo(UrlHandlerParam* param)
     bytes += snprintf(buf + bytes, bufsize - bytes, "\"cpu\":{\"temperature\":%d,\"magnetic\":%d},\n",
         deviceTemp, hall_sens_read());
 
-    // Firmware version and NVS settings version (NVS_VER key).
+    // Firmware version, build date/time, and NVS settings version (NVS_VER key).
     // nvsVersion is empty when NVS settings have never been applied via OTA.
     bytes += snprintf(buf + bytes, bufsize - bytes, "\"fw\":\"%s\",\n", FIRMWARE_VERSION);
+    bytes += snprintf(buf + bytes, bufsize - bytes, "\"fw_build\":\"%s %s\",\n", __DATE__, __TIME__);
     if (nvsVersion[0]) {
         bytes += snprintf(buf + bytes, bufsize - bytes, "\"nvs_ver\":\"%s\",\n", nvsVersion);
     }
