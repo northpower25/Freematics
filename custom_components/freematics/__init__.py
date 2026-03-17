@@ -57,6 +57,7 @@ from .const import (
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
+    CONF_SETTINGS_VERSION,
     CONF_WIFI_SSID,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
@@ -323,6 +324,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _ota_mode: str = _cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
     _ota_token_set: bool = bool(_cfg.get(CONF_OTA_TOKEN, ""))
     _ota_interval_s: int = int(_cfg.get(CONF_OTA_CHECK_INTERVAL_S, 0))
+    # Effective firmware + NVS version expected on the device.
+    # Format: "<FIRMWARE_VERSION>.<settings_version>" (e.g. "5.1.2026-03-17T16:32:29+00:00")
+    # or just FIRMWARE_VERSION when no settings_version is set.
+    _settings_version: str = _cfg.get(CONF_SETTINGS_VERSION, "")
+    _effective_version: str = (
+        f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
+    )
     # Build the full OTA meta.json URL as the device uses it.
     # Priority: Nabu Casa Remote UI (*.ui.nabu.casa) > generic external URL.
     # Shown in the debug sensor so the user can paste it into a browser for
@@ -405,6 +413,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # transmitted firmware (the device may fail to write it to its SD
         # staging area).
         "fw_version": FIRMWARE_VERSION,
+        # NVS settings version reported by the device via /api/control?cmd=NVS_VER?
+        # or /api/info.  Corresponds to the NVS_VER key in the device NVS.
+        # None means not yet queried or device returned "-" (NVS never applied via OTA).
+        "fw_version_device": None,
         # Live device state for white LED and beep – updated when the device reports
         # PID_LED_WHITE_STATE (0x84) / PID_BEEP_STATE (0x85) in its telemetry.
         # None means "not yet reported by device".
@@ -495,6 +507,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _led_white_en, _beep_en,
                         _ota_meta_url,
                         _wifi_ssid_configured,
+                        _effective_version,
                     ),
                 )
             return
@@ -608,6 +621,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _led_white_en, _beep_en,
                 _ota_meta_url,
                 _wifi_ssid_configured,
+                _effective_version,
             ),
         )
 
@@ -619,8 +633,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         they never disrupt normal telemetry processing.
 
         Queries:
-          - /api/info       → SD card total/used bytes
-          - /api/control?cmd=SSID?  → WiFi SSID currently in NVS on the device
+          - /api/info       → SD card total/used bytes, fw/nvs_ver
+          - /api/control?cmd=SSID?    → WiFi SSID currently in NVS on the device
+          - /api/control?cmd=NVS_VER? → NVS settings version currently in NVS
         """
         url = f"http://{_device_ip}:{_httpd_port}/api/info"
         try:
@@ -642,6 +657,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         else:
                             diag["sd_present"] = "Nein"
                             diag["sd_storage"] = "0 MB"
+                        # NVS settings version (firmware >= PR #147 includes
+                        # this in api/info as "nvs_ver").  Absent in older FW.
+                        _nvs_ver_info = info.get("nvs_ver", "")
+                        if _nvs_ver_info:
+                            diag["fw_version_device"] = _nvs_ver_info
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics /api/info query to %s failed: %s", url, exc)
 
@@ -662,6 +682,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         diag["wifi_ssid_device"] = ssid_raw if ssid_raw and ssid_raw not in ("-", "ERR") else ""
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics SSID? query to %s failed: %s", ssid_url, exc)
+
+        # Query the device's NVS settings version via /api/control.
+        # Gives the IST NVS version so the user can verify settings are current.
+        # Absent in older firmware (returns "ERR") — treated as unknown.
+        nvs_ver_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=NVS_VER?"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(nvs_ver_url) as resp:
+                    if resp.status == 200:
+                        nvs_ver_raw = (await resp.text()).strip()
+                        # Device returns "-" when NVS was never applied via OTA;
+                        # older firmware returns "ERR" — treat both as unknown.
+                        if nvs_ver_raw and nvs_ver_raw not in ("-", "ERR"):
+                            diag["fw_version_device"] = nvs_ver_raw
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Freematics NVS_VER? query to %s failed: %s", nvs_ver_url, exc)
 
     async_register(
         hass,
@@ -694,6 +731,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _led_white_en, _beep_en,
             _ota_meta_url,
             _wifi_ssid_configured,
+            _effective_version,
         ),
     }
 
@@ -730,6 +768,7 @@ def _build_debug_payload(
     beep_en: bool = True,
     ota_meta_url: str = "",
     wifi_ssid_configured: str = "",
+    fw_version_config: str = "",
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
@@ -809,9 +848,18 @@ def _build_debug_payload(
         # Stays "Unbekannt" until the device sends its first telemetry packet.
         "led_white_device": _opt_bool(diag.get("led_white_device")),
         "beep_device": _opt_bool(diag.get("beep_device")),
-        # FW version – shows the bundled FIRMWARE_VERSION (what was last serially
-        # flashed to the device).  Not updated from the OTA serve path because
-        # we cannot confirm the device applied the firmware; see diag["fw_version"].
+        # FW version (config) – the effective version HA expects the device to have.
+        # Format: "<FIRMWARE_VERSION>.<settings_timestamp>" (e.g. "5.1.2026-03-17T16:32:29+00:00")
+        # or just FIRMWARE_VERSION when no NVS settings version is set.
+        # Updated whenever the user changes settings in the options flow.
+        "fw_version_configured": fw_version_config or diag.get("fw_version") or _UNK,
+        # FW version (device) – NVS settings version string read from the device
+        # via /api/control?cmd=NVS_VER? or /api/info (nvs_ver field).
+        # Shows what settings timestamp the device's NVS currently contains.
+        # "Unbekannt" until the device is queried (requires CONF_DEVICE_IP) or
+        # NVS was never applied via OTA (device was only serial-flashed).
+        "fw_version_device": diag.get("fw_version_device") or _UNK,
+        # Legacy single-value FW version (firmware binary version only).
         "fw_version": diag.get("fw_version") or _UNK,
         # OTA configuration (from HA config entry – reflects what was provisioned
         # into device NVS at last flash).  Shows the user immediately whether OTA

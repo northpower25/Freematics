@@ -1920,6 +1920,12 @@ class FreematicsOtaPullView(HomeAssistantView):
 
             # Persist confirmed_at in ota_pull_state.json alongside the
             # downloaded_at that was written by the firmware.bin handler.
+            # Also ensure version + nvs_version are set so meta.json returns
+            # available=false on the next boot even when the NVS download
+            # previously failed (e.g. heap too fragmented after large firmware
+            # download).  The firmware.bin handler already pre-fills these, so
+            # writing them here is idempotent — but it also covers the edge case
+            # where the confirm fires before firmware.bin completes (race).
             _confirm_state_file = _www_dir / "ota_pull_state.json"
 
             def _write_confirmed_state() -> None:
@@ -1932,6 +1938,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                     except (OSError, json.JSONDecodeError):
                         _cs = {}
                     _cs["confirmed_at"] = _now_iso
+                    _cs["nvs_version"] = effective_version
                     _confirm_state_file.write_text(
                         json.dumps(_cs, indent=2), encoding="utf-8"
                     )
@@ -2132,23 +2139,19 @@ class FreematicsOtaPullView(HomeAssistantView):
                 def _write_cloud_pull_state() -> None:
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     try:
-                        # Read any existing state so we can preserve nvs_version
-                        # if the nvs.bin handler already set it (race-free merge).
-                        try:
-                            _existing = json.loads(
-                                (_www_dir / "ota_pull_state.json").read_text(encoding="utf-8")
-                            )
-                        except (OSError, json.JSONDecodeError):
-                            _existing = {}
                         _state: dict = {
                             "version": _pub_id,
                             "downloaded_at": now_iso,
+                            # Pre-fill nvs_version so the meta check returns
+                            # available=false even when the NVS download later
+                            # fails due to heap fragmentation.  The nvs.bin
+                            # handler will overwrite this with the same value
+                            # when NVS downloads successfully.  When settings
+                            # change, effective_version changes, so
+                            # nvs_version won't match and the update is
+                            # offered again automatically.
+                            "nvs_version": effective_version,
                         }
-                        # Preserve nvs_version only if it was already confirmed
-                        # (i.e. the nvs.bin handler ran first in a concurrent
-                        # request — very unlikely but handled defensively).
-                        if _existing.get("nvs_version"):
-                            _state["nvs_version"] = _existing["nvs_version"]
                         (_www_dir / "ota_pull_state.json").write_text(
                             json.dumps(_state, indent=2),
                             encoding="utf-8",
@@ -2167,18 +2170,19 @@ class FreematicsOtaPullView(HomeAssistantView):
                 def _write_pull_state() -> None:
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     try:
-                        try:
-                            _existing = json.loads(
-                                _pull_state_file.read_text(encoding="utf-8")
-                            )
-                        except (OSError, json.JSONDecodeError):
-                            _existing = {}
                         _state_pull: dict = {
                             "version": effective_version,
                             "downloaded_at": now_iso,
+                            # Pre-fill nvs_version so the meta check returns
+                            # available=false even when the NVS download later
+                            # fails due to heap fragmentation.  The nvs.bin
+                            # handler will overwrite this with the same value
+                            # when NVS downloads successfully.  When settings
+                            # change, effective_version changes, so `version`
+                            # won't match the new effective_version and the
+                            # update will be offered again regardless.
+                            "nvs_version": effective_version,
                         }
-                        if _existing.get("nvs_version"):
-                            _state_pull["nvs_version"] = _existing["nvs_version"]
                         _pull_state_file.write_text(
                             json.dumps(_state_pull, indent=2),
                             encoding="utf-8",

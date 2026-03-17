@@ -2423,7 +2423,7 @@ bool performPullOtaCheck()
   Serial.printf("[OTA-PULL] URL: https://%s:%u/api/freematics/ota_pull/%.8s.../meta.json\n",
                 _maskOtaHost(otaHost).c_str(), (unsigned)otaPort, otaToken);
 
-  char metaBuf[768];
+  char metaBuf[2048];
   int metaBytes = 0;
   char* metaBody = nullptr;
 
