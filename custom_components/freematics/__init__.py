@@ -656,8 +656,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async with session.get(ssid_url) as resp:
                     if resp.status == 200:
                         ssid_raw = (await resp.text()).strip()
-                        # Device returns "-" when SSID is not set.
-                        diag["wifi_ssid_device"] = ssid_raw if ssid_raw and ssid_raw != "-" else ""
+                        # Device returns "-" when SSID is not set; older
+                        # firmware (without the SSID? handler) returns "ERR"
+                        # for unrecognised commands — treat both as unknown.
+                        diag["wifi_ssid_device"] = ssid_raw if ssid_raw and ssid_raw not in ("-", "ERR") else ""
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics SSID? query to %s failed: %s", ssid_url, exc)
 
@@ -795,7 +797,7 @@ def _build_debug_payload(
         # device reconnect (OTA NVS update or serial re-flash); the device
         # stays on the old WiFi session until the current session ends.
         "wifi_ssid_configured": wifi_ssid_configured or _UNK,
-        "wifi_ssid_device": diag.get("wifi_ssid_device") if diag.get("wifi_ssid_device") is not None else _UNK,
+        "wifi_ssid_device": diag.get("wifi_ssid_device") or _UNK,
         # White LED and beep tone – configured via HA options flow; provisioned
         # into device NVS at last flash.  Reflects the desired/provisioned state,
         # not necessarily what the device is currently doing (no runtime feedback
