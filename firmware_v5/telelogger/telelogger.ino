@@ -1348,20 +1348,6 @@ void telemetry(void* inst)
       continue;
     }
 
-#if STORAGE == STORAGE_SD
-    // After a pull-OTA download completes (firmware staged to SD), pause all
-    // telemetry until the device enters standby and flashes the new firmware.
-    // This mirrors the WiFi OTA flow: connection closed during download, then
-    // transmission stops until flash.  The device is either on WiFi, on
-    // cellular, or in AP mode — no need for complex "what if" handling here.
-    // standby() will set s_ota_active when it is ready to flash, which is
-    // already checked at the top of this loop.
-    if (s_ota_pending) {
-      delay(1000);
-      continue;
-    }
-#endif
-
 #if ENABLE_WIFI
     if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
       if (!teleClient.wifi.connected()) {
@@ -2757,8 +2743,8 @@ bool performPullOtaCheck()
                "/api/freematics/ota_pull/%s/ota_confirm", otaToken);
       if (teleClient.wifi.open(otaHost, otaPort) &&
           teleClient.wifi.send(METHOD_GET, _confirmPath)) {
-        int _confirmCode = 0;
-        teleClient.wifi.receiveHeaders(&_confirmCode);
+        int _confirmCL = 0;
+        int _confirmCode = teleClient.wifi.receiveHeaders(&_confirmCL);
         Serial.printf("[OTA-PULL] Confirm %s (HTTP %d)\n",
                       _confirmCode == 200 ? "OK" : "FAILED", _confirmCode);
       } else {
@@ -2984,8 +2970,8 @@ bool performPullOtaCheck()
              "/api/freematics/ota_pull/%s/ota_confirm", otaToken);
     if (teleClient.wifi.open(otaHost, otaPort) &&
         teleClient.wifi.send(METHOD_GET, _confirmPath)) {
-      int _confirmCode = 0;
-      teleClient.wifi.receiveHeaders(&_confirmCode);
+      int _confirmCL = 0;
+      int _confirmCode = teleClient.wifi.receiveHeaders(&_confirmCL);
       Serial.printf("[OTA-PULL] Confirm %s (HTTP %d)\n",
                     _confirmCode == 200 ? "OK" : "FAILED", _confirmCode);
     } else {

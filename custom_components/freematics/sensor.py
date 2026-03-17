@@ -213,7 +213,12 @@ class FreematicsDebugSensor(SensorEntity):
         # Initialise all diagnostic attributes to "Unbekannt".
         _u = self._UNK
         self._debug: dict = {
+            # Firmware binary version (e.g. "5.1")
             "fw_version": _u,
+            # Effective version HA expects on device: "<fw>.<settings_ts>" or just "<fw>"
+            "fw_version_configured": _u,
+            # NVS settings version currently on the device (from /api/control?cmd=NVS_VER?)
+            "fw_version_device": _u,
             "connection_mode": _u,
             "connection_errors": 0,
             "last_wifi_connection": _u,
@@ -276,6 +281,8 @@ class FreematicsDebugSensor(SensorEntity):
         return {
             # Firmware
             "FW Version": d["fw_version"],
+            "FW Version (Konfig)": d["fw_version_configured"],
+            "FW Version (IST)": d["fw_version_device"],
             # Connection
             "Verbindungsmodus": d["connection_mode"],
             "Verbindungsfehler": d["connection_errors"],
