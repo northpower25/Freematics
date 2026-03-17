@@ -1518,6 +1518,22 @@ void telemetry(void* inst)
             // shortly.  Block here so the loop doesn't continue transmitting.
             while (true) delay(1000);
           }
+#if STORAGE == STORAGE_SD
+          // SD-staged path: firmware was written to /ota_fw.bin; standby()
+          // will call performPullOtaFlash() when the car turns off.
+          // Break out of the inner while immediately so no further transmit
+          // attempts are made with the now-fragmented TLS heap.  The outer
+          // for(;;) loop sees s_ota_pending=true on the next iteration and
+          // enters its delay(1000)/continue idle path.
+          // performPullOtaCheck() called wifi.close() internally which reset
+          // m_state to HTTP_DISCONNECTED, so the HTTP_ERROR-based guard below
+          // would never fire after a successful SD download — break explicitly.
+          if (s_ota_pending) {
+            teleClient.wifi.end();
+            state.clear(STATE_NET_READY | STATE_WIFI_CONNECTED);
+            break;
+          }
+#endif
           // If OTA failed due to genuine heap fragmentation (e.g. a TLS
           // teardown inside performPullOtaCheck() leaked mbedTLS state), the
           // heap may still be too low to re-establish telemetry.  Detect this

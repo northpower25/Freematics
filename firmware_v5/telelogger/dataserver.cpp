@@ -333,6 +333,8 @@ int handlerControl(UrlHandlerParam* param)
     if (!*cmd) {
         n = snprintf(buf, bufsize, "ERR");
 #if ENABLE_WIFI
+    } else if (!strcmp(cmd, "SSID?")) {
+        n = snprintf(buf, bufsize, "%s", wifiSSID[0] ? wifiSSID : "-");
     } else if (!strncmp(cmd, "SSID=", 5)) {
         const char* p = cmd + 5;
         n = snprintf(buf, bufsize, "%s",
