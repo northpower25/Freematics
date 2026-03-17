@@ -57,6 +57,7 @@ from .const import (
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
+    CONF_WIFI_SSID,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEBUG_HISTORY_SIZE,
@@ -314,6 +315,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _ble_enabled: bool = bool(_cfg.get(CONF_ENABLE_BLE, False))
     _led_white_en: bool = bool(_cfg.get(CONF_LED_WHITE_EN, True))
     _beep_en: bool = bool(_cfg.get(CONF_BEEP_EN, True))
+    # WiFi SSID from config — shown in the debug entity as the "configured" SSID
+    # so the user can confirm which credentials were last provisioned to the device.
+    _wifi_ssid_configured: str = _cfg.get(CONF_WIFI_SSID, "")
     # OTA configuration (for displaying in the debug entity so users can
     # quickly verify that OTA is provisioned correctly in the config entry).
     _ota_mode: str = _cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
@@ -406,6 +410,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # None means "not yet reported by device".
         "led_white_device": None,
         "beep_device": None,
+        # WiFi SSID reported by the device via /api/control?cmd=SSID? query.
+        # Queried at most once per minute alongside SD info (rate-limited via
+        # _last_info_query_t).  None means not yet queried or no device IP.
+        "wifi_ssid_device": None,
     }
 
     # OBD-II sensor keys (those that require an active OBD2 connection)
@@ -486,6 +494,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _ota_mode, _ota_token_set, _ota_interval_s,
                         _led_white_en, _beep_en,
                         _ota_meta_url,
+                        _wifi_ssid_configured,
                     ),
                 )
             return
@@ -598,15 +607,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _ota_mode, _ota_token_set, _ota_interval_s,
                 _led_white_en, _beep_en,
                 _ota_meta_url,
+                _wifi_ssid_configured,
             ),
         )
 
     async def _refresh_device_info() -> None:
-        """Query the device's /api/info HTTP endpoint for SD card stats.
+        """Query the device's /api/info and /api/control endpoints for live state.
 
         Called at most once per 60 s (rate-limited via diag["_last_info_query_t"])
         when CONF_DEVICE_IP is configured.  Failures are logged at DEBUG level so
         they never disrupt normal telemetry processing.
+
+        Queries:
+          - /api/info       → SD card total/used bytes
+          - /api/control?cmd=SSID?  → WiFi SSID currently in NVS on the device
         """
         url = f"http://{_device_ip}:{_httpd_port}/api/info"
         try:
@@ -630,6 +644,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             diag["sd_storage"] = "0 MB"
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics /api/info query to %s failed: %s", url, exc)
+
+        # Also query the device's current WiFi SSID from NVS via /api/control.
+        # This gives the IST SSID (what the device actually has stored and uses
+        # for WiFi connections) so the user can verify it matches the configured
+        # value without needing serial access.
+        ssid_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=SSID?"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(ssid_url) as resp:
+                    if resp.status == 200:
+                        ssid_raw = (await resp.text()).strip()
+                        # Device returns "-" when SSID is not set.
+                        diag["wifi_ssid_device"] = ssid_raw if ssid_raw and ssid_raw != "-" else ""
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Freematics SSID? query to %s failed: %s", ssid_url, exc)
 
     async_register(
         hass,
@@ -661,6 +691,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _ota_mode, _ota_token_set, _ota_interval_s,
             _led_white_en, _beep_en,
             _ota_meta_url,
+            _wifi_ssid_configured,
         ),
     }
 
@@ -696,6 +727,7 @@ def _build_debug_payload(
     led_white_en: bool = True,
     beep_en: bool = True,
     ota_meta_url: str = "",
+    wifi_ssid_configured: str = "",
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
@@ -754,6 +786,16 @@ def _build_debug_payload(
         # BLE – enabled/disabled via NVS; read from the config entry.
         "ble_configured": _JA if ble_enabled else _NEIN,
         "ble_active": _JA if ble_enabled else _NEIN,
+        # WiFi SSID – configured value (from HA config entry / NVS) and live
+        # device value (queried via /api/control?cmd=SSID? when device IP is set).
+        # "configured" reflects what was last provisioned into NVS; "device"
+        # reflects what is currently stored in NVS on the running device.
+        # Both stay "Unbekannt" until the relevant data is available.
+        # Note: changing the WiFi SSID/password takes effect after the next
+        # device reconnect (OTA NVS update or serial re-flash); the device
+        # stays on the old WiFi session until the current session ends.
+        "wifi_ssid_configured": wifi_ssid_configured or _UNK,
+        "wifi_ssid_device": diag.get("wifi_ssid_device") if diag.get("wifi_ssid_device") is not None else _UNK,
         # White LED and beep tone – configured via HA options flow; provisioned
         # into device NVS at last flash.  Reflects the desired/provisioned state,
         # not necessarily what the device is currently doing (no runtime feedback

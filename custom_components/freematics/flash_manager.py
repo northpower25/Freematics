@@ -184,9 +184,11 @@ async def async_send_config(
 
     commands: list[tuple[str, str]] = []
     if "wifi_ssid" in config:
-        commands.append(("SSID", CMD_SSID.format(config["wifi_ssid"])))
+        # Use "-" to clear the SSID when the value is empty; the firmware maps
+        # "-" to an empty NVS string (device will not attempt WiFi connection).
+        commands.append(("SSID", CMD_SSID.format(config["wifi_ssid"] or "-")))
     if "wifi_password" in config:
-        commands.append(("WPWD", CMD_WIFI_PWD.format(config["wifi_password"])))
+        commands.append(("WPWD", CMD_WIFI_PWD.format(config["wifi_password"] or "-")))
     if "cell_apn" in config:
         commands.append(("APN", CMD_APN.format(config["cell_apn"] or "DEFAULT")))
     if "ota_token" in config:

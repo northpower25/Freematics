@@ -33,9 +33,27 @@ OTA Firmware Updates
 
 Over-the-Air (OTA) firmware updates are **supported over WiFi only**.
 
-OTA over cellular (4G/LTE) is not supported.  The TLS stack on SIM7600E-H
-modems cannot reliably complete a TLS handshake with the Nabu Casa Remote UI endpoint
-(TLS error 15) and this limitation cannot be resolved with reasonable effort.
+OTA over cellular (4G/LTE) is **technically not possible** for the following reasons:
+
+1. **TLS cipher incompatibility (TLS error 15):** The Nabu Casa Remote UI endpoint
+   (`*.ui.nabu.casa`) is served via Cloudflare, which only accepts ECDHE-RSA or
+   ECDHE-ECDSA cipher suites.  The SIM7600E-H modem's TLS stack cannot verify
+   ECDSA-based certificates (it has no ECDSA root CA support) and its RSA cipher
+   (AES128-SHA256) is no longer accepted by Cloudflare (dropped in 2022).  The
+   handshake therefore always fails with TLS error 15 (HANDSHAKE_FAILURE).
+
+2. **Binary size:** OTA firmware binaries are ~1.7 MB.  Downloading this over
+   cellular would consume significant data volume and could take several minutes
+   on a constrained LTE-M/NB-IoT connection, with a high risk of mid-transfer
+   disconnects that corrupt the staging file.
+
+3. **No alternative path:** The OTA endpoint lives on the Nabu Casa Remote UI
+   domain.  There is no cellular-compatible proxy or alternative host that can
+   serve the firmware binary reliably over SIM7600 TLS.
+
+The firmware enforces this limitation with a `STATE_WIFI_CONNECTED` guard in the
+OTA check loop and a `WiFi.isConnected()` check inside `performPullOtaCheck()`.
+Both prevent any OTA network activity when the device is on cellular only.
 
 **Important:** Before installing the device in your vehicle, configure a WiFi
 hotspot — from your mobile phone or the vehicle's own hotspot — and save the

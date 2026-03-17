@@ -1045,6 +1045,7 @@ void process()
   // Report SD card total/free space once per minute so HA can display SD
   // presence and usage without a direct HTTP connection to the device.
   // PID_SD_TOTAL_MB = 0 signals "no card / not ready" to HA.
+  // Also purge oldest log files when SD is >= 80% full (auto-cleanup).
   {
     static uint32_t lastSdReportMs = 0;
     uint32_t nowMs = millis();
@@ -1053,6 +1054,10 @@ void process()
       uint32_t sdTotalMb = 0;
       uint32_t sdFreeMb  = 0;
       if (state.check(STATE_STORAGE_READY)) {
+        // Purge oldest 20% of log files when SD >= 80% full.
+        if (logger.purge()) {
+          logger.logEvent("SD:PURGE");
+        }
         uint64_t tot = SD.totalBytes();
         uint64_t used = SD.usedBytes();
         sdTotalMb = (uint32_t)(tot >> 20);

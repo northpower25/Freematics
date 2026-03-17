@@ -284,10 +284,15 @@ class SendConfigButton(_FreematicsButton):
             return
 
         cfg = {}
-        if self._cfg(CONF_WIFI_SSID):
-            cfg["wifi_ssid"] = self._cfg(CONF_WIFI_SSID)
-        if self._cfg(CONF_WIFI_PASSWORD):
-            cfg["wifi_password"] = self._cfg(CONF_WIFI_PASSWORD)
+        # Always include WiFi SSID/password so that changes made in the options
+        # flow are pushed to the running device.  Use an empty value (cleared by
+        # the firmware to "-") when the field is not set.  Previously these were
+        # guarded by an `if` check, which meant clearing the SSID was impossible
+        # and a newly-set SSID could only reach the device via a full NVS flash.
+        # Note: the device applies new WiFi credentials to NVS immediately but
+        # stays on the current WiFi session until the next reconnect.
+        cfg["wifi_ssid"] = self._cfg(CONF_WIFI_SSID) or ""
+        cfg["wifi_password"] = self._cfg(CONF_WIFI_PASSWORD) or ""
         if self._cfg(CONF_CELL_APN):
             cfg["cell_apn"] = self._cfg(CONF_CELL_APN)
         # Push LED / beep settings so they take effect immediately on the
