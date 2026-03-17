@@ -2568,8 +2568,8 @@ bool performPullOtaCheck()
   // This leaves active telemetry running; no data is lost.
   if (state.check(STATE_STORAGE_READY)) {
     // a. Clean up any leftover files.
-    SD.remove(OTA_PENDING_PATH);
-    SD.remove(OTA_META_PATH);
+    if (SD.exists(OTA_PENDING_PATH)) SD.remove(OTA_PENDING_PATH);
+    if (SD.exists(OTA_META_PATH)) SD.remove(OTA_META_PATH);
 
     File fwFile = SD.open(OTA_PENDING_PATH, FILE_WRITE);
     if (!fwFile) {
@@ -2738,6 +2738,19 @@ bool performPullOtaCheck()
     // request, ensuring the status reflects a device-confirmed download rather
     // than merely a completed server-side transmission.
 #if ENABLE_WIFI
+    // After streaming a large firmware binary over TLS, the mbedTLS heap is
+    // often fragmented below TLS_MIN_FREE_HEAP (~34 KB max block after close).
+    // Restart WiFi to coalesce freed TLS/TCP buffers so the confirm request
+    // and any subsequent NVS download can open a fresh TLS session.
+    if (ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+      Serial.printf("[OTA-PULL] Heap fragmented (%u bytes), restarting WiFi\n",
+                    (unsigned)ESP.getMaxAllocHeap());
+      teleClient.wifi.end();
+      teleClient.wifi.begin(wifiSSID, wifiPassword);
+      if (!teleClient.wifi.setup(WIFI_JOIN_TIMEOUT)) {
+        Serial.println("[OTA-PULL] WiFi reconnect timeout after heap recovery");
+      }
+    }
     {
       char _confirmPath[128];
       snprintf(_confirmPath, sizeof(_confirmPath),
@@ -2767,7 +2780,7 @@ bool performPullOtaCheck()
     }
 
     // ---- Step 3 (optional): Download NVS settings binary -------------------
-    SD.remove(OTA_NVS_PATH);
+    if (SD.exists(OTA_NVS_PATH)) SD.remove(OTA_NVS_PATH);
     if (nvsPath[0]) {
       Serial.printf("[OTA-PULL] Downloading NVS settings from %s\n", nvsPath);
 #if ENABLE_WIFI
