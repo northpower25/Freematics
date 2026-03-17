@@ -2399,6 +2399,9 @@ bool performPullOtaCheck()
   // The caller (telemetry loop) has already called wifi.close() to release
   // the active telemetry TLS session before invoking this function, so the
   // heap is free and open() always starts a fresh TLS handshake here.
+  // After receiving the meta body this function calls wifi.close() again to
+  // release the meta-check TLS session before returning, ensuring the heap
+  // is coalesced for the next telemetry TLS connect (or firmware download).
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE
@@ -2430,14 +2433,19 @@ bool performPullOtaCheck()
     return false;
   }
   metaBuf[metaBytes < (int)sizeof(metaBuf) - 1 ? metaBytes : (int)sizeof(metaBuf) - 1] = '\0';
-  // Do NOT close the WiFi connection here: keep it alive so both the next
-  // telemetry packet and the next OTA check (60 s later) can reuse the same
-  // TLS session.  receive() has already updated m_state (HTTP_CONNECTED when
-  // the server sent keep-alive, HTTP_DISCONNECTED when it sent Connection:close).
-  // In the keep-alive case this avoids one needless TLS teardown+handshake cycle
-  // per OTA check interval.  In the close case open() will call client.stop()
-  // immediately before client.connect(), preventing heap fragmentation by other
-  // tasks from grabbing the freed TLS block between the two calls.
+  // Close the TLS session immediately after receiving the meta body so the
+  // mbedTLS record buffers (~38 KB) are freed before parsing.  Keeping the
+  // session open allows WiFi driver tasks to fragment the heap around the TLS
+  // buffers during the session lifetime.  After "no update", if the session
+  // were kept alive until the next telemetry cycle (~1–2 s), those small
+  // driver allocations settle around the TLS buffers and coalesce poorly when
+  // close() is eventually called — leaving a max-block of only ~26 KB.  That
+  // is below TLS_MIN_FREE_HEAP, so Guard 1 blocks the telemetry reconnect to
+  // a different host (serverHost ≠ otaHost) forever.  Closing here lets the
+  // heap coalesce to ~37–40 KB while still clean, which is above the 36 KB
+  // guard and allows the next TLS connect to succeed.  When a firmware update
+  // is available the download section re-opens the connection via wifi.open().
+  teleClient.wifi.close();
 #endif  // ENABLE_WIFI
 
   // ---- Parse metadata JSON ------------------------------------------------

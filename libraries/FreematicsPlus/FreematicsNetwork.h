@@ -61,20 +61,22 @@ extern uint8_t cellNetDebug;
 // is restarted.  This threshold gives a conservative safety margin so that
 // WifiHTTP::open() declines the connect attempt early (without tearing down
 // the existing session) and the caller can request a WiFi restart instead.
-// 38 KB is chosen as the minimum largest-contiguous-block size: mbedTLS
-// allocates ~2×17 KB TLS record buffers inside mbedtls_ssl_setup() and these
-// must fit in contiguous DRAM.  Values below ~34 KB will consistently fail;
-// the 38 KB margin accounts for additional smaller context allocations.
-// The previous 40 KB threshold was too close to the ~40-41 KB max contiguous
-// block available after a clean WiFi restart (no active TLS sessions), causing
-// Guard 2 in WifiHTTP::open() to fire immediately after WiFi reconnect and
-// preventing telemetry from re-establishing its TLS session.  38 KB still
-// provides a 4 KB margin above the ~34 KB minimum and allows the post-close
-// heap (~40-41 KB on this hardware) to pass the guard reliably.
+// mbedTLS allocates two ~16.5 KB TLS record buffers (IN and OUT) sequentially
+// inside mbedtls_ssl_setup(); both must fit in a single contiguous DRAM block
+// because they are allocated back-to-back from the same heap region.
+// Values below ~34 KB will consistently fail.
+// 36 KB is chosen as the guard threshold: it sits 2 KB above the ~34 KB
+// minimum, giving a small safety margin while still being comfortably below
+// the ~37–40 KB max block that is typically available after the OTA meta-check
+// TLS session is released via wifi.close() early in performPullOtaCheck().
+// The previous 38 KB threshold was too close to the post-close max block:
+// if the meta-check TLS teardown left just 37 KB (e.g. a small WiFi-driver
+// allocation happened to sit at the boundary of the freed region), Guard 2
+// fired immediately and telemetry could not re-establish its TLS session.
 // ESP.getMaxAllocHeap() returns the largest single contiguous free block,
 // which is the correct metric for fragmentation detection (total free heap
 // can be high while no individual block is large enough for TLS).
-#define TLS_MIN_FREE_HEAP (38 * 1024)
+#define TLS_MIN_FREE_HEAP (36 * 1024)
 
 typedef enum {
   METHOD_GET = 0,
