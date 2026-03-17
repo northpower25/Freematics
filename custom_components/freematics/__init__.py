@@ -46,7 +46,6 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .const import (
-    CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
@@ -64,8 +63,6 @@ from .const import (
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
     OTA_MODE_DISABLED,
-    PID_CONN_TYPE_CELLULAR,
-    PID_CONN_TYPE_WIFI,
     SENSOR_DEFINITIONS,
 )
 from .views import (
@@ -83,7 +80,6 @@ from .views import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
 
 PLATFORMS = ["sensor", "button", "device_tracker"]
 
@@ -417,14 +413,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     async def handle_webhook(hass, webhook_id, request):
-        """Handle incoming telemetry data from the Freematics device.
-
-        POST requests carry telemetry data in Freematics text format wrapped in
-        a JSON body (firmware cloud-webhook mode) or as plain text (direct HA).
-        """
-        from aiohttp import web as _web  # noqa: PLC0415
-
-        # ── Telemetry POST ───────────────────────────────────────────────────
+        """Handle incoming telemetry data from the Freematics device."""
         # The firmware sends telemetry in Freematics text format:
         #   "PID_HEX:value,PID_HEX:value,...*CHECKSUM"
         # Cloud webhook gateways (e.g. hooks.nabu.casa) require a valid JSON
@@ -472,11 +461,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Freematics webhook received empty or unparseable payload")
             diag["conn_errors"] += 1
             # Still notify debug sensor so errors / raw history are visible.
-            # Also update last_packet_time so the user can tell the device IS
-            # talking to HA even when the payload cannot be parsed (e.g. during
-            # a firmware format change or a connectivity test POST).
             if raw_body:
-                diag["last_packet_time"] = now_iso
                 async_dispatcher_send(
                     hass,
                     f"{DOMAIN}_{webhook_id}_debug",
@@ -485,7 +470,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _httpd_port, _ble_enabled,
                         _ota_mode, _ota_token_set, _ota_interval_s,
                         _led_white_en, _beep_en,
-                        _ota_meta_url,
                     ),
                 )
             return
@@ -494,36 +478,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # ── Update diagnostic state from received data ─────────────────
         diag["last_packet_time"] = now_iso
-
-        # Determine which transport was used for this packet.
-        # Priority 1: firmware-reported PID_CONN_TYPE (0x88): 1.0 = WiFi, 2.0 = Cellular.
-        #   Available in firmware built from this source; not in older binaries.
-        # Priority 2: fall back to the configured conn_mode when the PID is absent.
-        #   - conn_mode 1 (pure LTE) → always cellular
-        #   - conn_mode 2 (pure WiFi) → always WiFi
-        #   - conn_mode 3 (WiFi+LTE) without PID: update both timestamps so
-        #     neither shows "Unbekannt" forever (we can't distinguish the transport
-        #     at the HTTP level when both WiFi and cellular use the same cloud hook).
-        reported_conn_type = data.get("conn_type")  # PID 0x88 value (float or None)
-        if reported_conn_type == PID_CONN_TYPE_CELLULAR:
-            # Firmware explicitly reports cellular transport.
+        if conn_mode == 1:
             diag["last_lte_connection"] = now_iso
-        elif reported_conn_type == PID_CONN_TYPE_WIFI:
-            # Firmware explicitly reports WiFi transport.
-            diag["last_wifi_connection"] = now_iso
-        elif conn_mode == 1:
-            # Configured as pure cellular; no PID_CONN_TYPE from firmware.
-            diag["last_lte_connection"] = now_iso
-        elif conn_mode == 2:
-            # Configured as pure WiFi; no PID_CONN_TYPE from firmware.
-            diag["last_wifi_connection"] = now_iso
         else:
-            # WiFi+LTE mode (conn_mode == 3) without PID_CONN_TYPE: update both so
-            # neither timestamp stays "Unbekannt" indefinitely.  Once the device is
-            # flashed with a build that includes PID_CONN_TYPE the timestamps will
-            # be updated accurately per transport.
             diag["last_wifi_connection"] = now_iso
-            diag["last_lte_connection"] = now_iso
 
         # GPS: mark active when valid lat/lng coordinates arrive; do NOT reset
         # to False on packets without GPS data because not every telemetry
@@ -556,26 +514,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             diag["led_white_device"] = bool(data["led_white_state"])
         if "beep_state" in data:
             diag["beep_device"] = bool(data["beep_state"])
-
-        # Live SD card status – firmware sends PID 0x86 (sd_total_mb) and
-        # 0x87 (sd_free_mb) once per minute.  sd_total_mb == 0 means no card.
-        # Both PIDs are always transmitted together in the same buffer, but
-        # we guard on both being present to avoid showing stale free-space
-        # data if a single packet arrives that only contains one of them.
-        if "sd_total_mb" in data and "sd_free_mb" in data:
-            _sd_total = int(data["sd_total_mb"])
-            _sd_free = int(data["sd_free_mb"])
-            if _sd_total > 0:
-                _sd_used = max(0, _sd_total - _sd_free)
-                diag["sd_present"] = "Ja"
-                diag["sd_storage"] = f"{_sd_total} MB total, {_sd_used} MB verwendet"
-            else:
-                diag["sd_present"] = "Nein"
-                diag["sd_storage"] = "0 MB"
-        elif "sd_total_mb" in data:
-            # Only sd_total_mb received (sd_free_mb missing): update presence only.
-            _sd_total = int(data["sd_total_mb"])
-            diag["sd_present"] = "Ja" if _sd_total > 0 else "Nein"
 
         # Rate-limited device info refresh (SD card stats) via /api/info.
         # Only runs when CONF_DEVICE_IP is configured in the integration.
@@ -638,10 +576,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webhook_id,
         handle_webhook,
         local_only=False,
-        # POST is the only method used: the firmware sends telemetry via HTTPS
-        # POST to the webhook URL.  OTA firmware updates are WiFi-only and use
-        # the dedicated /api/freematics/ota_pull/{token}/ endpoint, not this
-        # webhook.  GET is not needed here.
         allowed_methods=["POST"],
     )
 
