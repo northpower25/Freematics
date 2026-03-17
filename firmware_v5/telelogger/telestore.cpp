@@ -215,6 +215,81 @@ void SDLogger::flush()
     }
 }
 
+bool SDLogger::purgeOldFiles()
+{
+    // Check if cleanup is needed: only purge when SD is >= 80% full.
+    uint64_t total = SD.totalBytes();
+    if (total == 0) return false;
+    uint64_t used = SD.usedBytes();
+    // free < 20% of total → trigger purge
+    if (total - used >= total / 5) return false;  // still >= 20% free
+
+    // Build a sorted list of file IDs under /DATA (ascending = oldest first).
+    // We collect up to 512 IDs to avoid dynamic allocation; in practice the
+    // directory never has that many files before space is exhausted.
+    static const int MAX_IDS = 512;
+    uint32_t ids[MAX_IDS];
+    int count = 0;
+
+    File root = SD.open("/DATA");
+    if (!root) return false;
+    File file;
+    while ((file = root.openNextFile()) && count < MAX_IDS) {
+        const char* name = file.name();
+        // name may include the path prefix depending on ESP32 Arduino version
+        const char* slash = strrchr(name, '/');
+        const char* base = slash ? slash + 1 : name;
+        unsigned int n = (unsigned int)atoi(base);
+        if (n != 0) ids[count++] = n;
+        file.close();
+    }
+    root.close();
+
+    if (count == 0) return false;
+
+    // Sort ascending (insertion sort — small count, runs on MCU).
+    for (int i = 1; i < count; i++) {
+        uint32_t key = ids[i];
+        int j = i - 1;
+        while (j >= 0 && ids[j] > key) { ids[j + 1] = ids[j]; j--; }
+        ids[j + 1] = key;
+    }
+
+    // Close the active log file once before the deletion loop so the SPI bus
+    // is not interleaved between remove() calls and file re-opens.  We reopen
+    // it once after all deletions are done.
+    bool wasOpen = (m_id != 0);
+    if (wasOpen) m_file.close();
+
+    // Delete the oldest 20% of files (at least 1), skipping the active file.
+    int toDelete = count / 5;
+    if (toDelete < 1) toDelete = 1;
+    bool any = false;
+    char path[24];
+    for (int i = 0; i < count && toDelete > 0; i++) {
+        if (ids[i] == m_id) continue;  // never delete the currently open file
+        sprintf(path, "/DATA/%u.CSV", ids[i]);
+        if (SD.remove(path)) {
+            Serial.print("[SD] Purged ");
+            Serial.println(path);
+            any = true;
+            toDelete--;
+        }
+        // Re-check free space — stop early if we freed enough.
+        uint64_t t2 = SD.totalBytes();
+        uint64_t u2 = SD.usedBytes();
+        if (t2 > 0 && t2 - u2 >= t2 / 5) break;
+    }
+
+    // Reopen the active log file now that all deletions are complete.
+    if (wasOpen) {
+        sprintf(path, "/DATA/%u.CSV", m_id);
+        m_file = SD.open(path, FILE_APPEND);
+        if (!m_file) m_id = 0;
+    }
+    return any;
+}
+
 bool SPIFFSLogger::init()
 {
     bool mounted = SPIFFS.begin();

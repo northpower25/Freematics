@@ -21,8 +21,11 @@ Serves the following endpoints:
   GET  /api/freematics/ota_token        – (auth required) Issue or retrieve the
                                           long-lived pull-OTA token for the device.
   GET  /api/freematics/ota_pull/{token}/{filename} – Pull-OTA firmware endpoint
-                                          Serves meta.json (version/size/sha256) or
-                                          firmware.bin authenticated by URL token.
+                                          Serves meta.json (version/size/sha256),
+                                          firmware.bin, nvs.bin, or accepts
+                                          ota_confirm (device-confirmed download),
+                                          all authenticated by URL token.
+                                          OTA is WiFi-only; cellular is not supported.
 
 The flasher page uses the Web Serial API (Chrome/Edge 89+) so the user can
 flash the Freematics ONE+ that is connected to *their own computer's* USB port,
@@ -851,6 +854,13 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     beep_en = bool(cfg.get(CONF_BEEP_EN, True))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
+    # NVS settings version: "<firmware_version>.<settings_timestamp>" so the
+    # firmware can log it at boot and the user can verify the correct NVS was
+    # written (e.g. after serial flash or OTA NVS update).
+    _settings_version = cfg.get(CONF_SETTINGS_VERSION, "")
+    nvs_version = (
+        f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
+    )
     # Pull-OTA configuration (Variant 1: authenticated HA endpoint).
     # When ota_mode is disabled, suppress OTA NVS keys so the device never polls.
     _ota_mode = cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
@@ -860,6 +870,33 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     else:
         ota_token = cfg.get(CONF_OTA_TOKEN, "")
         ota_check_interval_s = int(cfg.get(CONF_OTA_CHECK_INTERVAL_S, 3600))
+        # Safety net: if OTA mode is enabled but no token exists yet (e.g. the
+        # entry was created before OTA support was added, or a migration left the
+        # token field empty), auto-generate one now and persist it so the NVS
+        # partition written to the device always carries a valid token.
+        if not ota_token:
+            import secrets as _secrets  # noqa: PLC0415
+            ota_token = _secrets.token_hex(32)
+            try:
+                hass.config_entries.async_update_entry(
+                    entry,
+                    options={**entry.options, CONF_OTA_TOKEN: ota_token},
+                )
+                # Also update the fast token→entry_id lookup cache so the first
+                # OTA request from the device does not require a full entry scan.
+                hass.data.setdefault(DOMAIN, {}).setdefault(
+                    "_ota_tokens", {}
+                )[ota_token] = entry.entry_id
+                _LOGGER.info(
+                    "Freematics: auto-generated missing OTA token for entry %s",
+                    entry.entry_id,
+                )
+            except Exception as _exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: could not persist auto-generated OTA token for entry %s: %s",
+                    entry.entry_id,
+                    _exc,
+                )
 
     # Determine the operating mode.  New entries use the operating_mode selector;
     # legacy pre-existing entries fall back to the old enable_httpd boolean.
@@ -1050,19 +1087,26 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
             )
 
     # Step 3 – resolve OTA pull host/port.  The pull-OTA endpoint lives on the
-    # HA instance itself.  Prefer the Nabu Casa Remote UI URL (*.ui.nabu.casa)
-    # when available: it is publicly reachable from any network (home WiFi,
-    # LTE/cellular, etc.) so the device can always check for and download
-    # firmware updates even when away from home.  Falls back to
-    # get_url(prefer_external=True) for installations without Nabu Casa.
+    # HA instance itself.  When Nabu Casa Remote UI (*.ui.nabu.casa) is
+    # available it is used as OTA_HOST for WiFi connections: the ESP32 mbedTLS
+    # stack can reach *.ui.nabu.casa over WiFi without issues.
+    #
+    # NOTE: OTA firmware updates are WiFi-only.  SIM7600E-H cellular modems
+    # cannot connect to *.ui.nabu.casa (TLS error 15) and cellular OTA is not
+    # supported.  The firmware only performs OTA checks when WiFi is connected
+    # (STATE_WIFI_CONNECTED) and uses the dedicated /api/freematics/ota_pull/
+    # endpoint directly — not the telemetry webhook.
+    # Falls back to get_url(prefer_external=True) for installations without
+    # Nabu Casa.
     ota_host = ""
     ota_port = 443
     if ota_token:
         _ota_base = None
 
-        # 1. Prefer Nabu Casa Remote UI (*.ui.nabu.casa) – reachable from any
-        #    network including LTE.  async_remote_ui_url() raises when the
-        #    Remote UI is not active; we catch broadly and fall through.
+        # 1. Prefer Nabu Casa Remote UI (*.ui.nabu.casa) – reachable over WiFi
+        #    for the OTA firmware download.  NOT reachable over SIM7600 cellular
+        #    (TLS error 15); OTA is WiFi-only.  async_remote_ui_url() raises when
+        #    the Remote UI is not active; we catch broadly and fall through.
         try:
             from homeassistant.components import cloud as _ota_cloud  # noqa: PLC0415
             if _ota_cloud.async_is_logged_in(hass):
@@ -1127,6 +1171,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "ota_host": ota_host,
         "ota_port": ota_port,
         "ota_check_interval_s": ota_check_interval_s,
+        "nvs_version": nvs_version,
     }
 
 
@@ -1400,6 +1445,210 @@ class FreematicsOtaTokenView(HomeAssistantView):
         )
 
 
+async def _get_ota_pull_meta(
+    hass, entry, token: str
+) -> web.Response:
+    """Return the OTA meta.json response for a given config entry and token.
+
+    Called from ``FreematicsOtaPullView.get()`` – the direct HTTPS endpoint at
+    ``/api/freematics/ota_pull/{token}/meta.json``, reachable via the Nabu
+    Casa Remote UI (``*.ui.nabu.casa``) over WiFi.
+
+    OTA over cellular is not supported.  Firmware updates require a WiFi
+    connection.  Users should configure a mobile hotspot on their phone or
+    vehicle before installing the device so that OTA updates remain possible
+    after installation.
+    """
+    import hashlib  # noqa: PLC0415
+    import re  # noqa: PLC0415
+
+    _webhook_id = entry.data.get(CONF_WEBHOOK_ID, "")
+    _device_id = re.sub(r"[^A-Za-z0-9_-]", "", _webhook_id[:8])
+    _www_dir = Path(hass.config.config_dir) / "www" / "FreematicsONE" / _device_id
+    _version_json = _www_dir / "version.json"
+
+    def _read_version_json() -> dict:
+        try:
+            return json.loads(_version_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError) as _exc:
+            _LOGGER.warning(
+                "Freematics pull-OTA: could not read version.json at %s: %s",
+                _version_json,
+                _exc,
+            )
+            return {}
+
+    _entry_cfg = {**(entry.data or {}), **(entry.options or {})}
+    _ota_mode = _entry_cfg.get(CONF_OTA_MODE, OTA_MODE_CLOUD)
+    _settings_version = _entry_cfg.get(CONF_SETTINGS_VERSION, "")
+    effective_version = (
+        f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
+    )
+
+    _nvs_url = f"/api/freematics/ota_pull/{token}/nvs.bin"
+
+    if _ota_mode == OTA_MODE_PULL:
+        _pull_state_file = _www_dir / "ota_pull_state.json"
+
+        def _read_pull_state() -> dict:
+            try:
+                return json.loads(_pull_state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+
+        if not FIRMWARE_PATH.exists():
+            return web.Response(
+                body=json.dumps({
+                    "available": False,
+                    "version": effective_version,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        pull_state = await hass.async_add_executor_job(_read_pull_state)
+        if (
+            pull_state.get("version") == effective_version
+            and pull_state.get("nvs_version") == effective_version
+        ):
+            return web.Response(
+                body=json.dumps({
+                    "available": False,
+                    "version": effective_version,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        def _compute_meta_pull() -> tuple[int, str]:
+            data = FIRMWARE_PATH.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            return len(data), digest
+
+        try:
+            fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_pull)
+        except OSError as exc:
+            return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+
+        return web.Response(
+            body=json.dumps({
+                "available": True,
+                "version": effective_version,
+                "size": fw_size,
+                "sha256": fw_sha256,
+                "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                "nvs_url": _nvs_url,
+            }).encode("utf-8"),
+            content_type="application/json",
+        )
+
+    if _ota_mode == OTA_MODE_CLOUD:
+        if not _version_json.exists():
+            return web.Response(
+                body=json.dumps({
+                    "available": False,
+                    "version": effective_version,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        published = await hass.async_add_executor_job(_read_version_json)
+        if not published.get("available"):
+            return web.Response(
+                body=json.dumps({
+                    "available": False,
+                    "version": published.get("version") or effective_version,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        _publish_id = published.get("publish_id") or published.get("version") or FIRMWARE_VERSION
+        _cloud_pull_state_file = _www_dir / "ota_pull_state.json"
+
+        def _read_cloud_pull_state() -> dict:
+            try:
+                return json.loads(_cloud_pull_state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+
+        cloud_pull_state = await hass.async_add_executor_job(_read_cloud_pull_state)
+        if (
+            cloud_pull_state.get("version") == _publish_id
+            and cloud_pull_state.get("nvs_version") == effective_version
+        ):
+            return web.Response(
+                body=json.dumps({
+                    "available": False,
+                    "version": published.get("version") or effective_version,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        # Use the sha256 and size that were recorded when the user pressed
+        # "Publish Firmware for Cloud OTA".  This avoids re-reading the 1.8 MB
+        # firmware binary on every OTA meta check, and guarantees that the
+        # digest in meta.json matches the binary that firmware.bin will serve
+        # (the published copy in www/FreematicsONE/{id}/firmware.bin).
+        fw_sha256 = published.get("sha256", "")
+        fw_size_raw = published.get("size", 0)
+        try:
+            fw_size = int(fw_size_raw)
+        except (TypeError, ValueError):
+            fw_size = 0
+
+        if not fw_sha256 or not fw_size:
+            # Legacy version.json without pre-computed sha256/size: fall back
+            # to reading the bundled firmware binary directly.
+            if not FIRMWARE_PATH.exists():
+                return web.Response(status=503, text="Firmware binary not found")
+
+            def _compute_meta_cloud() -> tuple[int, str]:
+                data = FIRMWARE_PATH.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()
+                return len(data), digest
+
+            try:
+                fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_cloud)
+            except OSError as exc:
+                return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+        else:
+            # Verify the published firmware copy exists so the device won't
+            # attempt a download that would fail with 404/503.
+            _pub_fw = _www_dir / "firmware.bin"
+
+            def _pub_fw_exists() -> bool:
+                return _pub_fw.exists()
+
+            if not await hass.async_add_executor_job(_pub_fw_exists):
+                return web.Response(
+                    status=503,
+                    text=(
+                        "Published firmware binary not found. "
+                        "Press 'Publish Firmware for Cloud OTA' to make a new "
+                        "version available."
+                    ),
+                )
+
+        return web.Response(
+            body=json.dumps({
+                "available": True,
+                "version": published.get("version") or effective_version,
+                "size": fw_size,
+                "sha256": fw_sha256,
+                "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
+                "nvs_url": _nvs_url,
+            }).encode("utf-8"),
+            content_type="application/json",
+        )
+
+    # OTA disabled (or unknown mode): tell device nothing is available.
+    return web.Response(
+        body=json.dumps({
+            "available": False,
+            "version": effective_version,
+        }).encode("utf-8"),
+        content_type="application/json",
+    )
+
+
 class FreematicsOtaPullView(HomeAssistantView):
     """Serve pull-OTA metadata or the firmware binary, authenticated by URL token.
 
@@ -1432,7 +1681,6 @@ class FreematicsOtaPullView(HomeAssistantView):
         self, request: web.Request, token: str, filename: str
     ) -> web.Response:
         """Return firmware metadata or binary for the authenticated device."""
-        import hashlib  # noqa: PLC0415
         import re  # noqa: PLC0415
         from datetime import datetime, timezone  # noqa: PLC0415
         from homeassistant.helpers.dispatcher import async_dispatcher_send  # noqa: PLC0415
@@ -1458,7 +1706,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         if not token or entry_id is None:
             return web.Response(status=401, text="Invalid or unknown OTA token")
 
-        if filename not in ("meta.json", "firmware.bin", "nvs.bin"):
+        if filename not in ("meta.json", "firmware.bin", "nvs.bin", "ota_confirm"):
             return web.Response(status=404, text="Not found")
 
         # Locate this device's published firmware in the www/ directory.
@@ -1478,7 +1726,7 @@ class FreematicsOtaPullView(HomeAssistantView):
         _version_json = _www_dir / "version.json"
 
         def _read_version_json() -> dict:
-            """Read and parse the device's published version.json (blocking I/O)."""
+            """Read and parse version.json written by PublishCloudOtaButton (blocking I/O)."""
             try:
                 return json.loads(_version_json.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, ValueError) as _exc:
@@ -1488,15 +1736,6 @@ class FreematicsOtaPullView(HomeAssistantView):
                     _exc,
                 )
                 return {}
-
-        def _write_version_json(data: dict) -> None:
-            """Write updated version.json (blocking I/O)."""
-            try:
-                _version_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            except OSError as _exc:
-                _LOGGER.warning(
-                    "Freematics pull-OTA: could not update version.json: %s", _exc
-                )
 
         # Determine OTA mode from the config entry so we can apply the correct
         # availability policy:
@@ -1517,160 +1756,9 @@ class FreematicsOtaPullView(HomeAssistantView):
             f"{FIRMWARE_VERSION}.{_settings_version}" if _settings_version else FIRMWARE_VERSION
         )
 
-        # URL of the NVS settings binary endpoint (served by this same view).
-        _nvs_url = f"/api/freematics/ota_pull/{token}/nvs.bin"
-
         if filename == "meta.json":
-            if _ota_mode == OTA_MODE_PULL:
-                # Variant 1: serve the latest firmware only when the device does
-                # not already have the current effective version.  The effective
-                # version combines the firmware version with a settings timestamp
-                # so settings changes (WiFi, LED, BLE, etc.) also trigger a
-                # re-download of both firmware.bin and nvs.bin.
-                _pull_state_file = _www_dir / "ota_pull_state.json"
-
-                def _read_pull_state() -> dict:
-                    try:
-                        return json.loads(_pull_state_file.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        return {}
-
-                if not FIRMWARE_PATH.exists():
-                    return web.Response(
-                        body=json.dumps({
-                            "available": False,
-                            "version": effective_version,
-                        }).encode("utf-8"),
-                        content_type="application/json",
-                    )
-
-                pull_state = await hass.async_add_executor_job(_read_pull_state)
-                if (
-                    pull_state.get("version") == effective_version
-                    and pull_state.get("nvs_version") == effective_version
-                ):
-                    # Device already has the current firmware + NVS settings.
-                    return web.Response(
-                        body=json.dumps({
-                            "available": False,
-                            "version": effective_version,
-                        }).encode("utf-8"),
-                        content_type="application/json",
-                    )
-
-                def _compute_meta_pull() -> tuple[int, str]:
-                    data = FIRMWARE_PATH.read_bytes()
-                    digest = hashlib.sha256(data).hexdigest()
-                    return len(data), digest
-
-                try:
-                    fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_pull)
-                except OSError as exc:
-                    return web.Response(status=500, text=f"Cannot read firmware: {exc}")
-
-                return web.Response(
-                    body=json.dumps({
-                        "available": True,
-                        "version": effective_version,
-                        "size": fw_size,
-                        "sha256": fw_sha256,
-                        "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
-                        # nvs_url tells the firmware to also download the NVS
-                        # settings partition so WiFi, LED, BLE etc. are applied
-                        # without requiring a serial re-flash.
-                        "nvs_url": _nvs_url,
-                    }).encode("utf-8"),
-                    content_type="application/json",
-                )
-
-            if _ota_mode == OTA_MODE_CLOUD:
-                # Variant 2: only serve firmware when the user has pressed
-                # "Publish Firmware for Cloud OTA" (version.json gate).
-                if not _version_json.exists():
-                    return web.Response(
-                        body=json.dumps({
-                            "available": False,
-                            "version": effective_version,
-                        }).encode("utf-8"),
-                        content_type="application/json",
-                    )
-
-                published = await hass.async_add_executor_job(_read_version_json)
-                if not published.get("available"):
-                    return web.Response(
-                        body=json.dumps({
-                            "available": False,
-                            "version": published.get("version") or effective_version,
-                        }).encode("utf-8"),
-                        content_type="application/json",
-                    )
-
-                # Use the publish_id (a unique per-publish timestamp added by
-                # PublishCloudOtaButton) to track whether the device has already
-                # downloaded this exact publish.  This prevents re-download after a
-                # successful flash while still allowing the user to press "Publish"
-                # again to force a retry after a failed download.
-                # Fall back to the version string for backwards-compat with old
-                # version.json files that do not have a publish_id.
-                _publish_id = published.get("publish_id") or published.get("version") or FIRMWARE_VERSION
-                _cloud_pull_state_file = _www_dir / "ota_pull_state.json"
-
-                def _read_cloud_pull_state() -> dict:
-                    try:
-                        return json.loads(_cloud_pull_state_file.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        return {}
-
-                cloud_pull_state = await hass.async_add_executor_job(_read_cloud_pull_state)
-                if (
-                    cloud_pull_state.get("version") == _publish_id
-                    and cloud_pull_state.get("nvs_version") == effective_version
-                ):
-                    # Both firmware and NVS settings are current for this publish.
-                    # The device has staged the firmware for flashing at its next
-                    # standby and has received the latest NVS settings binary.
-                    return web.Response(
-                        body=json.dumps({
-                            "available": False,
-                            "version": published.get("version") or effective_version,
-                        }).encode("utf-8"),
-                        content_type="application/json",
-                    )
-
-                if not FIRMWARE_PATH.exists():
-                    return web.Response(status=503, text="Firmware binary not found")
-
-                def _compute_meta_cloud() -> tuple[int, str]:
-                    data = FIRMWARE_PATH.read_bytes()
-                    digest = hashlib.sha256(data).hexdigest()
-                    return len(data), digest
-
-                try:
-                    fw_size, fw_sha256 = await hass.async_add_executor_job(_compute_meta_cloud)
-                except OSError as exc:
-                    return web.Response(status=500, text=f"Cannot read firmware: {exc}")
-
-                return web.Response(
-                    body=json.dumps({
-                        "available": True,
-                        "version": published.get("version") or effective_version,
-                        "size": fw_size,
-                        "sha256": fw_sha256,
-                        "firmware_url": f"/api/freematics/ota_pull/{token}/firmware.bin",
-                        # nvs_url: also deliver current NVS settings alongside firmware.
-                        "nvs_url": _nvs_url,
-                    }).encode("utf-8"),
-                    content_type="application/json",
-                )
-
-            # OTA disabled (or unknown mode): tell device nothing is available.
-            return web.Response(
-                body=json.dumps({
-                    "available": False,
-                    "version": effective_version,
-                }).encode("utf-8"),
-                content_type="application/json",
-            )
+            # Delegate to the shared meta.json helper.
+            return await _get_ota_pull_meta(hass, entry, token)
 
         if filename == "nvs.bin":
             # Serve the generated NVS partition binary so the device can apply
@@ -1725,19 +1813,25 @@ class FreematicsOtaPullView(HomeAssistantView):
                 entry_id,
             )
 
-            # Record that the NVS settings binary was served so that subsequent
-            # meta.json checks can confirm nvs_version matches effective_version.
-            # This allows the server to re-deliver the NVS (alongside firmware)
-            # if settings change between two firmware downloads.
+            # Stream nvs.bin to the device.  nvs_version is written to
+            # ota_pull_state.json ONLY after the complete payload has been
+            # successfully transmitted — mirroring the firmware.bin /
+            # downloaded_at pattern.  Writing it earlier (before the HTTP
+            # response body is fully sent) caused a permanent "NVS up to date"
+            # situation whenever the device disconnected mid-transfer (e.g.
+            # due to WiFi hotspot instability): the state would show
+            # nvs_version matching effective_version, so meta.json returned
+            # available=false, and the device's LED/beep/OTA settings were
+            # never actually applied.
             _nvs_state_file = _www_dir / "ota_pull_state.json"
 
             def _update_nvs_version_in_state() -> None:
                 """Merge nvs_version into ota_pull_state.json (blocking I/O)."""
                 try:
-                    _state = json.loads(_nvs_state_file.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    _state = {}
-                try:
+                    try:
+                        _state = json.loads(_nvs_state_file.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        _state = {}
                     _state["nvs_version"] = effective_version
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     _nvs_state_file.write_text(
@@ -1750,15 +1844,128 @@ class FreematicsOtaPullView(HomeAssistantView):
                         _exc,
                     )
 
-            await hass.async_add_executor_job(_update_nvs_version_in_state)
-
-            return web.Response(
-                body=nvs_data,
-                content_type="application/octet-stream",
+            _nvs_chunk_size = 32768  # 32 KB chunks
+            _nvs_stream = web.StreamResponse(
+                status=200,
                 headers={
+                    "Content-Type": "application/octet-stream",
                     "Content-Disposition": "attachment; filename=config_nvs.bin",
                     "Cache-Control": "no-store",
+                    "Content-Length": str(len(nvs_data)),
                 },
+            )
+            await _nvs_stream.prepare(request)
+
+            _nvs_sent = 0
+            _nvs_fully_sent = False
+            try:
+                while _nvs_sent < len(nvs_data):
+                    _chunk = nvs_data[_nvs_sent : _nvs_sent + _nvs_chunk_size]
+                    await _nvs_stream.write(_chunk)
+                    _nvs_sent += len(_chunk)
+                await _nvs_stream.write_eof()
+                _nvs_fully_sent = True
+            except OSError:
+                # Device closed the connection before receiving the full NVS
+                # binary (e.g. WiFi hotspot dropped or device reset).  Do NOT
+                # write nvs_version so that meta.json keeps returning
+                # available=true and the device retries on the next interval.
+                _LOGGER.info(
+                    "Freematics pull-OTA: device disconnected after %d / %d bytes "
+                    "of nvs.bin — nvs_version NOT written; device will retry",
+                    _nvs_sent,
+                    len(nvs_data),
+                )
+
+            if _nvs_fully_sent:
+                await hass.async_add_executor_job(_update_nvs_version_in_state)
+                _LOGGER.info(
+                    "Freematics pull-OTA: nvs.bin (%d bytes) fully transmitted "
+                    "to device (entry %s)",
+                    len(nvs_data),
+                    entry_id,
+                )
+
+            return _nvs_stream
+
+        if filename == "ota_confirm":
+            # The device calls this endpoint (GET .../ota_confirm) after it has
+            # successfully downloaded the firmware binary AND verified its SHA256
+            # digest on the device side.  Only at this point do we update
+            # ota_last_success ("OTA letzte Übertragung"), because previously
+            # that attribute was set as soon as HA finished transmitting the
+            # bytes — misleading when the device-side verification later failed
+            # (SHA256 mismatch, SD write error, etc.).
+            #
+            # OTA is WiFi-only.  Cellular firmware downloads are not supported.
+            # The firmware only calls this endpoint when WiFi is connected
+            # (STATE_WIFI_CONNECTED guard in telelogger.ino).
+            if _ota_mode == OTA_MODE_DISABLED:
+                return web.Response(status=404, text="OTA is disabled for this device")
+
+            _now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+            # Determine the human-readable version that was just confirmed.
+            if _ota_mode == OTA_MODE_CLOUD:
+                _pub_c = await hass.async_add_executor_job(_read_version_json)
+                _confirmed_version = _pub_c.get("version") or effective_version
+            else:
+                _confirmed_version = effective_version
+
+            # Persist confirmed_at in ota_pull_state.json alongside the
+            # downloaded_at that was written by the firmware.bin handler.
+            _confirm_state_file = _www_dir / "ota_pull_state.json"
+
+            def _write_confirmed_state() -> None:
+                _www_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    try:
+                        _cs = json.loads(
+                            _confirm_state_file.read_text(encoding="utf-8")
+                        )
+                    except (OSError, json.JSONDecodeError):
+                        _cs = {}
+                    _cs["confirmed_at"] = _now_iso
+                    _confirm_state_file.write_text(
+                        json.dumps(_cs, indent=2), encoding="utf-8"
+                    )
+                except OSError as _exc:
+                    _LOGGER.warning(
+                        "Freematics OTA confirm: could not update ota_pull_state.json: %s",
+                        _exc,
+                    )
+
+            await hass.async_add_executor_job(_write_confirmed_state)
+
+            # Update the debug sensor: ota_last_success is now set here
+            # (device-confirmed) instead of in the firmware.bin handler
+            # (HA-side transmission complete).
+            _entry_data = hass.data.get(DOMAIN, {}).get(entry_id)
+            if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
+                _diag = _entry_data["diag"]
+                _diag["ota_last_success"] = _now_iso
+                _diag["ota_last_error"] = "Kein Fehler"
+                _diag["ota_last_version"] = _confirmed_version
+                async_dispatcher_send(
+                    hass,
+                    f"{DOMAIN}_{_webhook_id}_debug",
+                    {
+                        "ota_last_success": _now_iso,
+                        "ota_last_error": "Kein Fehler",
+                        "ota_last_version": _confirmed_version,
+                    },
+                )
+                _LOGGER.info(
+                    "Freematics pull-OTA (%s): device confirmed successful "
+                    "download of firmware v%s (entry %s)",
+                    _ota_mode,
+                    _confirmed_version,
+                    entry_id,
+                )
+
+            return web.Response(
+                body=json.dumps({"ok": True}).encode("utf-8"),
+                content_type="application/json",
             )
 
         # filename == "firmware.bin"
@@ -1811,20 +2018,42 @@ class FreematicsOtaPullView(HomeAssistantView):
                         "Press 'Publish Firmware for Cloud OTA' to make a new version available."
                     ),
                 )
-        else:
-            # Variant 1: no gate; read published dict as empty placeholder so
-            # the logging/diag code below can reference it uniformly.
-            published = {}
 
-        if not FIRMWARE_PATH.exists():
+            # For Cloud OTA, serve the firmware copy that was written to
+            # www/FreematicsONE/{device_id}/ by the "Publish" button.  Serving
+            # the published copy (rather than reading FIRMWARE_PATH directly)
+            # ensures the binary matches the sha256 advertised in meta.json and
+            # avoids any potential I/O issues with the bundled firmware path.
+            _fw_source = _www_dir / "firmware.bin"
+            if not _fw_source.exists():
+                return web.Response(
+                    status=503,
+                    text=(
+                        "Published firmware binary not found. "
+                        "Press 'Publish Firmware for Cloud OTA' to make a new version available."
+                    ),
+                )
+        else:
+            # Variant 1: no gate; serve from the bundled FIRMWARE_PATH.
+            # published is set to an empty dict so the logging/diag code below
+            # can reference it uniformly.
+            published = {}
+            _fw_source = FIRMWARE_PATH
+
+        if not _fw_source.exists():
             return web.Response(status=503, text="Firmware binary not found")
 
         try:
             firmware_data: bytes = await hass.async_add_executor_job(
-                FIRMWARE_PATH.read_bytes
+                _fw_source.read_bytes
             )
-        except OSError as exc:
-            return web.Response(status=500, text=f"Cannot read firmware: {exc}")
+        except (OSError, MemoryError) as exc:
+            _LOGGER.error(
+                "Freematics pull-OTA: failed to read firmware from %s: %s",
+                _fw_source,
+                exc,
+            )
+            return web.Response(status=503, text=f"Cannot read firmware: {exc}")
 
         _fw_version = published.get("version") or effective_version
 
@@ -1877,32 +2106,45 @@ class FreematicsOtaPullView(HomeAssistantView):
         if _fully_sent:
             now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
-            # Record that the full firmware was delivered so meta.json returns
-            # available=false on subsequent checks (prevents re-download loops).
-            # nvs_version is also written speculatively: if the device is running
-            # firmware that does not support nvs_url it will not request nvs.bin,
-            # but we record the current effective_version so future meta.json checks
-            # do not trigger a re-download solely because nvs_version was never set.
-            # When the device DOES request nvs.bin (firmware with nvs_url support),
-            # the nvs.bin handler overwrites nvs_version with the confirmed value.
-            # When settings change (effective_version bumps), nvs_version becomes
-            # stale and the next meta.json check returns available=true so the device
-            # downloads firmware + the updated NVS together.
+            # Record that the full firmware was delivered.  nvs_version is NOT
+            # written here: it is only set when the device actually requests and
+            # receives nvs.bin (handled below).  This prevents a situation where
+            # firmware downloads successfully but nvs.bin fails, the speculative
+            # nvs_version causes meta.json to return available=false, and the
+            # device is stuck with stale NVS settings (e.g. LED/beep still on
+            # after the user changed them to off in HA).
+            #
+            # Without the speculative write, when nvs.bin download fails the
+            # state file lacks nvs_version, meta.json returns available=true on
+            # the next interval, and the device downloads both firmware and NVS
+            # again.  The extra firmware re-download (same bytes) is acceptable
+            # because the device will overwrite the previously staged /ota_fw.bin
+            # with an identical copy and proceed normally.
             if _ota_mode == OTA_MODE_CLOUD:
                 # Keyed by publish_id: pressing "Publish" again generates a new
                 # publish_id, which automatically unblocks a fresh download.
                 def _write_cloud_pull_state() -> None:
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     try:
+                        # Read any existing state so we can preserve nvs_version
+                        # if the nvs.bin handler already set it (race-free merge).
+                        try:
+                            _existing = json.loads(
+                                (_www_dir / "ota_pull_state.json").read_text(encoding="utf-8")
+                            )
+                        except (OSError, json.JSONDecodeError):
+                            _existing = {}
+                        _state: dict = {
+                            "version": _pub_id,
+                            "downloaded_at": now_iso,
+                        }
+                        # Preserve nvs_version only if it was already confirmed
+                        # (i.e. the nvs.bin handler ran first in a concurrent
+                        # request — very unlikely but handled defensively).
+                        if _existing.get("nvs_version"):
+                            _state["nvs_version"] = _existing["nvs_version"]
                         (_www_dir / "ota_pull_state.json").write_text(
-                            json.dumps(
-                                {
-                                    "version": _pub_id,
-                                    "nvs_version": effective_version,
-                                    "downloaded_at": now_iso,
-                                },
-                                indent=2,
-                            ),
+                            json.dumps(_state, indent=2),
                             encoding="utf-8",
                         )
                     except OSError as _exc:
@@ -1919,15 +2161,20 @@ class FreematicsOtaPullView(HomeAssistantView):
                 def _write_pull_state() -> None:
                     _www_dir.mkdir(parents=True, exist_ok=True)
                     try:
+                        try:
+                            _existing = json.loads(
+                                _pull_state_file.read_text(encoding="utf-8")
+                            )
+                        except (OSError, json.JSONDecodeError):
+                            _existing = {}
+                        _state_pull: dict = {
+                            "version": effective_version,
+                            "downloaded_at": now_iso,
+                        }
+                        if _existing.get("nvs_version"):
+                            _state_pull["nvs_version"] = _existing["nvs_version"]
                         _pull_state_file.write_text(
-                            json.dumps(
-                                {
-                                    "version": effective_version,
-                                    "nvs_version": effective_version,
-                                    "downloaded_at": now_iso,
-                                },
-                                indent=2,
-                            ),
+                            json.dumps(_state_pull, indent=2),
                             encoding="utf-8",
                         )
                     except OSError as _exc:
@@ -1938,36 +2185,18 @@ class FreematicsOtaPullView(HomeAssistantView):
 
                 await hass.async_add_executor_job(_write_pull_state)
 
-            # Update the debug sensor to reflect the successful transmission.
-            # fw_version is NOT updated here because we can't confirm the device
-            # actually applied the firmware to its flash partition (it may still
-            # fail at the SD→flash step).  ota_last_version records the version
-            # that was transmitted so the user can see what the device last
-            # attempted to stage, even without confirmed application.
-            for _eid, _entry_data in hass.data.get(DOMAIN, {}).items():
-                if isinstance(_entry_data, dict) and _entry_data.get("diag") is not None:
-                    _webhook = _entry_data.get(CONF_WEBHOOK_ID, "")
-                    if _eid == entry_id:
-                        _diag = _entry_data["diag"]
-                        _diag["ota_last_success"] = now_iso
-                        _diag["ota_last_error"] = "Kein Fehler"
-                        _diag["ota_last_version"] = _fw_version
-                        async_dispatcher_send(
-                            hass,
-                            f"{DOMAIN}_{_webhook}_debug",
-                            {
-                                "ota_last_success": now_iso,
-                                "ota_last_error": "Kein Fehler",
-                                "ota_last_version": _fw_version,
-                            },
-                        )
-                        _LOGGER.info(
-                            "Freematics pull-OTA (%s): firmware v%s fully transmitted "
-                            "to device (entry %s)",
-                            _ota_mode,
-                            _fw_version,
-                            entry_id,
-                        )
-                        break
+            # Log the successful transmission.  ota_last_success is NOT updated
+            # here — it is only set when the device explicitly calls /ota_confirm
+            # after verifying the SHA256 digest on its side.  This prevents the
+            # "OTA letzte Übertragung" attribute from showing a success timestamp
+            # when the device-side verification later fails (SHA256 mismatch,
+            # SD write error, etc.).
+            _LOGGER.info(
+                "Freematics pull-OTA (%s): firmware v%s fully transmitted to device "
+                "(entry %s) — awaiting device confirmation via /ota_confirm",
+                _ota_mode,
+                _fw_version,
+                entry_id,
+            )
 
         return _stream_resp

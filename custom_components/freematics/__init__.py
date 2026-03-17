@@ -46,6 +46,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .const import (
+    CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
@@ -56,6 +57,7 @@ from .const import (
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
+    CONF_WIFI_SSID,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEBUG_HISTORY_SIZE,
@@ -63,6 +65,8 @@ from .const import (
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
     OTA_MODE_DISABLED,
+    PID_CONN_TYPE_CELLULAR,
+    PID_CONN_TYPE_WIFI,
     SENSOR_DEFINITIONS,
 )
 from .views import (
@@ -80,6 +84,7 @@ from .views import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
 
 PLATFORMS = ["sensor", "button", "device_tracker"]
 
@@ -310,6 +315,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _ble_enabled: bool = bool(_cfg.get(CONF_ENABLE_BLE, False))
     _led_white_en: bool = bool(_cfg.get(CONF_LED_WHITE_EN, True))
     _beep_en: bool = bool(_cfg.get(CONF_BEEP_EN, True))
+    # WiFi SSID from config — shown in the debug entity as the "configured" SSID
+    # so the user can confirm which credentials were last provisioned to the device.
+    _wifi_ssid_configured: str = _cfg.get(CONF_WIFI_SSID, "")
     # OTA configuration (for displaying in the debug entity so users can
     # quickly verify that OTA is provisioned correctly in the config entry).
     _ota_mode: str = _cfg.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
@@ -402,6 +410,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # None means "not yet reported by device".
         "led_white_device": None,
         "beep_device": None,
+        # WiFi SSID reported by the device via /api/control?cmd=SSID? query.
+        # Queried at most once per minute alongside SD info (rate-limited via
+        # _last_info_query_t).  None means not yet queried or no device IP.
+        "wifi_ssid_device": None,
     }
 
     # OBD-II sensor keys (those that require an active OBD2 connection)
@@ -413,7 +425,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     async def handle_webhook(hass, webhook_id, request):
-        """Handle incoming telemetry data from the Freematics device."""
+        """Handle incoming telemetry data from the Freematics device.
+
+        POST requests carry telemetry data in Freematics text format wrapped in
+        a JSON body (firmware cloud-webhook mode) or as plain text (direct HA).
+        """
+        from aiohttp import web as _web  # noqa: PLC0415
+
+        # ── Telemetry POST ───────────────────────────────────────────────────
         # The firmware sends telemetry in Freematics text format:
         #   "PID_HEX:value,PID_HEX:value,...*CHECKSUM"
         # Cloud webhook gateways (e.g. hooks.nabu.casa) require a valid JSON
@@ -461,7 +480,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Freematics webhook received empty or unparseable payload")
             diag["conn_errors"] += 1
             # Still notify debug sensor so errors / raw history are visible.
+            # Also update last_packet_time so the user can tell the device IS
+            # talking to HA even when the payload cannot be parsed (e.g. during
+            # a firmware format change or a connectivity test POST).
             if raw_body:
+                diag["last_packet_time"] = now_iso
                 async_dispatcher_send(
                     hass,
                     f"{DOMAIN}_{webhook_id}_debug",
@@ -470,6 +493,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _httpd_port, _ble_enabled,
                         _ota_mode, _ota_token_set, _ota_interval_s,
                         _led_white_en, _beep_en,
+                        _ota_meta_url,
+                        _wifi_ssid_configured,
                     ),
                 )
             return
@@ -478,10 +503,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # ── Update diagnostic state from received data ─────────────────
         diag["last_packet_time"] = now_iso
-        if conn_mode == 1:
+
+        # Determine which transport was used for this packet.
+        # Priority 1: firmware-reported PID_CONN_TYPE (0x88): 1.0 = WiFi, 2.0 = Cellular.
+        #   Available in firmware built from this source; not in older binaries.
+        # Priority 2: fall back to the configured conn_mode when the PID is absent.
+        #   - conn_mode 1 (pure LTE) → always cellular
+        #   - conn_mode 2 (pure WiFi) → always WiFi
+        #   - conn_mode 3 (WiFi+LTE) without PID: update both timestamps so
+        #     neither shows "Unbekannt" forever (we can't distinguish the transport
+        #     at the HTTP level when both WiFi and cellular use the same cloud hook).
+        reported_conn_type = data.get("conn_type")  # PID 0x88 value (float or None)
+        if reported_conn_type == PID_CONN_TYPE_CELLULAR:
+            # Firmware explicitly reports cellular transport.
             diag["last_lte_connection"] = now_iso
-        else:
+        elif reported_conn_type == PID_CONN_TYPE_WIFI:
+            # Firmware explicitly reports WiFi transport.
             diag["last_wifi_connection"] = now_iso
+        elif conn_mode == 1:
+            # Configured as pure cellular; no PID_CONN_TYPE from firmware.
+            diag["last_lte_connection"] = now_iso
+        elif conn_mode == 2:
+            # Configured as pure WiFi; no PID_CONN_TYPE from firmware.
+            diag["last_wifi_connection"] = now_iso
+        else:
+            # WiFi+LTE mode (conn_mode == 3) without PID_CONN_TYPE: update both so
+            # neither timestamp stays "Unbekannt" indefinitely.  Once the device is
+            # flashed with a build that includes PID_CONN_TYPE the timestamps will
+            # be updated accurately per transport.
+            diag["last_wifi_connection"] = now_iso
+            diag["last_lte_connection"] = now_iso
 
         # GPS: mark active when valid lat/lng coordinates arrive; do NOT reset
         # to False on packets without GPS data because not every telemetry
@@ -515,6 +566,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if "beep_state" in data:
             diag["beep_device"] = bool(data["beep_state"])
 
+        # Live SD card status – firmware sends PID 0x86 (sd_total_mb) and
+        # 0x87 (sd_free_mb) once per minute.  sd_total_mb == 0 means no card.
+        # Both PIDs are always transmitted together in the same buffer, but
+        # we guard on both being present to avoid showing stale free-space
+        # data if a single packet arrives that only contains one of them.
+        if "sd_total_mb" in data and "sd_free_mb" in data:
+            _sd_total = int(data["sd_total_mb"])
+            _sd_free = int(data["sd_free_mb"])
+            if _sd_total > 0:
+                _sd_used = max(0, _sd_total - _sd_free)
+                diag["sd_present"] = "Ja"
+                diag["sd_storage"] = f"{_sd_total} MB total, {_sd_used} MB verwendet"
+            else:
+                diag["sd_present"] = "Nein"
+                diag["sd_storage"] = "0 MB"
+        elif "sd_total_mb" in data:
+            # Only sd_total_mb received (sd_free_mb missing): update presence only.
+            _sd_total = int(data["sd_total_mb"])
+            diag["sd_present"] = "Ja" if _sd_total > 0 else "Nein"
+
         # Rate-limited device info refresh (SD card stats) via /api/info.
         # Only runs when CONF_DEVICE_IP is configured in the integration.
         # Uses a 60-second cooldown so every webhook does not trigger an
@@ -536,15 +607,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _ota_mode, _ota_token_set, _ota_interval_s,
                 _led_white_en, _beep_en,
                 _ota_meta_url,
+                _wifi_ssid_configured,
             ),
         )
 
     async def _refresh_device_info() -> None:
-        """Query the device's /api/info HTTP endpoint for SD card stats.
+        """Query the device's /api/info and /api/control endpoints for live state.
 
         Called at most once per 60 s (rate-limited via diag["_last_info_query_t"])
         when CONF_DEVICE_IP is configured.  Failures are logged at DEBUG level so
         they never disrupt normal telemetry processing.
+
+        Queries:
+          - /api/info       → SD card total/used bytes
+          - /api/control?cmd=SSID?  → WiFi SSID currently in NVS on the device
         """
         url = f"http://{_device_ip}:{_httpd_port}/api/info"
         try:
@@ -569,6 +645,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics /api/info query to %s failed: %s", url, exc)
 
+        # Also query the device's current WiFi SSID from NVS via /api/control.
+        # This gives the IST SSID (what the device actually has stored and uses
+        # for WiFi connections) so the user can verify it matches the configured
+        # value without needing serial access.
+        ssid_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=SSID?"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(ssid_url) as resp:
+                    if resp.status == 200:
+                        ssid_raw = (await resp.text()).strip()
+                        # Device returns "-" when SSID is not set.
+                        diag["wifi_ssid_device"] = ssid_raw if ssid_raw and ssid_raw != "-" else ""
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Freematics SSID? query to %s failed: %s", ssid_url, exc)
+
     async_register(
         hass,
         DOMAIN,
@@ -576,6 +668,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webhook_id,
         handle_webhook,
         local_only=False,
+        # POST is the only method used: the firmware sends telemetry via HTTPS
+        # POST to the webhook URL.  OTA firmware updates are WiFi-only and use
+        # the dedicated /api/freematics/ota_pull/{token}/ endpoint, not this
+        # webhook.  GET is not needed here.
         allowed_methods=["POST"],
     )
 
@@ -595,6 +691,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _ota_mode, _ota_token_set, _ota_interval_s,
             _led_white_en, _beep_en,
             _ota_meta_url,
+            _wifi_ssid_configured,
         ),
     }
 
@@ -630,6 +727,7 @@ def _build_debug_payload(
     led_white_en: bool = True,
     beep_en: bool = True,
     ota_meta_url: str = "",
+    wifi_ssid_configured: str = "",
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
@@ -688,6 +786,16 @@ def _build_debug_payload(
         # BLE – enabled/disabled via NVS; read from the config entry.
         "ble_configured": _JA if ble_enabled else _NEIN,
         "ble_active": _JA if ble_enabled else _NEIN,
+        # WiFi SSID – configured value (from HA config entry / NVS) and live
+        # device value (queried via /api/control?cmd=SSID? when device IP is set).
+        # "configured" reflects what was last provisioned into NVS; "device"
+        # reflects what is currently stored in NVS on the running device.
+        # Both stay "Unbekannt" until the relevant data is available.
+        # Note: changing the WiFi SSID/password takes effect after the next
+        # device reconnect (OTA NVS update or serial re-flash); the device
+        # stays on the old WiFi session until the current session ends.
+        "wifi_ssid_configured": wifi_ssid_configured or _UNK,
+        "wifi_ssid_device": diag.get("wifi_ssid_device") if diag.get("wifi_ssid_device") is not None else _UNK,
         # White LED and beep tone – configured via HA options flow; provisioned
         # into device NVS at last flash.  Reflects the desired/provisioned state,
         # not necessarily what the device is currently doing (no runtime feedback

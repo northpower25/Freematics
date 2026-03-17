@@ -6,6 +6,8 @@ Provides the following button entities:
 - Restart Device              – sends RESET command via device HTTP API
 - Publish Firmware for Cloud OTA – copies firmware to /config/www/FreematicsONE/{id}/
                                    (Variant 2: accessible via /local/ NabuCasa path)
+
+Note: CellDlTestButton was removed because cellular OTA was removed in v0.1.26.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from .const import (
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_OTA_CHECK_INTERVAL_S,
+    CONF_OTA_MODE,
     CONF_OTA_TOKEN,
     CONF_SERIAL_PORT,
     CONF_SETTINGS_VERSION,
@@ -39,6 +42,7 @@ from .const import (
     DEFAULT_DEVICE_PORT,
     DOMAIN,
     FIRMWARE_VERSION,
+    OTA_MODE_DISABLED,
 )
 from .flash_manager import (
     CONTROL_PATH,
@@ -142,6 +146,13 @@ class FlashSerialButton(_FreematicsButton):
         # OTA token/host/interval, LED/beep, etc.).  This ensures the device has
         # all necessary NVS keys — including OTA_TOKEN and OTA_INTERVAL — after
         # a serial flash.
+        #
+        # IMPORTANT: when OTA mode is enabled the NVS partition MUST be written
+        # so the OTA token reaches the device.  If NVS generation fails for any
+        # reason (tool not installed, I/O error, …) we abort the flash rather
+        # than flashing firmware-only and leaving the device with a blank NVS
+        # (which would mean no OTA token, no WiFi credentials, no server URL).
+        ota_mode = self._cfg(CONF_OTA_MODE, OTA_MODE_DISABLED)
         nvs_data: bytes | None = None
         try:
             from .nvs_helper import generate_nvs_partition  # noqa: PLC0415
@@ -150,6 +161,15 @@ class FlashSerialButton(_FreematicsButton):
             nvs_data = generate_nvs_partition(**nvs_kwargs)
             if nvs_data:
                 _LOGGER.info("Freematics: NVS partition generated (%d bytes)", len(nvs_data))
+            elif ota_mode != OTA_MODE_DISABLED:
+                _LOGGER.error(
+                    "Freematics: serial flash ABORTED — NVS partition generation failed "
+                    "(esp-idf-nvs-partition-gen not installed or returned None). "
+                    "OTA mode is enabled so the OTA token must be written to NVS. "
+                    "Install esp-idf-nvs-partition-gen (pip install esp-idf-nvs-partition-gen) "
+                    "and retry."
+                )
+                return
             else:
                 _LOGGER.warning(
                     "Freematics: NVS partition generation returned None "
@@ -157,6 +177,14 @@ class FlashSerialButton(_FreematicsButton):
                     "Flashing firmware only; apply NVS settings separately."
                 )
         except Exception as exc:  # noqa: BLE001
+            if ota_mode != OTA_MODE_DISABLED:
+                _LOGGER.error(
+                    "Freematics: serial flash ABORTED — NVS partition could not be "
+                    "generated (%s). OTA mode is enabled so the OTA token must be "
+                    "written to NVS. Fix the error above and retry.",
+                    exc,
+                )
+                return
             _LOGGER.warning(
                 "Freematics: could not generate NVS partition (%s). "
                 "Flashing firmware only.",
@@ -256,10 +284,15 @@ class SendConfigButton(_FreematicsButton):
             return
 
         cfg = {}
-        if self._cfg(CONF_WIFI_SSID):
-            cfg["wifi_ssid"] = self._cfg(CONF_WIFI_SSID)
-        if self._cfg(CONF_WIFI_PASSWORD):
-            cfg["wifi_password"] = self._cfg(CONF_WIFI_PASSWORD)
+        # Always include WiFi SSID/password so that changes made in the options
+        # flow are pushed to the running device.  Use an empty value (cleared by
+        # the firmware to "-") when the field is not set.  Previously these were
+        # guarded by an `if` check, which meant clearing the SSID was impossible
+        # and a newly-set SSID could only reach the device via a full NVS flash.
+        # Note: the device applies new WiFi credentials to NVS immediately but
+        # stays on the current WiFi session until the next reconnect.
+        cfg["wifi_ssid"] = self._cfg(CONF_WIFI_SSID) or ""
+        cfg["wifi_password"] = self._cfg(CONF_WIFI_PASSWORD) or ""
         if self._cfg(CONF_CELL_APN):
             cfg["cell_apn"] = self._cfg(CONF_CELL_APN)
         # Push LED / beep settings so they take effect immediately on the
@@ -267,6 +300,32 @@ class SendConfigButton(_FreematicsButton):
         cfg["led_white"] = bool(self._cfg(CONF_LED_WHITE_EN, True))
         cfg["led_red"]   = bool(self._cfg(CONF_LED_RED_EN, True))
         cfg["beep"]      = bool(self._cfg(CONF_BEEP_EN, True))
+
+        # Push OTA settings when OTA mode is enabled so that a device that was
+        # serial-flashed before OTA was configured can be provisioned with the
+        # OTA token without a full re-flash.  After receiving OTA_TOKEN the
+        # firmware's telemetry loop fires an OTA check immediately (since
+        # lastOtaCheckMs is 0 until the first successful check).
+        ota_mode = self._cfg(CONF_OTA_MODE, OTA_MODE_DISABLED)
+        ota_token = self._cfg(CONF_OTA_TOKEN, "")
+        ota_interval = int(self._cfg(CONF_OTA_CHECK_INTERVAL_S, 0))
+        if ota_mode != OTA_MODE_DISABLED and ota_token:
+            cfg["ota_token"] = ota_token
+            cfg["ota_interval"] = ota_interval
+            # Resolve OTA host (Nabu Casa Remote UI or external URL).
+            hass: HomeAssistant = self.hass  # type: ignore[attr-defined]
+            from .views import _build_nvs_kwargs  # noqa: PLC0415
+            try:
+                nvs_kwargs = await _build_nvs_kwargs(hass, self._entry)
+                ota_host = nvs_kwargs.get("ota_host", "")
+                if ota_host:
+                    cfg["ota_host"] = ota_host
+            except Exception as _exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Freematics: could not resolve OTA host for config push (%s); "
+                    "device will fall back to SERVER_HOST for OTA.",
+                    _exc,
+                )
 
         _LOGGER.info("Freematics: sending config to %s:%s", device_ip, device_port)
         ok, results = await async_send_config(device_ip, device_port, cfg)
@@ -546,3 +605,4 @@ class PublishCloudOtaButton(_FreematicsButton):
                     )
         else:
             _LOGGER.error("Freematics Cloud OTA: %s", msg)
+

@@ -28,6 +28,39 @@ UDP mode implements a telemetry client for [Freematics Hub](https://hub.freemati
 
 Seamless WiFi and cellular network co-working is implemented. When defined WiFi hotspot is available, data is transmitted via WiFi and cellular module is switched off. When no WiFi hotspot can be reached, cellular module is switched on for data transmission until WiFi hotspot available again.
 
+OTA Firmware Updates
+--------------------
+
+Over-the-Air (OTA) firmware updates are **supported over WiFi only**.
+
+OTA over cellular (4G/LTE) is **technically not possible** for the following reasons:
+
+1. **TLS cipher incompatibility (TLS error 15):** The Nabu Casa Remote UI endpoint
+   (`*.ui.nabu.casa`) is served via Cloudflare, which only accepts ECDHE-RSA or
+   ECDHE-ECDSA cipher suites.  The SIM7600E-H modem's TLS stack cannot verify
+   ECDSA-based certificates (it has no ECDSA root CA support) and its RSA cipher
+   (AES128-SHA256) is no longer accepted by Cloudflare (dropped in 2022).  The
+   handshake therefore always fails with TLS error 15 (HANDSHAKE_FAILURE).
+
+2. **Binary size:** OTA firmware binaries are ~1.7 MB.  Downloading this over
+   cellular would consume significant data volume and could take several minutes
+   on a constrained LTE-M/NB-IoT connection, with a high risk of mid-transfer
+   disconnects that corrupt the staging file.
+
+3. **No alternative path:** The OTA endpoint lives on the Nabu Casa Remote UI
+   domain.  There is no cellular-compatible proxy or alternative host that can
+   serve the firmware binary reliably over SIM7600 TLS.
+
+The firmware enforces this limitation with a `STATE_WIFI_CONNECTED` guard in the
+OTA check loop and a `WiFi.isConnected()` check inside `performPullOtaCheck()`.
+Both prevent any OTA network activity when the device is on cellular only.
+
+**Important:** Before installing the device in your vehicle, configure a WiFi
+hotspot — from your mobile phone or the vehicle's own hotspot — and save the
+credentials in the device NVS via the Home Assistant integration.  This ensures
+the device can connect to WiFi for future OTA updates after installation, when
+only cellular telemetry would otherwise be available.
+
 Data Storage
 ------------
 

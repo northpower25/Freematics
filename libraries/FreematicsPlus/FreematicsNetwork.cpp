@@ -42,10 +42,14 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
   header += p;
   header += " HTTP/1.1\r\nHost: ";
   header += m_host;
-  // Use Connection: close to ensure the server closes the TCP session after
-  // each response.  This avoids keep-alive edge cases (un-drained buffers,
-  // stale sessions) that are particularly problematic over cellular links.
-  header += "\r\nConnection: close";
+  // HTTP/1.1 keep-alive is the default; we rely on the modem's +CCH_PEER_CLOSED
+  // URC (handled by inbound()) to detect server-initiated closes and update
+  // m_state = HTTP_DISCONNECTED so that the next transmit() reconnects.
+  // Sending "Connection: close" was previously added to avoid stale-session
+  // edge cases, but it forces a full TLS teardown and re-handshake for every
+  // single packet.  Combined with MIN_TLS_HANDSHAKE_MS, this caused the modem
+  // to falsely reject legitimate fast TLS reconnects to hooks.nabu.casa
+  // (AWS ALB, EU), breaking all cellular telemetry delivery.
   if (method != METHOD_GET) {
     header += "\r\nContent-Type: application/json\r\nContent-Length: ";
     header += String(payloadSize);
@@ -180,6 +184,52 @@ void WifiUDP::close()
 bool WifiHTTP::open(const char* host, uint16_t port)
 {
   if (!host) return true;
+  // Reuse the existing keep-alive connection when already connected to the
+  // same host.  Tearing down and re-establishing a TLS session for every
+  // request (each telemetry packet, each OTA meta check, etc.) creates
+  // many alloc/free cycles in the mbedTLS heap.  The ESP32 heap allocator
+  // is not a perfect buddy-allocator; after a few TLS session cycles the heap
+  // becomes fragmented enough that a fresh TLS context allocation fails with
+  // MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512), breaking all subsequent HTTPS
+  // connections until the device reboots.
+  if (m_state == HTTP_CONNECTED && m_host == host) {
+    return true;
+  }
+  // When the server signalled "Connection: close" on the last response
+  // (receive() set m_state = HTTP_DISCONNECTED without calling stop()), the
+  // underlying TCP/TLS socket is still physically open for a short window
+  // while the server's FIN propagates through the network.  If the host
+  // matches and the socket reports connected, reuse the session without a
+  // TLS teardown+handshake cycle: this eliminates one alloc/free round-trip
+  // in the mbedTLS heap that would otherwise fragment DRAM.  If the socket
+  // is already dead the next send() will detect the failure (write returns 0,
+  // m_state → HTTP_DISCONNECTED) and the caller will retry via open() again,
+  // falling through to the stop+connect path below.
+  if (m_state == HTTP_DISCONNECTED && m_host == host && client.connected()) {
+    m_state = HTTP_CONNECTED;
+    return true;
+  }
+  // Before tearing down the current TLS session to establish a new one,
+  // check whether the heap is fragmented enough that a new TLS context would
+  // fail (MBEDTLS_ERR_SSL_ALLOC_FAILED).  mbedtls_ssl_setup() allocates two
+  // ~17 KB TLS record buffers in contiguous blocks; if the heap is already
+  // fragmented these fail even when total free memory looks adequate.
+  // ESP.getMaxAllocHeap() returns the largest single contiguous free block,
+  // which is the correct fragmentation indicator.
+  //
+  // Guard 1: if the current session is active (HTTP_CONNECTED) for a different
+  // host AND the heap is too fragmented for a new TLS context, do NOT tear down
+  // the existing session.  Destroying a working session without being able to
+  // establish a replacement leaves the device with no HTTPS connectivity until
+  // the WiFi stack is restarted.  Return false so the caller can request a
+  // WiFi restart (wifi.end()) which frees the WiFi-driver DRAM, coalesces the
+  // heap, and allows the next attempt to succeed.
+  if (m_state == HTTP_CONNECTED && ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+    Serial.printf("[WIFI] Low heap (%u bytes max block), not switching TLS host\n",
+                  (unsigned)ESP.getMaxAllocHeap());
+    m_state = HTTP_ERROR;
+    return false;
+  }
   // Ensure any previous (possibly failed) TLS session is fully torn down
   // before starting a new handshake.  WiFiClientSecure::connect() does not
   // always release the mbedTLS context on a partially-initialised connection,
@@ -187,14 +237,28 @@ bool WifiHTTP::open(const char* host, uint16_t port)
   // MBEDTLS_ERR_SSL_ALLOC_FAILED / RSA BIGNUM alloc failures.
   client.stop();
   client.setInsecure(); // skip certificate verification for HTTPS
+  // Guard 2: after cleaning up the old session, re-check the heap before the
+  // new connect() call.  If the heap is still too fragmented (the cleanup did
+  // not free enough memory) skip the TLS handshake to avoid another ALLOC_FAILED
+  // cycle that would leave partial state behind.
+  if (ESP.getMaxAllocHeap() < TLS_MIN_FREE_HEAP) {
+    Serial.printf("[WIFI] Low heap (%u bytes max block) after cleanup, skipping TLS connect\n",
+                  (unsigned)ESP.getMaxAllocHeap());
+    m_state = HTTP_ERROR;
+    return false;
+  }
   if (client.connect(host, port)) {
     m_state = HTTP_CONNECTED;
     m_host = host;
     return true;
-  } else {
-    m_state = HTTP_ERROR;
-    return false;
   }
+  // Free any partial TLS context that connect() may have left allocated on
+  // failure.  Without this second stop(), a failed connect() can leak
+  // mbedTLS heap structures, causing the next connect() to also fail with
+  // MBEDTLS_ERR_SSL_ALLOC_FAILED and eventually crashing all HTTPS traffic.
+  client.stop();
+  m_state = HTTP_ERROR;
+  return false;
 }
 
 void WifiHTTP::close()
@@ -260,7 +324,22 @@ char* WifiHTTP::receive(char* buffer, int bufsize, int* pbytes, unsigned int tim
 
   m_state = HTTP_CONNECTED;
   if (pbytes) *pbytes = contentBytes;
-  if (!keepAlive) close();
+  // When the server signals it will close the connection ("Connection: close")
+  // we mark the state as disconnected but do NOT call close() / client.stop()
+  // here.  Eagerly stopping the TLS context immediately after each response
+  // (and well before the next request) gives other heap-allocating tasks a
+  // 2-second window to grab the freed ~70 KB TLS block.  After ~30 such cycles
+  // the DRAM heap is fragmented enough that a new TLS context cannot be
+  // allocated (MBEDTLS_ERR_SSL_ALLOC_FAILED / -32512), breaking all subsequent
+  // HTTPS connections until reboot.
+  //
+  // Deferring the actual stop() to the next open() call ensures it executes
+  // immediately before connect(), giving the allocator the best chance of
+  // finding a contiguous block.  open() already has the correct logic:
+  // if m_state != HTTP_CONNECTED it calls client.stop() then client.connect().
+  if (!keepAlive) {
+    m_state = HTTP_DISCONNECTED;  // will be reconnected on next open()
+  }
   return content;
 }
 
@@ -980,6 +1059,30 @@ void CellHTTP::init()
         sprintf(m_buffer, "AT+CSSLCFG=\"ignorertctime\",%d,1\r", ctx);
         sendCommand(m_buffer);
         sprintf(m_buffer, "AT+CSSLCFG=\"alpnprotocol\",%d,\"http/1.1\"\r", ctx);
+        sendCommand(m_buffer);
+        // Restrict cipher suites to ECDHE-RSA-only (no ECDSA variants).
+        //
+        // The SIM7600E-H default cipher list includes both ECDHE-ECDSA-* and
+        // ECDHE-RSA-* suites.  Cloudflare (*.ui.nabu.casa) prefers ECDSA cipher
+        // suites and — when the client advertises them — presents an ECDSA edge
+        // certificate.  The SIM7600E-H TLS stack cannot verify ECDSA certificates,
+        // so the handshake fails with error 15 (+CCHOPEN: 0,15).
+        //
+        // Specifying only ECDHE-RSA suites forces Cloudflare to fall back to its
+        // RSA certificate, which the modem can verify.  AWS ALB (hooks.nabu.casa)
+        // supports these same suites, so no regressions occur there.
+        //
+        // Cipher codes (IANA, concatenated per SIMCom SSL Application Note §2.2 —
+        // four hex digits per suite, no separators between suites):
+        //   C02F = TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256  (preferred)
+        //   C030 = TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384  (fallback)
+        // "C02FC030" → modem tries C02F first, falls back to C030.
+        //
+        // If the firmware revision does not support AT+CSSLCFG="ciphersuite" the
+        // command returns ERROR, which sendCommand() silently ignores — the modem
+        // falls back to its default cipher list and connections to hooks.nabu.casa
+        // still work; *.ui.nabu.casa may still fail on older firmware.
+        sprintf(m_buffer, "AT+CSSLCFG=\"ciphersuite\",%d,\"C02FC030\"\r", ctx);
         sendCommand(m_buffer);
       }
     };

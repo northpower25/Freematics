@@ -29,6 +29,33 @@ integration's `config_nvs.bin` / `flash_image.bin`):
 | `WEBHOOK_PATH`| Full path: `/api/webhook/<webhook_id>`          |
 | `ENABLE_HTTPD`| 1 = start built-in HTTP server for WiFi OTA     |
 
+## OTA Firmware Updates (WiFi Only)
+
+Over-the-Air (OTA) firmware updates are **only supported over WiFi**.  OTA over
+cellular (4G/LTE) is **technically not possible** for the following reasons:
+
+1. **TLS cipher incompatibility (TLS error 15):** The Nabu Casa Remote UI endpoint
+   (`*.ui.nabu.casa`) is served via Cloudflare, which requires ECDHE-RSA or
+   ECDHE-ECDSA cipher suites.  The SIM7600E-H modem's TLS stack cannot verify
+   ECDSA certificates and its RSA cipher (AES128-SHA256) is no longer accepted by
+   Cloudflare (dropped in 2022).  The TLS handshake therefore always fails with
+   error 15 (HANDSHAKE_FAILURE).
+
+2. **Binary size:** OTA firmware binaries are ~1.7 MB.  Downloading over cellular
+   risks mid-transfer disconnects that corrupt the staging file.
+
+3. **No alternative path:** The OTA endpoint lives on the Nabu Casa Remote UI
+   domain.  No cellular-compatible proxy can serve firmware binaries over SIM7600 TLS.
+
+The firmware enforces this limit with `STATE_WIFI_CONNECTED` and `WiFi.isConnected()`
+guards; no OTA network activity occurs when running on cellular only.
+
+**Recommendation:** Before installing the device in your vehicle, configure a
+WiFi hotspot — either from your mobile phone or from the vehicle's own hotspot
+— and save those credentials in the device NVS (via the HA integration).  This
+ensures the device can always connect to WiFi for future OTA updates even after
+it is physically installed and only reachable over cellular for telemetry.
+
 ## Building from Source
 
 The firmware is automatically rebuilt by the `Build Firmware` GitHub Actions

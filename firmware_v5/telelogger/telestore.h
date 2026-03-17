@@ -88,6 +88,12 @@ public:
     bool init();
     uint32_t begin();
     void flush();
+    // Purge oldest log files when SD card is >= 80% full.
+    // Deletes files in ascending ID order (oldest first) until at least 20%
+    // of the total SD capacity is free.  The file currently being written
+    // (m_id) is never deleted.  Returns true if any files were removed.
+    // Named purgeOldFiles() (not purge()) to avoid shadowing CStorage::purge().
+    bool purgeOldFiles();
 };
 
 class SPIFFSLogger : public FileLogger {
