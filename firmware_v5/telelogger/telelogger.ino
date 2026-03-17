@@ -100,7 +100,11 @@ char webhookPath[256] = "";
 // cloud-hook token path by the HA integration when Nabu Casa cloud is active,
 // so that cellular devices reach the cloud webhook endpoint directly rather than
 // the Remote UI proxy (*.ui.nabu.casa) which the SIM7600 TLS stack cannot use.
-// WiFi connections continue to use SERVER_HOST / WEBHOOK_PATH.
+// WiFi connections use SERVER_HOST / WEBHOOK_PATH, which the HA integration sets
+// from get_url(prefer_external=True) – typically *.ui.nabu.casa (Nabu Casa Remote
+// UI).  Using the Remote UI for WiFi ensures WiFi telemetry and WiFi OTA (which
+// always uses *.ui.nabu.casa) share the same TLS session, avoiding mbedTLS heap
+// fragmentation from repeated TLS host switching on the ESP32.
 char cellServerHost[128] = "";
 uint16_t cellServerPort = 443;
 char cellWebhookPath[256] = "";
@@ -1491,17 +1495,24 @@ void telemetry(void* inst)
         if (lastOtaCheckMs == 0 || nowMs - lastOtaCheckMs >= (uint32_t)otaCheckIntervalS * 1000UL) {
           lastOtaCheckMs = nowMs;
           Serial.println("[OTA-PULL] Checking for firmware update...");
-          // Close the active telemetry TLS session before the OTA check.
-          // With an active TLS session, the mbedTLS record buffers consume
-          // ~25 KB of heap, leaving too little contiguous DRAM for a second
-          // TLS handshake to the OTA endpoint (which is typically on a
-          // different host from the telemetry server).  Releasing the session
-          // here frees those buffers so performPullOtaCheck() starts with a
-          // clean ~40-41 KB max contiguous block.  Telemetry reconnects
-          // automatically via connect(true) inside the next transmit() call.
-#if ENABLE_WIFI
-          teleClient.wifi.close();
-#endif
+          // Do NOT close the telemetry TLS session here.  In virtually all
+          // deployments (Nabu Casa / hooks.nabu.casa) the OTA host and the
+          // telemetry webhook host are the same *.ui.nabu.casa or
+          // hooks.nabu.casa domain.  Calling wifi.close() before the OTA
+          // check would tear down the active TLS session and force a new
+          // TLS handshake, creating an alloc→free→alloc cycle that fragments
+          // the mbedTLS heap over time (each cycle leaves behind tiny holes
+          // that reduce the maximum contiguous block).  Over ~30 telemetry
+          // packets the max block shrinks from ~40 KB to ~20 KB — well below
+          // the 38 KB TLS_MIN_FREE_HEAP threshold — causing Guard 2 in
+          // WifiHTTP::open() to fire ("Low heap … after cleanup, skipping TLS
+          // connect") on every subsequent OTA check, rendering OTA unusable.
+          //
+          // WifiHTTP::open() already handles both cases correctly:
+          //   • Same host: reuse the existing TLS session (zero TLS cycles).
+          //   • Different host, heap OK: stop() + connect() atomically.
+          //   • Different host, heap low: Guard 1 returns false; the post-OTA
+          //     check below restarts WiFi to coalesce the heap.
           if (performPullOtaCheck()) {
             // Direct-flash path: firmware flash started; device will reboot
             // shortly.  Block here so the loop doesn't continue transmitting.
@@ -2401,9 +2412,10 @@ bool performPullOtaCheck()
   char* metaBody = nullptr;
 
 #if ENABLE_WIFI
-  // The caller (telemetry loop) has already called wifi.close() to release
-  // the active telemetry TLS session before invoking this function, so the
-  // heap is free and open() always starts a fresh TLS handshake here.
+  // WifiHTTP::open() handles all session-reuse and heap-guard logic:
+  //   • Same host as telemetry: reuse the existing TLS session (zero cost).
+  //   • Different host, heap OK: stop() + connect() atomically.
+  //   • Low heap: Guard 1 or Guard 2 fires, returns false → caller restarts WiFi.
   if (!teleClient.wifi.open(otaHost, otaPort)) {
     Serial.printf("[OTA-PULL] Cannot connect to %s:%u\n", _maskOtaHost(otaHost).c_str(), (unsigned)otaPort);
 #if STORAGE != STORAGE_NONE

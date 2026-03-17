@@ -244,6 +244,10 @@ class FreematicsDebugSensor(SensorEntity):
             # White LED and beep tone live device state (reported by firmware via PID 0x84/0x85)
             "led_white_device": _u,
             "beep_device": _u,
+            # WiFi SSID – configured value (from HA setup/config flow) and live
+            # device value (queried via /api/control?cmd=SSID? when device IP is set).
+            "wifi_ssid_configured": _u,
+            "wifi_ssid_device": _u,
             # OTA configuration (from HA config entry)
             "ota_mode": _u,
             "ota_token_set": _u,
@@ -278,6 +282,9 @@ class FreematicsDebugSensor(SensorEntity):
             "WiFi letzte Verbindung": d["last_wifi_connection"],
             "LTE letzte Verbindung": d["last_lte_connection"],
             "Letztes Paket": d["last_packet_time"],
+            # WiFi SSID – what is configured in HA and what the device currently has
+            "WiFi SSID (Konfig)": d["wifi_ssid_configured"],
+            "WiFi SSID (IST)": d["wifi_ssid_device"],
             # GPS
             "GPS eingestellt": d["gps_configured"],
             "GPS aktiv": d["gps_active"],

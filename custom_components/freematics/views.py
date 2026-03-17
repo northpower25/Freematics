@@ -921,23 +921,26 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     server_port = 443
     webhook_path = ""
     # Cellular-specific server overrides.  When Nabu Casa cloud is active the
-    # cloud webhook endpoint (hooks.nabu.casa) is stored here so that cellular
-    # connections use it directly.  The SIM7600 modem cannot connect to the
-    # Remote UI proxy (*.ui.nabu.casa) that get_url() may return; only
-    # hooks.nabu.casa is reachable and reliable for IoT cellular devices.
-    # WiFi connections use SERVER_HOST / WEBHOOK_PATH as before.
+    # cloud webhook endpoint (hooks.nabu.casa) is stored as CELL_HOST so that
+    # cellular (SIM7600) connections use it directly.  The SIM7600 modem
+    # cannot connect to the Nabu Casa Remote UI proxy (*.ui.nabu.casa) due to
+    # TLS error 15; hooks.nabu.casa is the only reliable cellular endpoint.
+    #
+    # WiFi connections use SERVER_HOST / WEBHOOK_PATH, which is resolved from
+    # get_url(prefer_external=True) (Step 2) – typically *.ui.nabu.casa when
+    # Nabu Casa is active.  Using *.ui.nabu.casa for WiFi telemetry ensures
+    # WiFi telemetry and WiFi OTA both connect to the same TLS host
+    # (OTA_HOST is also *.ui.nabu.casa) which avoids TLS session switching
+    # and the associated mbedTLS heap fragmentation on the ESP32.
     cell_server_host = ""
     cell_server_port = 443
     cell_webhook_path = ""
 
     # Step 1 – try to obtain the Nabu Casa Cloud Webhook URL (hooks.nabu.casa).
-    # This URL works from any network (WiFi or cellular) and is the only
-    # option that SIM7600-based cellular devices can reach reliably.
-    # The Remote UI URL (*.ui.nabu.casa) returned by get_url() is a browser-
-    # only proxy; IoT devices (SIM7600, etc.) fail with TLS peer-close errors
-    # because the Remote UI proxy does not accept direct machine-to-machine
-    # HTTPS connections.
-    _cloud_used = False
+    # This URL works from any network and is the only option that SIM7600-based
+    # cellular devices can reach reliably (see CELL_HOST comment above).
+    # WiFi SERVER_HOST is NOT set from this URL; it is always determined by
+    # Step 2 so that telemetry and OTA use the same WiFi TLS host.
     if is_webhook_mode:
         # Try to obtain the Nabu Casa cloud webhook URL.  _candidate_url is
         # initialised here so the cached-URL fallback below can be reached even
@@ -998,25 +1001,26 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                 # firmware to use the compile-time default server instead.
                 if not cell_server_host:
                     raise ValueError("cloud hook URL has no hostname")
-                # Also use the cloud hook URL for WiFi so that both
-                # interfaces use the same publicly-reachable endpoint when
-                # cloud is active.  The SERVER_HOST / WEBHOOK_PATH NVS
-                # keys are shared between WiFi and cellular; CELL_HOST /
-                # CELL_PATH provide an explicit cellular override so
-                # devices re-provisioned while offline still get the right
-                # URL for cellular after cloud reconnects.
-                server_host = cell_server_host
-                server_port = cell_server_port
-                webhook_path = cell_webhook_path
-                # Mark cloud as used when the URL was successfully obtained
-                # (fresh or cached).  The hooks.nabu.casa path format requires
-                # an opaque token returned by async_create_cloudhook – the raw
-                # webhook_id is NOT a valid path on hooks.nabu.casa and will
-                # cause Cloudflare to close the connection without sending any
-                # HTTP response (firmware reports "[HTTP] No response").
-                # Fall through to get_url() on failure so the device is at
-                # least provisioned with a usable local URL.
-                _cloud_used = True
+                # hooks.nabu.casa is stored as CELL_HOST / CELL_PATH for
+                # cellular (SIM7600) connections only.  WiFi SERVER_HOST is
+                # intentionally set separately (Step 2 below) so that both
+                # WiFi telemetry and WiFi OTA use the same TLS host.
+                #
+                # The ESP32 OTA pull endpoint (OTA_HOST) always resolves to
+                # *.ui.nabu.casa (Nabu Casa Remote UI) because OTA firmware
+                # files are served directly by the HA instance, not relayed
+                # through hooks.nabu.casa.  If WiFi SERVER_HOST were set to
+                # hooks.nabu.casa the firmware would need to switch TLS
+                # sessions on every 60-second OTA check (telemetry host
+                # → OTA host → telemetry host …).  Each switch fragments the
+                # ESP32 mbedTLS heap; over time the max contiguous block drops
+                # below TLS_MIN_FREE_HEAP and all TLS connections fail.
+                #
+                # Using *.ui.nabu.casa for WiFi SERVER_HOST avoids TLS
+                # switching entirely: telemetry and OTA both connect to the
+                # same TLS session.  The Remote UI proxy correctly forwards
+                # /api/webhook/<id> POST requests to the local HA instance so
+                # telemetry delivery is identical to the hooks.nabu.casa path.
                 # Persist the URL in entry.data so that future provisioning
                 # requests can use it even when cloud is temporarily offline.
                 if _candidate_url != cfg.get(CONF_CLOUD_HOOK_URL, ""):
@@ -1038,53 +1042,55 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
                     _exc,
                 )
 
-    # Step 2 – fall back to get_url() for the shared WiFi / general server
-    # settings when the cloud hook was not available.
-    if not _cloud_used:
-        try:
-            from homeassistant.helpers.network import get_url  # noqa: PLC0415
-            base_url = get_url(hass, prefer_external=True)
-            parsed = urlparse(base_url)
-            server_host = parsed.hostname or ""
-            if parsed.port:
-                server_port = parsed.port
-            elif parsed.scheme == "https":
-                server_port = 443
-            else:
-                server_port = 80
-        except Exception:  # noqa: BLE001
-            # get_url() can raise NoURLAvailableError or other network-related
-            # errors when no external URL is configured.  Cellular connections
-            # require an externally reachable Home Assistant URL (Nabu Casa or
-            # port-forward).  Log a warning so the user understands why the device
-            # cannot reach Home Assistant.
-            _LOGGER.warning(
-                "Freematics: no external Home Assistant URL configured. "
-                "Cellular (SIM) connections require Nabu Casa cloud access or a "
-                "publicly reachable URL. The firmware will fall back to the "
-                "compile-time default server (hub.freematics.com), which will NOT "
-                "deliver webhooks to this Home Assistant instance."
-            )
-        # In datalogger mode the device serves a local HTTP API and must NOT
-        # send webhooks to HA – leave webhook_path empty so the firmware falls
-        # back to the legacy Freematics Hub path.  Webhooks are only used in
-        # telelogger mode.
-        if is_webhook_mode:
-            webhook_path = f"/api/webhook/{webhook_id}"
-        # Warn when the external URL is a Nabu Casa Remote UI address.  The
-        # Remote UI proxy (*.ui.nabu.casa) works for WiFi (ESP32 MBEDTLS) but
-        # SIM7600 cellular devices cannot complete TLS to it.  No CELL_HOST is
-        # set in this branch because without the cloud hook token there is no
-        # valid cellular endpoint to offer.
-        if server_host and ".ui.nabu.casa" in server_host:
-            _LOGGER.warning(
-                "Freematics: the external HA URL (%s) is a Nabu Casa Remote UI "
-                "address. WiFi provisioning will use this URL but cellular (SIM) "
-                "connections will fail. Re-provision the device once Nabu Casa "
-                "cloud is connected so that the correct hooks.nabu.casa URL can "
-                "be stored for cellular use.",
-                server_host,
-            )
+    # Step 2 – resolve WiFi SERVER_HOST / WEBHOOK_PATH from get_url().
+    # This always runs regardless of whether cloud is active, so that WiFi
+    # telemetry uses the same host as WiFi OTA (both *.ui.nabu.casa when
+    # Nabu Casa is active, or any configured external URL otherwise).
+    # Cellular connections use CELL_HOST / CELL_PATH set in Step 1 instead.
+    try:
+        from homeassistant.helpers.network import get_url  # noqa: PLC0415
+        base_url = get_url(hass, prefer_external=True)
+        parsed = urlparse(base_url)
+        server_host = parsed.hostname or ""
+        if parsed.port:
+            server_port = parsed.port
+        elif parsed.scheme == "https":
+            server_port = 443
+        else:
+            server_port = 80
+    except Exception:  # noqa: BLE001
+        # get_url() can raise NoURLAvailableError or other network-related
+        # errors when no external URL is configured.  Cellular connections
+        # require an externally reachable Home Assistant URL (Nabu Casa or
+        # port-forward).  Log a warning so the user understands why the device
+        # cannot reach Home Assistant.
+        _LOGGER.warning(
+            "Freematics: no external Home Assistant URL configured. "
+            "Cellular (SIM) connections require Nabu Casa cloud access or a "
+            "publicly reachable URL. The firmware will fall back to the "
+            "compile-time default server (hub.freematics.com), which will NOT "
+            "deliver webhooks to this Home Assistant instance."
+        )
+    # In datalogger mode the device serves a local HTTP API and must NOT
+    # send webhooks to HA – leave webhook_path empty so the firmware falls
+    # back to the legacy Freematics Hub path.  Webhooks are only used in
+    # telelogger mode.
+    if is_webhook_mode:
+        webhook_path = f"/api/webhook/{webhook_id}"
+    # Warn when the external URL is a Nabu Casa Remote UI address AND no
+    # cellular cloud hook was obtained (no CELL_HOST for SIM connections).
+    # When cloud IS active, CELL_HOST is set to hooks.nabu.casa (Step 1) so
+    # cellular devices still reach HA.  The warning is only relevant when
+    # cloud was NOT available during provisioning.
+    if server_host and ".ui.nabu.casa" in server_host and not cell_server_host:
+        _LOGGER.warning(
+            "Freematics: the external HA URL (%s) is a Nabu Casa Remote UI "
+            "address. WiFi provisioning will use this URL but cellular (SIM) "
+            "connections will fail. Re-provision the device once Nabu Casa "
+            "cloud is connected so that the correct hooks.nabu.casa URL can "
+            "be stored for cellular use.",
+            server_host,
+        )
 
     # Step 3 – resolve OTA pull host/port.  The pull-OTA endpoint lives on the
     # HA instance itself.  When Nabu Casa Remote UI (*.ui.nabu.casa) is
