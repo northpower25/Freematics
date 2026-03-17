@@ -29,19 +29,6 @@ integration's `config_nvs.bin` / `flash_image.bin`):
 | `WEBHOOK_PATH`| Full path: `/api/webhook/<webhook_id>`          |
 | `ENABLE_HTTPD`| 1 = start built-in HTTP server for WiFi OTA     |
 
-## OTA Firmware Updates (WiFi Only)
-
-Over-the-Air (OTA) firmware updates are **only supported over WiFi**.  OTA over
-cellular (4G/LTE) is not supported because the TLS stack on SIM7600E-H modems
-cannot reliably complete a TLS handshake to the Nabu Casa Remote UI endpoint
-(TLS error 15), and this limitation cannot be resolved with reasonable effort.
-
-**Recommendation:** Before installing the device in your vehicle, configure a
-WiFi hotspot — either from your mobile phone or from the vehicle's own hotspot
-— and save those credentials in the device NVS (via the HA integration).  This
-ensures the device can always connect to WiFi for future OTA updates even after
-it is physically installed and only reachable over cellular for telemetry.
-
 ## Building from Source
 
 The firmware is automatically rebuilt by the `Build Firmware` GitHub Actions
