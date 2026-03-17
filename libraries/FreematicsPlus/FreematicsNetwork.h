@@ -33,7 +33,16 @@
 // Some SIM7600E-H firmware revisions silently fall back to plain TCP even
 // with the explicit 5-param ssl_ctx_id form; accepting such sessions leads to
 // repeated "400 The plain HTTP request was sent to HTTPS port" responses.
-#define MIN_TLS_HANDSHAKE_MS 300
+//
+// 150 ms is chosen to be safely above the plain-TCP fast-path (typically
+// <100 ms: modem acknowledges AT+CCHOPEN + TCP connect without TLS overhead)
+// while accepting legitimate TLS handshakes to cloud endpoints such as
+// hooks.nabu.casa (AWS ALB, EU) which complete in ~150–400 ms over cellular.
+// The previous 300 ms threshold was too aggressive: it falsely rejected real
+// TLS connections to hooks.nabu.casa when combined with Connection: close
+// (which forces a new TLS handshake for every packet), breaking all cellular
+// telemetry delivery.
+#define MIN_TLS_HANDSHAKE_MS 150
 
 // Runtime cellular debug flag.  Set to 1 via NVS key CELL_DEBUG (written by
 // the HA config/options flow) to enable verbose cellular diagnostic logging:
@@ -42,6 +51,30 @@
 extern uint8_t cellNetDebug;
 
 #define RECV_BUF_SIZE 512
+
+// Minimum total free DRAM required before attempting a new TLS handshake.
+// A TLS session (mbedTLS context, handshake buffers, etc.) uses roughly
+// 20–50 KB spread across many small allocations.  When the heap is already
+// fragmented by prior TLS teardown/creation cycles, individual allocations
+// inside mbedtls_ssl_setup() etc. fail with MBEDTLS_ERR_SSL_ALLOC_FAILED
+// (-32512), breaking ALL subsequent HTTPS connections until the WiFi stack
+// is restarted.  This threshold gives a conservative safety margin so that
+// WifiHTTP::open() declines the connect attempt early (without tearing down
+// the existing session) and the caller can request a WiFi restart instead.
+// 38 KB is chosen as the minimum largest-contiguous-block size: mbedTLS
+// allocates ~2×17 KB TLS record buffers inside mbedtls_ssl_setup() and these
+// must fit in contiguous DRAM.  Values below ~34 KB will consistently fail;
+// the 38 KB margin accounts for additional smaller context allocations.
+// The previous 40 KB threshold was too close to the ~40-41 KB max contiguous
+// block available after a clean WiFi restart (no active TLS sessions), causing
+// Guard 2 in WifiHTTP::open() to fire immediately after WiFi reconnect and
+// preventing telemetry from re-establishing its TLS session.  38 KB still
+// provides a 4 KB margin above the ~34 KB minimum and allows the post-close
+// heap (~40-41 KB on this hardware) to pass the guard reliably.
+// ESP.getMaxAllocHeap() returns the largest single contiguous free block,
+// which is the correct metric for fragmentation detection (total free heap
+// can be high while no individual block is large enough for TLS).
+#define TLS_MIN_FREE_HEAP (38 * 1024)
 
 typedef enum {
   METHOD_GET = 0,

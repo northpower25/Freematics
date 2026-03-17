@@ -28,6 +28,21 @@ UDP mode implements a telemetry client for [Freematics Hub](https://hub.freemati
 
 Seamless WiFi and cellular network co-working is implemented. When defined WiFi hotspot is available, data is transmitted via WiFi and cellular module is switched off. When no WiFi hotspot can be reached, cellular module is switched on for data transmission until WiFi hotspot available again.
 
+OTA Firmware Updates
+--------------------
+
+Over-the-Air (OTA) firmware updates are **supported over WiFi only**.
+
+OTA over cellular (4G/LTE) is not supported.  The TLS stack on SIM7600E-H
+modems cannot reliably complete a TLS handshake with the Nabu Casa Remote UI endpoint
+(TLS error 15) and this limitation cannot be resolved with reasonable effort.
+
+**Important:** Before installing the device in your vehicle, configure a WiFi
+hotspot — from your mobile phone or the vehicle's own hotspot — and save the
+credentials in the device NVS via the Home Assistant integration.  This ensures
+the device can connect to WiFi for future OTA updates after installation, when
+only cellular telemetry would otherwise be available.
+
 Data Storage
 ------------
 
