@@ -1909,8 +1909,13 @@ class FreematicsOtaPullView(HomeAssistantView):
                     _chunk = nvs_data[_nvs_sent : _nvs_sent + _nvs_chunk_size]
                     await _nvs_stream.write(_chunk)
                     _nvs_sent += len(_chunk)
-                await _nvs_stream.write_eof()
+                # All bytes written: mark complete before write_eof() so a
+                # connection-close race does not suppress the nvs_version write.
                 _nvs_fully_sent = True
+                try:
+                    await _nvs_stream.write_eof()
+                except OSError:
+                    pass  # client closed after receiving all bytes — expected
             except OSError:
                 # Device closed the connection before receiving the full NVS
                 # binary (e.g. WiFi hotspot dropped or device reset).  Do NOT
@@ -2146,8 +2151,16 @@ class FreematicsOtaPullView(HomeAssistantView):
                 _chunk = firmware_data[_bytes_sent : _bytes_sent + _ota_chunk_size]
                 await _stream_resp.write(_chunk)
                 _bytes_sent += len(_chunk)
-            await _stream_resp.write_eof()
+            # All bytes written: mark as complete BEFORE write_eof() so that a
+            # TCP/TLS close that races with write_eof() (e.g. the device reads
+            # the last Content-Length byte and closes the connection before the
+            # server's write_eof() call returns) does not suppress the state
+            # write and cause an endless firmware re-download loop.
             _fully_sent = True
+            try:
+                await _stream_resp.write_eof()
+            except OSError:
+                pass  # client already received all bytes and closed — expected
         except OSError:
             # ConnectionResetError / BrokenPipeError / ConnectionAbortedError /
             # SSLEOFError — all subclasses of OSError on CPython.  The device
