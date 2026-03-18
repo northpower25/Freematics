@@ -14,6 +14,10 @@
         "data": {
           "wifi_ssid": "WLAN-SSID",
           "wifi_password": "WLAN-Passwort"
+        },
+        "data_description": {
+          "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "wifi_password": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**"
         }
       },
       "cellular": {
@@ -22,6 +26,10 @@
         "data": {
           "cell_apn": "Mobilfunk-APN",
           "sim_pin": "SIM-PIN (optional)"
+        },
+        "data_description": {
+          "cell_apn": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "sim_pin": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
         }
       },
       "webhook": {
@@ -29,6 +37,9 @@
         "description": "Es wurde ein eindeutiger Webhook für Ihr Gerät erstellt.\n\nKopieren Sie die folgenden Einstellungen in Ihre Firmware-Konfiguration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nVollständige Webhook-URL (zur Information):\n`{webhook_url}`\n\nSie können die Webhook-ID unten bearbeiten, wenn Sie einen eigenen Wert verwenden möchten.",
         "data": {
           "webhook_id": "Webhook-ID"
+        },
+        "data_description": {
+          "webhook_id": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
         }
       },
       "device": {
@@ -36,6 +47,9 @@
         "description": "Wählen Sie Ihr Freematics ONE+ Hardwaremodell. Dies hilft, die empfohlenen Firmware-Einstellungen anzupassen.\n\n- **Model A**: WLAN + Bluetooth, kein Mobilfunkmodul\n- **Model B**: WLAN + Bluetooth + 4G LTE Mobilfunk\n- **Model H**: Nur WLAN (kein Bluetooth, kein Mobilfunk)\n\nDetaillierte Hardware-Spezifikationen unter [freematics.com](https://freematics.com).",
         "data": {
           "device_model": "Gerätemodell"
+        },
+        "data_description": {
+          "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
         }
       },
       "advanced": {
@@ -54,8 +68,16 @@
           "ota_check_interval_s": "OTA-Prüfintervall (Sekunden, 0 = deaktiviert, Standard 3600)"
         },
         "data_description": {
-          "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.",
-          "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden."
+          "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "enable_ble": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "cell_debug": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "led_red_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "led_white_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "beep_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "data_interval_ms": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "sync_interval_s": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) — *Ersteinrichtung erfordert serielles Flashen*",
+          "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**"
         }
       },
       "flash": {
@@ -66,6 +88,12 @@
           "device_ip": "Geräte-IP-Adresse",
           "device_port": "HTTP-Port des Geräts (Standard: 80)",
           "serial_port": "Serieller Port (z.B. /dev/ttyUSB0)"
+        },
+        "data_description": {
+          "flash_method": "→ **Nur HA-intern** — steuert, wie HA das Gerät flasht; wird nicht in das Geräte-NVS geschrieben",
+          "device_ip": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+          "device_port": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+          "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS"
         }
       }
     },
@@ -100,8 +128,25 @@
           "serial_port": "Serieller Port"
         },
         "data_description": {
-          "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.",
-          "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden."
+          "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "wifi_password": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "cell_apn": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "sim_pin": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "enable_ble": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "cell_debug": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "led_red_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "led_white_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "beep_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "data_interval_ms": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "sync_interval_s": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+          "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) — *Ersteinrichtung erfordert serielles Flashen*",
+          "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+          "device_ip": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+          "device_port": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+          "flash_method": "→ **Nur HA-intern** — steuert, wie HA das Gerät flasht; wird nicht in das Geräte-NVS geschrieben",
+          "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS"
         }
       }
     }

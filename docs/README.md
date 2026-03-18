@@ -10,6 +10,7 @@ A HACS-compatible Home Assistant integration for the **Freematics ONE+** OBD-II 
 2. [Installation via HACS](#installation-via-hacs)
 3. [Integration Setup (Config Flow)](#integration-setup-config-flow)
 4. [When Are Settings Applied to the Device?](#when-are-settings-applied-to-the-device)
+   - [Settings Transfer Matrix](#settings-transfer-matrix)
 5. [Firmware Flashing](#firmware-flashing)
    - [Which method should I choose?](#which-method-should-i-choose)
    - [Method A: WiFi OTA (Recommended)](#method-a-wifi-ota-recommended)
@@ -174,6 +175,38 @@ Config Flow / Options Flow
 
 4. **Exception – push WiFi/APN without re-flashing.**  
    If the device is already running firmware with `ENABLE_HTTPD=1`, you can push WiFi SSID, WiFi password, and APN via the **Send Config to Device** button without flashing. Settings are written to the device's NVS over HTTP and take effect after a restart. See [Sending Configuration to a Running Device](#sending-configuration-to-a-running-device).
+
+### Settings Transfer Matrix
+
+The table below shows via which methods each setting is applied to the device. Settings that do not appear in the device NVS (HA-only) are not transmitted at all.
+
+| Setting | Serial Flash ¹ | WiFi Push ² | OTA — Pull (auto) ³ | Cloud OTA (manual) ⁴ |
+|---------|:--------------:|:-----------:|:--------------------:|:---------------------:|
+| WiFi SSID | ✓ | ✓ | ✓ | ✓ |
+| WiFi Password | ✓ | ✓ | ✓ | ✓ |
+| Cellular APN | ✓ | ✓ | ✓ | ✓ |
+| LED red / white | ✓ | ✓ | ✓ | ✓ |
+| Beep / Buzzer | ✓ | ✓ | ✓ | ✓ |
+| OTA Token & Check Interval | ✓ | ✓ | ✓ | ✓ |
+| SIM PIN | ✓ | – | ✓ | ✓ |
+| Webhook ID / Server Host | ✓ | – | ✓ | ✓ |
+| Device Model | ✓ | – | ✓ | ✓ |
+| Operating Mode | ✓ | – | ✓ | ✓ |
+| BLE Enable | ✓ | – | ✓ | ✓ |
+| Cellular Debug Logging | ✓ | – | ✓ | ✓ |
+| Data Transmission Interval | ✓ | – | ✓ | ✓ |
+| Server Sync Interval | ✓ | – | ✓ | ✓ |
+| OTA Mode | ✓ | – | ✓ | ✓ |
+| Flash Method | HA-only | – | – | – |
+| Device IP / Port | HA-only | – | – | – |
+| Serial Port | HA-only | – | – | – |
+
+¹ **Serial Flash**: Browser Flasher, HA-Server USB, or WiFi OTA upload. All NVS settings + firmware binary are always applied in full.  
+² **WiFi Push** (Send Config to Device): HTTP push directly to the device HTTPD endpoint when the device is reachable on WiFi. No OTA required; settings take effect after a device restart. Requires `ENABLE_HTTPD=1` (Datalogger mode or Telelogger mode with explicit HTTPD).  
+³ **OTA Pull** (Variant 1): Device polls HA automatically at every OTA check interval — via WiFi or Cellular — and downloads updated firmware + NVS. Requires OTA mode = Pull-OTA and a valid OTA token provisioned on the device (initial provisioning via serial flash or WiFi Push).  
+⁴ **Cloud OTA** (Variant 2): Device downloads firmware + NVS only after you press **Publish Firmware for Cloud OTA**. Requires OTA mode = Cloud OTA and a valid OTA token provisioned on the device.
+
+> **Note:** For rows marked ✓ in the OTA columns (³ ⁴), the OTA token must already be written to the device NVS. Provision the token via serial flash (initial setup) or via the **Send Config to Device** button (WiFi Push, row 6 above).
 
 ---
 
@@ -890,6 +923,38 @@ Config Flow / Options Flow
 
 4. **Ausnahme – WLAN/APN ohne Reflash übertragen.**  
    Wenn das Gerät bereits mit `ENABLE_HTTPD=1` läuft, können WLAN-SSID, WLAN-Passwort und APN über den Button **Konfiguration an Gerät senden** übertragen werden — ohne Flashen. Die Einstellungen werden per HTTP in den NVS des Geräts geschrieben und wirken nach einem Neustart. Siehe [Konfiguration an laufendes Gerät senden](#konfiguration-an-laufendes-gerät-senden).
+
+### Übersicht: Wie wird jede Einstellung übertragen?
+
+Die folgende Tabelle zeigt, über welche Methoden eine Einstellung auf das Gerät übertragen wird. Einstellungen, die nicht im Geräte-NVS gespeichert werden (nur HA-intern), werden nicht übertragen.
+
+| Einstellung | Serielles Flashen ¹ | WLAN-Push ² | OTA Pull (auto) ³ | Cloud OTA (manuell) ⁴ |
+|-------------|:-------------------:|:-----------:|:-----------------:|:---------------------:|
+| WLAN-SSID | ✓ | ✓ | ✓ | ✓ |
+| WLAN-Passwort | ✓ | ✓ | ✓ | ✓ |
+| Mobilfunk-APN | ✓ | ✓ | ✓ | ✓ |
+| LED rot / weiß | ✓ | ✓ | ✓ | ✓ |
+| Piepton / Summer | ✓ | ✓ | ✓ | ✓ |
+| OTA-Token & Prüfintervall | ✓ | ✓ | ✓ | ✓ |
+| SIM-PIN | ✓ | – | ✓ | ✓ |
+| Webhook-ID / Server-Host | ✓ | – | ✓ | ✓ |
+| Gerätemodell | ✓ | – | ✓ | ✓ |
+| Betriebsmodus | ✓ | – | ✓ | ✓ |
+| BLE aktivieren | ✓ | – | ✓ | ✓ |
+| Mobilfunk-Debug-Protokoll | ✓ | – | ✓ | ✓ |
+| Datenübertragungs-Intervall | ✓ | – | ✓ | ✓ |
+| Server-Sync-Intervall | ✓ | – | ✓ | ✓ |
+| OTA-Modus | ✓ | – | ✓ | ✓ |
+| Flash-Methode | HA-intern | – | – | – |
+| Geräte-IP / Port | HA-intern | – | – | – |
+| Serieller Port | HA-intern | – | – | – |
+
+¹ **Serielles Flashen**: Browser-Flasher, HA-Server USB oder WLAN-OTA-Upload. Alle NVS-Einstellungen + Firmware-Binary werden immer vollständig geschrieben.  
+² **WLAN-Push** (Konfiguration an Gerät senden): HTTP-Push direkt an den Geräte-HTTPD-Endpunkt, wenn das Gerät per WLAN erreichbar ist. Kein OTA erforderlich; Einstellungen wirken nach Geräteneustart. Erfordert `ENABLE_HTTPD=1` (Datalogger-Modus oder Telelogger-Modus mit explizitem HTTPD).  
+³ **OTA Pull** (Variante 1): Das Gerät fragt HA automatisch bei jedem OTA-Prüfintervall ab – per WLAN oder Mobilfunk – und lädt aktualisierte Firmware + NVS herunter. Erfordert OTA-Modus = Pull-OTA und einen gültigen OTA-Token im Geräte-NVS (Ersteinrichtung per serielles Flashen oder WLAN-Push).  
+⁴ **Cloud OTA** (Variante 2): Das Gerät lädt Firmware + NVS erst nach Klick auf **Firmware für Cloud OTA veröffentlichen** herunter. Erfordert OTA-Modus = Cloud OTA und einen gültigen OTA-Token im Geräte-NVS.
+
+> **Hinweis:** Für Zeilen mit ✓ in den OTA-Spalten (³ ⁴) muss der OTA-Token bereits im Geräte-NVS eingetragen sein. Einrichten per serielles Flashen (Ersteinrichtung) oder über den Button **Konfiguration an Gerät senden** (WLAN-Push, Zeile 6 oben).
 
 ---
 

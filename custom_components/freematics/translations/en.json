@@ -14,6 +14,10 @@
         "data": {
           "wifi_ssid": "WiFi SSID",
           "wifi_password": "WiFi Password"
+        },
+        "data_description": {
+          "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "wifi_password": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
         }
       },
       "cellular": {
@@ -22,6 +26,10 @@
         "data": {
           "cell_apn": "Cellular APN",
           "sim_pin": "SIM PIN (optional)"
+        },
+        "data_description": {
+          "cell_apn": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "sim_pin": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
         }
       },
       "webhook": {
@@ -29,6 +37,9 @@
         "description": "A unique webhook has been generated for your device.\n\nCopy the settings below into your firmware configuration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nFull webhook URL (for reference):\n`{webhook_url}`\n\nYou can edit the Webhook ID below if you want to use a custom value.",
         "data": {
           "webhook_id": "Webhook ID"
+        },
+        "data_description": {
+          "webhook_id": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
         }
       },
       "device": {
@@ -36,6 +47,9 @@
         "description": "Select your Freematics ONE+ hardware model. This helps tailor the recommended firmware settings.\n\n- **Model A**: WiFi + Bluetooth, no cellular module\n- **Model B**: WiFi + Bluetooth + 4G LTE cellular\n- **Model H**: WiFi only (no Bluetooth, no cellular)\n\nDetailed hardware specifications at [freematics.com](https://freematics.com).",
         "data": {
           "device_model": "Device model"
+        },
+        "data_description": {
+          "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
         }
       },
       "advanced": {
@@ -54,8 +68,16 @@
           "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)"
         },
         "data_description": {
-          "ota_mode": "**Disabled** – no OTA. **Variant 1 (Pull-OTA)** – device automatically downloads the latest bundled firmware on every interval. **Variant 2 (Cloud OTA)** – only downloads after you press **Publish Firmware for Cloud OTA**. Both variants use a secret token written to device NVS during flashing.",
-          "ota_check_interval_s": "How often the device checks for updates. Set to 0 to disable polling. The OTA token and interval are written to NVS during flashing — re-flash after changing these settings."
+          "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "enable_ble": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "cell_debug": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "led_red_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "led_white_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "beep_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "data_interval_ms": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "sync_interval_s": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "ota_mode": "**Disabled** – no OTA. **Variant 1 (Pull-OTA)** – device automatically downloads the latest bundled firmware on every interval. **Variant 2 (Cloud OTA)** – only downloads after you press **Publish Firmware for Cloud OTA**. Both variants use a secret token written to device NVS during flashing.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) — *initial provisioning requires serial flash*",
+          "ota_check_interval_s": "How often the device checks for updates. Set to 0 to disable polling. The OTA token and interval are written to NVS during flashing — re-flash after changing these settings.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
         }
       },
       "flash": {
@@ -66,6 +88,12 @@
           "device_ip": "Device IP address",
           "device_port": "Device HTTP port (default: 80)",
           "serial_port": "Serial port (e.g. /dev/ttyUSB0)"
+        },
+        "data_description": {
+          "flash_method": "→ **HA-only** — controls how HA flashes the device; not written to device NVS",
+          "device_ip": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+          "device_port": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+          "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS"
         }
       }
     },
@@ -100,8 +128,25 @@
           "serial_port": "Serial port"
         },
         "data_description": {
-          "ota_mode": "**Disabled** – no automatic updates. **Variant 1 (Pull-OTA)** – device polls HA and automatically downloads the latest firmware on every interval. **Variant 2 (Cloud OTA)** – device polls HA but only downloads after you press **Publish Firmware for Cloud OTA** on the device page.",
-          "ota_check_interval_s": "How often (seconds) the device checks for a new firmware version. Set to 0 to disable polling. Re-provision the device (re-flash) after changes to apply the new interval."
+          "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "wifi_password": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "cell_apn": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "sim_pin": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "enable_ble": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "cell_debug": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "led_red_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "led_white_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "beep_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "data_interval_ms": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "sync_interval_s": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+          "ota_mode": "**Disabled** – no automatic updates. **Variant 1 (Pull-OTA)** – device polls HA every interval and downloads the latest bundled firmware. **Variant 2 (Cloud OTA)** – device polls HA but only downloads after you press the **Publish Firmware for Cloud OTA** button on the device page.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) — *initial provisioning requires serial flash*",
+          "ota_check_interval_s": "How often (seconds) the device checks for a new firmware version. Set to 0 to disable polling even when a variant is selected. Requires re-provisioning the device (re-flash) after changes.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+          "device_ip": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+          "device_port": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+          "flash_method": "→ **HA-only** — controls how HA flashes the device; not written to device NVS",
+          "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS"
         }
       }
     }
