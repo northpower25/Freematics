@@ -2468,6 +2468,112 @@ bool performPullOtaCheck()
     return false;
   }
 
+  // Parse optional nvs_only flag — set by the HA server when the firmware
+  // binary was already delivered (version matches in ota_pull_state.json) but
+  // the NVS settings partition is outdated (e.g. WiFi credentials or LED/beep
+  // state changed, or nvs.bin failed to download alongside the firmware in a
+  // previous cycle due to heap fragmentation after the large firmware transfer).
+  // In this mode the device skips firmware download entirely, fetches only the
+  // small NVS binary with a fresh heap (no prior fragmentation), applies it
+  // directly to the NVS flash partition, and restarts to activate the settings.
+  bool nvsOnly = (strstr(metaBody, "\"nvs_only\":true")  != nullptr ||
+                  strstr(metaBody, "\"nvs_only\": true") != nullptr);
+
+  // Parse optional nvs_url field (present in both normal and nvs_only updates).
+  char nvsPath[256] = "";
+  {
+    char* nvsField = strstr(metaBody, "\"nvs_url\":");
+    if (nvsField) {
+      char* start = strchr(nvsField + 10, '"');
+      if (start) {
+        start++;
+        char* end = strchr(start, '"');
+        if (end && (size_t)(end - start) < sizeof(nvsPath) - 1) {
+          memcpy(nvsPath, start, end - start);
+          nvsPath[end - start] = '\0';
+        }
+      }
+    }
+  }
+
+  // ---- NVS-only update path -----------------------------------------------
+  // Entered when firmware is current but NVS settings are outdated.
+  // Downloads only the NVS binary (heap is fresh — no prior firmware download),
+  // applies it directly, and restarts to activate the new settings.
+#if STORAGE == STORAGE_SD
+  if (nvsOnly) {
+    if (!state.check(STATE_STORAGE_READY)) {
+      Serial.println("[OTA-PULL] NVS-only: SD not ready, skipping");
+      return false;
+    }
+    Serial.println("[OTA-PULL] NVS-only update: downloading settings binary");
+    if (SD.exists(OTA_NVS_PATH)) SD.remove(OTA_NVS_PATH);
+    if (nvsPath[0]) {
+#if ENABLE_WIFI
+      if (teleClient.wifi.open(otaHost, otaPort) &&
+          teleClient.wifi.send(METHOD_GET, nvsPath)) {
+        int _nvsCL = 0;
+        int _nvsHC = teleClient.wifi.receiveHeaders(&_nvsCL);
+        if (_nvsHC == 200 && _nvsCL > 0) {
+          File _nvsFile = SD.open(OTA_NVS_PATH, FILE_WRITE);
+          if (_nvsFile) {
+            WiFiClientSecure& _nvsRaw = teleClient.wifi.rawClient();
+            size_t _nvsWr = 0, _nvsExp = (size_t)_nvsCL;
+            bool _nvsOk = true;
+            while (_nvsWr < _nvsExp) {
+              uint32_t _t1 = millis();
+              while (!_nvsRaw.available() && millis() - _t1 < PULL_OTA_CHUNK_TIMEOUT_MS) delay(1);
+              if (!_nvsRaw.available()) { _nvsOk = false; break; }
+              int _nr = (int)(_nvsExp - _nvsWr);
+              if (_nr > (int)PULL_OTA_CHUNK_SIZE) _nr = (int)PULL_OTA_CHUNK_SIZE;
+              int _n = _nvsRaw.read(s_otaChunkBuf, _nr);
+              if (_n <= 0) { _nvsOk = false; break; }
+              if ((size_t)_nvsFile.write(s_otaChunkBuf, (size_t)_n) != (size_t)_n) { _nvsOk = false; break; }
+              _nvsWr += (size_t)_n;
+            }
+            _nvsFile.close();
+            if (!_nvsOk || _nvsWr != _nvsExp) {
+              Serial.println("[OTA-PULL] NVS download incomplete — settings unchanged");
+              SD.remove(OTA_NVS_PATH);
+            } else {
+              Serial.printf("[OTA-PULL] NVS staged: %u bytes\n", (unsigned)_nvsWr);
+            }
+          }
+        } else {
+          Serial.printf("[OTA-PULL] NVS HTTP %d — settings unchanged\n", _nvsHC);
+        }
+        teleClient.wifi.close();
+      } else {
+        Serial.println("[OTA-PULL] NVS connect/send failed — settings unchanged");
+        teleClient.wifi.close();
+      }
+#endif  // ENABLE_WIFI
+    }
+    // Only restart if NVS was successfully staged on SD.  If the download
+    // failed leave the device running and let it retry on the next interval.
+    if (!SD.exists(OTA_NVS_PATH)) {
+      Serial.println("[OTA-PULL] NVS-only: download failed, will retry on next check");
+      return false;
+    }
+    if (_applyNvsFromSD()) {
+      Serial.println("[OTA-PULL] Settings (NVS) applied — restarting");
+      esp_restart();
+      return false;  // unreachable
+    } else {
+      // Apply failed (e.g. RAM allocation error, SD read error, flash write
+      // error).  The NVS partition is unchanged; leave the device running so
+      // it retries the download + apply on the next OTA check interval.
+      Serial.println("[OTA-PULL] Settings (NVS) apply failed — will retry on next check");
+      return false;
+    }
+  }
+#endif  // STORAGE == STORAGE_SD
+  if (nvsOnly) {
+    // No SD storage available — cannot download NVS binary; skip silently.
+    Serial.println("[OTA-PULL] NVS-only update skipped (no SD storage)");
+    return false;
+  }
+
   // Parse firmware "size" field.
   size_t fwSize = 0;
   char* sizeField = strstr(metaBody, "\"size\":");
@@ -2495,23 +2601,6 @@ bool performPullOtaCheck()
     logger.logEvent(_ota_diag);
   }
 #endif
-
-  // Parse optional nvs_url field.
-  char nvsPath[256] = "";
-  {
-    char* nvsField = strstr(metaBody, "\"nvs_url\":");
-    if (nvsField) {
-      char* start = strchr(nvsField + 10, '"');
-      if (start) {
-        start++;
-        char* end = strchr(start, '"');
-        if (end && (size_t)(end - start) < sizeof(nvsPath) - 1) {
-          memcpy(nvsPath, start, end - start);
-          nvsPath[end - start] = '\0';
-        }
-      }
-    }
-  }
 
   // Parse optional sha256 field for post-download integrity verification.
   // When present, the downloaded firmware file is checked against this digest
