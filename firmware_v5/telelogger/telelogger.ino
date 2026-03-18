@@ -1695,11 +1695,10 @@ void standby()
   state.set(STATE_STANDBY);
 
 #if STORAGE == STORAGE_SD
-  // Apply any pending pull-OTA update BEFORE closing the log file so that
-  // success/failure events can still be written.  This is the right moment:
-  // the device is no longer actively collecting or transmitting data, yet
-  // storage is still open.  s_ota_active is set so the telemetry task
-  // yields and does not compete for the SD card or flash hardware.
+  // Safety net: if s_ota_pending is set (e.g. esp_restart() failed in
+  // performPullOtaCheck), apply the staged firmware now before shutting down.
+  // Normally the device restarts immediately after staging and the boot-time
+  // flash path handles this — this block should rarely execute.
   if (s_ota_pending && state.check(STATE_STORAGE_READY)) {
     s_ota_active = true;
     delay(OTA_TELEMETRY_YIELD_DELAY_MS); // give the telemetry task one scheduling cycle to yield
@@ -2392,11 +2391,13 @@ bool performPullOtaCheck()
 #endif
 
 #if STORAGE == STORAGE_SD
-  // If a firmware is already staged on SD, skip the meta-check and download:
-  // there is nothing to do here — the flash will happen at the next standby.
+  // If a firmware is already staged on SD (from a previous download that set
+  // s_ota_pending before the esp_restart() fired), the restart did not happen
+  // yet.  Trigger it now so the boot-time flash runs cleanly.
   if (s_ota_pending) {
-    Serial.println("[OTA-PULL] Firmware already staged on SD, waiting for standby to flash");
-    return false;
+    Serial.println("[OTA-PULL] Firmware already staged on SD, restarting to flash");
+    esp_restart();
+    return false;  // unreachable
   }
 #endif
 
@@ -2816,7 +2817,7 @@ bool performPullOtaCheck()
 
     s_ota_pending = true;
     Serial.printf("[OTA-PULL] Download complete: %u bytes in %u ms\n"
-                  "[OTA-PULL] Firmware staged on SD (%s) — will flash at next standby\n",
+                  "[OTA-PULL] Firmware staged on SD (%s) — restarting to flash\n",
                   (unsigned)written, (unsigned)(millis() - dlStart), OTA_PENDING_PATH);
 #if STORAGE != STORAGE_NONE
     if (state.check(STATE_STORAGE_READY)) {
@@ -2825,7 +2826,14 @@ bool performPullOtaCheck()
       logger.logEvent(_ota_diag);
     }
 #endif
-    return false;  // deferred: flash happens at standby, not now
+    // Restart immediately so the device boots with a clean heap.  The boot-time
+    // staging check (setup(), just after SD init) will detect /ota_fw.bin and
+    // /ota_meta.txt and call performPullOtaFlash() before any TLS session is
+    // opened, ensuring the flash and optional NVS update succeed reliably.
+    // This also resolves the "Low heap" WiFi/LTE failure loop that would
+    // otherwise block all network connections until the next natural standby.
+    esp_restart();
+    return false;  // unreachable: esp_restart() does not return
   }
 #endif  // STORAGE == STORAGE_SD
 

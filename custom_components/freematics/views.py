@@ -1246,6 +1246,7 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs.get("ota_host", ""),
             kwargs.get("ota_port", 443),
             kwargs.get("ota_check_interval_s", 0),
+            kwargs.get("nvs_version", ""),
         )
 
         if nvs_data is None:
@@ -1347,6 +1348,7 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs.get("ota_host", ""),
             kwargs.get("ota_port", 443),
             kwargs.get("ota_check_interval_s", 0),
+            kwargs.get("nvs_version", ""),
         )
 
         if nvs_data is None:
@@ -1800,6 +1802,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                     kwargs.get("ota_host", ""),
                     kwargs.get("ota_port", 443),
                     kwargs.get("ota_check_interval_s", 0),
+                    kwargs.get("nvs_version", ""),
                 )
             except ImportError:
                 nvs_data = None
@@ -2142,15 +2145,6 @@ class FreematicsOtaPullView(HomeAssistantView):
                         _state: dict = {
                             "version": _pub_id,
                             "downloaded_at": now_iso,
-                            # Pre-fill nvs_version so the meta check returns
-                            # available=false even when the NVS download later
-                            # fails due to heap fragmentation.  The nvs.bin
-                            # handler will overwrite this with the same value
-                            # when NVS downloads successfully.  When settings
-                            # change, effective_version changes, so
-                            # nvs_version won't match and the update is
-                            # offered again automatically.
-                            "nvs_version": effective_version,
                         }
                         (_www_dir / "ota_pull_state.json").write_text(
                             json.dumps(_state, indent=2),
@@ -2173,15 +2167,6 @@ class FreematicsOtaPullView(HomeAssistantView):
                         _state_pull: dict = {
                             "version": effective_version,
                             "downloaded_at": now_iso,
-                            # Pre-fill nvs_version so the meta check returns
-                            # available=false even when the NVS download later
-                            # fails due to heap fragmentation.  The nvs.bin
-                            # handler will overwrite this with the same value
-                            # when NVS downloads successfully.  When settings
-                            # change, effective_version changes, so `version`
-                            # won't match the new effective_version and the
-                            # update will be offered again regardless.
-                            "nvs_version": effective_version,
                         }
                         _pull_state_file.write_text(
                             json.dumps(_state_pull, indent=2),

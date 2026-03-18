@@ -657,11 +657,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         else:
                             diag["sd_present"] = "Nein"
                             diag["sd_storage"] = "0 MB"
+                        # Update the live firmware version from the device report so
+                        # the "FW Version" attribute reflects what is actually running.
+                        _fw_ver_info = info.get("fw", "")
+                        if _fw_ver_info:
+                            diag["fw_version"] = _fw_ver_info
                         # NVS settings version (firmware >= PR #147 includes
                         # this in api/info as "nvs_ver").  Absent in older FW.
                         _nvs_ver_info = info.get("nvs_ver", "")
                         if _nvs_ver_info:
                             diag["fw_version_device"] = _nvs_ver_info
+                        elif not diag.get("fw_version_device"):
+                            # Fall back to showing the firmware binary version +
+                            # build date when NVS_VER has never been applied
+                            # (e.g. after a serial flash without OTA NVS update).
+                            _fw_build_info = info.get("fw_build", "")
+                            if _fw_ver_info:
+                                diag["fw_version_device"] = (
+                                    f"{_fw_ver_info} Built:{_fw_build_info}"
+                                    if _fw_build_info
+                                    else _fw_ver_info
+                                )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics /api/info query to %s failed: %s", url, exc)
 
