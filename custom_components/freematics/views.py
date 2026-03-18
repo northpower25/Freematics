@@ -1526,6 +1526,25 @@ async def _get_ota_pull_meta(
                 content_type="application/json",
             )
 
+        # Firmware already downloaded/applied but NVS settings not yet updated
+        # (e.g. nvs.bin failed to download in phase 1 due to heap fragmentation
+        # after the large firmware download).  Return a lightweight NVS-only
+        # update so the device can apply the new settings on its next check
+        # interval with a fresh heap — no firmware re-download needed.
+        if (
+            pull_state.get("version") == effective_version
+            and pull_state.get("nvs_version") != effective_version
+        ):
+            return web.Response(
+                body=json.dumps({
+                    "available": True,
+                    "version": effective_version,
+                    "nvs_url": _nvs_url,
+                    "nvs_only": True,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
         def _compute_meta_pull() -> tuple[int, str]:
             data = FIRMWARE_PATH.read_bytes()
             digest = hashlib.sha256(data).hexdigest()
@@ -1586,6 +1605,24 @@ async def _get_ota_pull_meta(
                 body=json.dumps({
                     "available": False,
                     "version": published.get("version") or effective_version,
+                }).encode("utf-8"),
+                content_type="application/json",
+            )
+
+        # Firmware already downloaded but NVS not yet updated (nvs.bin failed
+        # to download in phase 1, e.g. due to heap fragmentation after the
+        # large firmware download).  Return a lightweight NVS-only update so
+        # the device applies settings on the next check with a fresh heap.
+        if (
+            cloud_pull_state.get("version") == _publish_id
+            and cloud_pull_state.get("nvs_version") != effective_version
+        ):
+            return web.Response(
+                body=json.dumps({
+                    "available": True,
+                    "version": published.get("version") or effective_version,
+                    "nvs_url": _nvs_url,
+                    "nvs_only": True,
                 }).encode("utf-8"),
                 content_type="application/json",
             )
@@ -1923,12 +1960,11 @@ class FreematicsOtaPullView(HomeAssistantView):
 
             # Persist confirmed_at in ota_pull_state.json alongside the
             # downloaded_at that was written by the firmware.bin handler.
-            # Also ensure version + nvs_version are set so meta.json returns
-            # available=false on the next boot even when the NVS download
-            # previously failed (e.g. heap too fragmented after large firmware
-            # download).  The firmware.bin handler already pre-fills these, so
-            # writing them here is idempotent — but it also covers the edge case
-            # where the confirm fires before firmware.bin completes (race).
+            # nvs_version is deliberately NOT written here — it is written
+            # exclusively by the nvs.bin handler after the NVS partition has
+            # been successfully delivered.  This ensures the two-phase NVS-only
+            # update path fires correctly when nvs.bin failed to download
+            # alongside the firmware (heap fragmentation after 1.8 MB transfer).
             _confirm_state_file = _www_dir / "ota_pull_state.json"
 
             def _write_confirmed_state() -> None:
@@ -1941,7 +1977,13 @@ class FreematicsOtaPullView(HomeAssistantView):
                     except (OSError, json.JSONDecodeError):
                         _cs = {}
                     _cs["confirmed_at"] = _now_iso
-                    _cs["nvs_version"] = effective_version
+                    # nvs_version is written exclusively by the nvs.bin handler
+                    # after the NVS partition has been successfully delivered to
+                    # the device.  Writing it here would suppress the two-phase
+                    # nvs_only update that fires when nvs.bin failed to download
+                    # alongside the firmware (e.g. heap too fragmented after the
+                    # large firmware transfer).  The nvs_only path ensures WiFi
+                    # credentials and other settings are always applied.
                     _confirm_state_file.write_text(
                         json.dumps(_cs, indent=2), encoding="utf-8"
                     )
