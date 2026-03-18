@@ -215,9 +215,9 @@ class FreematicsDebugSensor(SensorEntity):
         self._debug: dict = {
             # Firmware binary version (e.g. "5.1")
             "fw_version": _u,
-            # Effective version HA expects on device: "<fw>.<settings_ts>" or just "<fw>"
+            # Target NVS version HA expects on device: "<fw>.<settings_ts>" or just "<fw>"
             "fw_version_configured": _u,
-            # NVS settings version currently on the device (from /api/control?cmd=NVS_VER?)
+            # Actual NVS version on the device (from NVS_VER key via api/info or NVS_VER? cmd)
             "fw_version_device": _u,
             "connection_mode": _u,
             "connection_errors": 0,
@@ -281,8 +281,8 @@ class FreematicsDebugSensor(SensorEntity):
         return {
             # Firmware
             "FW Version": d["fw_version"],
-            "FW Version (Konfig)": d["fw_version_configured"],
-            "FW Version (IST)": d["fw_version_device"],
+            "NVS Version (Konfig)": d["fw_version_configured"],
+            "NVS Version (IST)": d["fw_version_device"],
             # Connection
             "Verbindungsmodus": d["connection_mode"],
             "Verbindungsfehler": d["connection_errors"],

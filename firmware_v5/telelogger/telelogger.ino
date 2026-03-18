@@ -2301,13 +2301,19 @@ static bool performPullOtaFlash()
   // firmware flash so a settings-write failure never prevents the firmware
   // update.  On failure the device still reboots into the new firmware
   // (with old NVS settings); the settings will be retried on the next OTA
-  // check interval (the HA side keeps settings_version bumped until NVS
-  // is confirmed applied via the ota_pull_state.json write on firmware.bin
-  // download).
-  if (_applyNvsFromSD()) {
-    Serial.println("[OTA-PULL] Settings (NVS) updated successfully");
-  } else {
-    Serial.println("[OTA-PULL] Settings (NVS) update failed or not staged — rebooting with old NVS");
+  // check interval (the HA side keeps nvs_version unsynchronised until the
+  // device successfully downloads and applies nvs.bin).
+  {
+    bool _nvsStaged = SD.exists(OTA_NVS_PATH);
+    if (_applyNvsFromSD()) {
+      if (_nvsStaged) {
+        Serial.println("[OTA-PULL] Settings (NVS) updated successfully");
+      } else {
+        Serial.println("[OTA-PULL] No NVS settings staged — rebooting with firmware only");
+      }
+    } else {
+      Serial.println("[OTA-PULL] Settings (NVS) update failed — rebooting with old NVS");
+    }
   }
 
 #if STORAGE != STORAGE_NONE
