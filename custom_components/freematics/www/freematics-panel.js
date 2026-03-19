@@ -12,7 +12,14 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.23.0";
+const PANEL_VERSION = "1.24.0";
+
+/** Leaflet map library version used for CDN URLs. */
+const LEAFLET_VERSION = "1.9.4";
+
+/** Default map centre (geographic centre of Europe) shown before first GPS fix. */
+const MAP_DEFAULT_CENTER = [51.0, 10.0]; // approx. centre of Germany/Europe
+const MAP_DEFAULT_ZOOM   = 4;
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper
@@ -146,6 +153,39 @@ const STYLES = `
     font-size: 1rem;
   }
   .no-device ha-icon { font-size: 3rem; display: block; margin-bottom: 12px; }
+  /* --- map card --- */
+  .map-container {
+    height: 320px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--secondary-background-color);
+    position: relative;
+    z-index: 0;
+  }
+  .map-placeholder {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--secondary-text-color);
+    text-align: center;
+    font-size: .9rem;
+    padding: 20px;
+  }
+  .map-meta {
+    font-size: .8rem;
+    margin-top: 6px;
+    color: var(--secondary-text-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .map-meta a { color: #2196f3; text-decoration: none; }
+  .map-meta a:hover { text-decoration: underline; }
   /* --- flash tab --- */
   .flash-wrap { max-width: 640px; margin: 0 auto; }
   .flash-card {
@@ -276,6 +316,11 @@ class FreematicsPanel extends HTMLElement {
     this._serialWriter = null;
     this._serialReadLoop = null;
     this._provisioningManifestUrl = null;
+    // Map state: Leaflet instances survive incremental hass updates.
+    this._maps = {};              // Leaflet Map instances, keyed by device prefix
+    this._mapMarkers = {};        // Current-position markers, keyed by device prefix
+    this._renderedDeviceKey = null; // Sorted join of last rendered device prefixes
+    this._leafletLoadPromise = null; // Single-flight Leaflet load promise
     this.attachShadow({ mode: "open" });
   }
 
@@ -304,31 +349,30 @@ class FreematicsPanel extends HTMLElement {
   /* ── entity discovery ───────────────────────────────────────────── */
 
   /**
-   * Scan hass.states for sensor.freematics_*_device_temp entities and
-   * return the list of unique entity prefixes, e.g.
-   *   ["sensor.freematics_b1af617d"]
+   * Scan hass.states for Freematics device entities and return the list of
+   * unique entity prefixes, e.g. ["sensor.freematics_b1af617d"].
    *
-   * Why device_temp instead of speed:
-   *   The firmware sends two speed sensors: PID 0x10D (OBD speed → _speed)
-   *   and PID 0x0D (GPS speed → _gps_speed).  Using _speed as the anchor
-   *   produced a ghost "gps" device entry in the dashboard because the
-   *   non-greedy regex matched sensor.freematics_one_<id>_gps_speed and
-   *   extracted "sensor.freematics_one_<id>_gps" as the prefix — a prefix
-   *   for which no battery/rpm/etc. entities exist, so all values showed "—".
+   * Two anchor entity types are checked so devices are found regardless of
+   * whether telemetry data has been received yet:
    *
-   *   device_temp (PID 82) is transmitted in every data packet and has no
-   *   GPS or OBD variant, so it is a unique, stable anchor for each device.
+   *   1. *_device_temp  – PID 0x82, included in every telemetry packet.
+   *   2. *_debug        – the diagnostic sensor, pre-created at setup time
+   *                       with the connection-type as its initial state.  This
+   *                       entity is always present even before the first webhook
+   *                       arrives (e.g. after an HA restart with the device in
+   *                       standby), so it guarantees the device card is shown
+   *                       immediately without waiting for OBD or GPS data.
    *
    * The regex matches all known entity-ID formats:
-   *   • Current installs: sensor.freematics_<id8>_device_temp
-   *   • PR-36 era:        sensor.freematics_one_<id8>_device_temp
-   *   • Legacy installs:  sensor.freematics_one_unknown_device_temp
+   *   • Current installs: sensor.freematics_<id8>_device_temp / _debug
+   *   • PR-36 era:        sensor.freematics_one_<id8>_device_temp / _debug
+   *   • Legacy installs:  sensor.freematics_one_unknown_device_temp / _debug
    */
   _discoverDevices() {
     if (!this._hass) return [];
     const prefixes = new Set();
     for (const entityId of Object.keys(this._hass.states)) {
-      const m = entityId.match(/^(sensor\.freematics_\w+)_device_temp$/);
+      const m = entityId.match(/^(sensor\.freematics_\w+)_(?:device_temp|debug)$/);
       if (m) prefixes.add(m[1]);
     }
     return [...prefixes];
@@ -434,10 +478,32 @@ class FreematicsPanel extends HTMLElement {
           Make sure the firmware is configured with the correct webhook URL and the device is powered on.
         </div>
       `;
+      this._renderedDeviceKey = null;
       return;
     }
 
-    el.innerHTML = devices.map(prefix => this._deviceHTML(prefix)).join("");
+    // Stable key: sorted prefix list.  Only recreate the full HTML (and Leaflet
+    // map instances) when the device list changes.  On regular hass updates
+    // we just update the map marker positions in place, which avoids destroying
+    // and recreating the map on every telemetry packet.
+    const deviceKey = devices.slice().sort().join(",");
+    if (this._renderedDeviceKey !== deviceKey) {
+      this._renderedDeviceKey = deviceKey;
+      // Remove stale Leaflet instances before the DOM elements are replaced.
+      for (const prefix of Object.keys(this._maps)) {
+        try { this._maps[prefix].remove(); } catch (err) {
+          console.debug("Freematics: error removing stale map for", prefix, "–", err.message || err);
+        }
+      }
+      this._maps = {};
+      this._mapMarkers = {};
+      el.innerHTML = devices.map(prefix => this._deviceHTML(prefix)).join("");
+      // Initialise maps after the new DOM is fully in place.
+      setTimeout(() => this._initMaps(), 0);
+    } else {
+      // Incremental update – only reposition map markers, no HTML rebuild.
+      this._updateMaps();
+    }
   }
 
   _updateDashboard() {
@@ -604,9 +670,236 @@ class FreematicsPanel extends HTMLElement {
               <span class="row-value">${accZ !== null ? accZ.toFixed(2) + " m/s²" : "—"}</span>
             </div>
           </div>
+
+          <!-- Map card (full-width) -->
+          <div class="card" style="grid-column:1/-1">
+            <div class="card-title">&#127757; Karte / Standort</div>
+            <div class="map-container" id="${this._mapId(prefix)}">
+              ${lat === null || lng === null ? `
+              <div class="map-placeholder">
+                <ha-icon icon="mdi:map-marker-off" style="font-size:2.2rem"></ha-icon>
+                <span>Kein GPS-Signal verfügbar.<br>
+                  Letzte bekannte Position wird angezeigt, sobald GPS-Daten vorliegen.<br>
+                  Die Position überlebt einen Neustart von Home Assistant.</span>
+              </div>
+              ` : ""}
+            </div>
+            <div class="map-meta">
+              <span>${[
+                lat !== null ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : "Kein GPS",
+                alt !== null ? `${alt.toFixed(0)}\u202fm ü.NN` : null,
+                heading !== null ? `&#x21E7; ${Math.round(heading)}°` : null,
+                sats !== null ? `${Math.round(sats)} Sats` : null,
+              ].filter(Boolean).join(" | ")}</span>
+              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">OpenStreetMap ↗</a>` : ""}
+            </div>
+          </div>
         </div>
       </div>
     `;
+  }
+
+  /* ── Map helpers ────────────────────────────────────────────────── */
+
+  /**
+   * Returns a stable DOM element ID for the Leaflet map container of the
+   * given device prefix (e.g. "sensor.freematics_b1af617d" →
+   * "fm-map-sensor-freematics-b1af617d").
+   */
+  _mapId(prefix) {
+    return "fm-map-" + prefix.replace(/[^a-z0-9]/gi, "-");
+  }
+
+  /**
+   * Lazy-load Leaflet.js (into the main document) and its CSS (into the
+   * shadow root so tile layers and controls are styled inside Shadow DOM).
+   * Returns a Promise that resolves when window.L is available.
+   * Only one `<script>` tag is ever injected into the page.
+   */
+  _ensureLeaflet() {
+    if (window.L && window.L.map) return Promise.resolve();
+    if (this._leafletLoadPromise) return this._leafletLoadPromise;
+    this._leafletLoadPromise = new Promise((resolve, reject) => {
+      // CSS must live in the shadow root so that Leaflet's tile/control
+      // styles are applied to the map container element inside Shadow DOM.
+      if (!this.shadowRoot.querySelector("#fm-leaflet-css")) {
+        const link = document.createElement("link");
+        link.id = "fm-leaflet-css";
+        link.rel = "stylesheet";
+        link.href = `https://unpkg.com/leaflet@${LEAFLET_VERSION}/dist/leaflet.css`;
+        this.shadowRoot.appendChild(link);
+      }
+      // The JS must be in the main document scope (Leaflet uses window globals).
+      const existing = document.querySelector("#fm-leaflet-js");
+      if (existing) {
+        if (window.L && window.L.map) { resolve(); return; }
+        existing.addEventListener("load", resolve, { once: true });
+        existing.addEventListener("error", () => reject(new Error("Leaflet load error")), { once: true });
+      } else {
+        const script = document.createElement("script");
+        script.id = "fm-leaflet-js";
+        script.src = `https://unpkg.com/leaflet@${LEAFLET_VERSION}/dist/leaflet.js`;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("Leaflet load error"));
+        document.head.appendChild(script);
+      }
+    });
+    return this._leafletLoadPromise;
+  }
+
+  /**
+   * Initialise Leaflet map instances for all currently rendered device
+   * sections.  Called once after a full HTML re-render.  Skips prefixes
+   * that already have a map instance.
+   *
+   * If Leaflet cannot be loaded (offline / CSP) the map containers retain
+   * their placeholder content and the rest of the dashboard is unaffected.
+   */
+  async _initMaps() {
+    let L;
+    try {
+      await this._ensureLeaflet();
+      L = window.L;
+    } catch (err) {
+      console.warn("Freematics: Leaflet could not be loaded – maps unavailable:", err.message || err);
+      return;
+    }
+
+    // Circular DivIcon: no external image dependency, works in Shadow DOM.
+    const deviceIcon = L.divIcon({
+      html: '<div style="width:14px;height:14px;background:#2196f3;border:3px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.5)"></div>',
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+      className: "",
+    });
+
+    for (const prefix of this._discoverDevices()) {
+      if (this._maps[prefix]) continue; // Already initialised
+      const mapDiv = this.shadowRoot.getElementById(this._mapId(prefix));
+      if (!mapDiv) continue;
+
+      const lat = this._raw(prefix, "lat");
+      const lng = this._raw(prefix, "lng");
+      const hasPos = lat !== null && lng !== null;
+
+      // Clear placeholder markup so Leaflet can own the container.
+      mapDiv.innerHTML = "";
+
+      const center = hasPos ? [lat, lng] : MAP_DEFAULT_CENTER;
+      const zoom   = hasPos ? 13 : MAP_DEFAULT_ZOOM;
+
+      try {
+        const map = L.map(mapDiv, { zoomControl: true, attributionControl: true })
+                     .setView(center, zoom);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+          maxZoom: 19,
+        }).addTo(map);
+
+        let marker = null;
+        if (hasPos) {
+          marker = L.marker([lat, lng], { icon: deviceIcon }).addTo(map);
+        }
+
+        this._maps[prefix]       = map;
+        this._mapMarkers[prefix] = { marker, icon: deviceIcon };
+
+        // Load GPS route history asynchronously (non-blocking).
+        this._loadRouteHistory(prefix, map, deviceIcon);
+      } catch (err) {
+        console.warn("Freematics: map init failed for", prefix, "–", err.message || err);
+      }
+    }
+  }
+
+  /**
+   * Update marker positions on existing Leaflet map instances.
+   * Called on incremental hass state updates (no full HTML re-render).
+   */
+  _updateMaps() {
+    if (!window.L) return;
+    const L = window.L;
+    for (const prefix of Object.keys(this._maps)) {
+      const map = this._maps[prefix];
+      if (!map) continue;
+      const lat = this._raw(prefix, "lat");
+      const lng = this._raw(prefix, "lng");
+      if (lat === null || lng === null) continue;
+      const info = this._mapMarkers[prefix];
+      if (!info) continue;
+      const newPos = L.latLng(lat, lng);
+      if (info.marker) {
+        info.marker.setLatLng(newPos);
+      } else {
+        // First GPS fix after the map was created without a position.
+        info.marker = L.marker(newPos, { icon: info.icon }).addTo(map);
+        map.setView(newPos, 13);
+      }
+    }
+  }
+
+  /**
+   * Query the HA history API for the last 24 hours of lat/lng data and draw
+   * a route polyline on the map.  A green circle marks the start of the
+   * route; the current position marker is placed on top.
+   *
+   * Failures are silently ignored – route history is a nice-to-have feature
+   * that does not affect the core dashboard functionality.  The route data
+   * comes from HA's database so it survives HA restarts and device standby.
+   */
+  async _loadRouteHistory(prefix, map, deviceIcon) {
+    const L = window.L;
+    if (!L || !this._hass) return;
+    try {
+      const end   = new Date().toISOString();
+      const start = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const latId = `${prefix}_lat`;
+      const lngId = `${prefix}_lng`;
+
+      const [latHist, lngHist] = await Promise.all([
+        this._hass.callApi("GET",
+          `history/period/${start}?filter_entity_id=${latId}&minimal_response=true&end_time=${end}`),
+        this._hass.callApi("GET",
+          `history/period/${start}?filter_entity_id=${lngId}&minimal_response=true&end_time=${end}`),
+      ]);
+
+      const latArr = (Array.isArray(latHist) && latHist[0]) ? latHist[0] : [];
+      const lngArr = (Array.isArray(lngHist) && lngHist[0]) ? lngHist[0] : [];
+      const len = Math.min(latArr.length, lngArr.length);
+      if (len < 2) return;
+
+      const route = [];
+      for (let i = 0; i < len; i++) {
+        const la = parseFloat(latArr[i].state);
+        const lo = parseFloat(lngArr[i].state);
+        if (!isNaN(la) && !isNaN(lo)) route.push([la, lo]);
+      }
+      if (route.length < 2) return;
+
+      // Draw route polyline (blue, semi-transparent).
+      L.polyline(route, { color: "#2196f3", weight: 3, opacity: 0.65 }).addTo(map);
+
+      // Mark route start with a green circle.
+      L.circleMarker(route[0], {
+        radius: 6, fillColor: "#4caf50", color: "#fff",
+        weight: 2, opacity: 1, fillOpacity: 1,
+      }).addTo(map).bindTooltip("Startpunkt");
+
+      // Fit map view to the full route (with padding).
+      map.fitBounds(L.latLngBounds(route).pad(0.15));
+
+      // Re-raise the current-position marker so it renders on top of the route.
+      if (this._mapMarkers[prefix] && this._mapMarkers[prefix].marker) {
+        this._mapMarkers[prefix].marker.remove();
+        this._mapMarkers[prefix].marker = L.marker(
+          this._mapMarkers[prefix].marker.getLatLng(),
+          { icon: deviceIcon, zIndexOffset: 1000 },
+        ).addTo(map);
+      }
+    } catch (err) {
+      // History API not available or no data – silent fallback.
+      console.debug("Freematics: route history not loaded:", err.message || err);
+    }
   }
 
   /* ── Flash Firmware tab ─────────────────────────────────────────── */
