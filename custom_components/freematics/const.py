@@ -73,6 +73,22 @@ CONF_LED_WHITE_EN = "led_white_en"
 # WiFi or cellular connection.  Disable to suppress in-cabin noise.
 CONF_BEEP_EN = "beep_en"
 
+# OBD-II polling control (maps to OBD_EN NVS key, u8 0/1).
+# When enabled (default) the firmware polls standard OBD-II PIDs such as
+# speed, RPM, throttle, and engine load.  Disable to suppress OBD queries
+# (e.g. when no OBD-II vehicle is connected or to reduce ECU bus load).
+CONF_OBD_EN = "obd_en"
+
+# CAN bus control (maps to CAN_EN NVS key, u8 0/1).
+# Reserved for future CAN bus sniffing support.  Defaults to disabled.
+CONF_CAN_EN = "can_en"
+
+# Standby-time override (maps to STANDBY_TIME NVS key, u16, seconds 60-180).
+# The device enters standby after this many seconds of no motion.
+# 0 means "use firmware compile-time default" (currently 180 s).
+CONF_STANDBY_TIME_S = "standby_time_s"
+DEFAULT_STANDBY_TIME_S = 180  # matches STATIONARY_TIME_TABLE last entry
+
 # Device model identifiers (Freematics ONE+ variants)
 CONF_DEVICE_MODEL = "device_model"
 DEVICE_MODEL_A = "model_a"   # Model A: WiFi + Bluetooth (no cellular)
@@ -153,6 +169,9 @@ PID_MAP: dict[str, _PidMapping] = {
     "86":  ("sd_total_mb",     1.0),   # PID_SD_TOTAL_MB: SD total capacity in MiB (0 = no card)
     "87":  ("sd_free_mb",      1.0),   # PID_SD_FREE_MB: SD free space in MiB
     "88":  ("conn_type",       1.0),   # PID_CONN_TYPE: active transport (1=WiFi, 2=Cellular/LTE)
+    "89":  ("obd_state",       1.0),   # PID_OBD_STATE: 1=OBD polling active, 0=disabled
+    "8a":  ("can_state",       1.0),   # PID_CAN_STATE: 1=CAN bus active, 0=disabled
+    "8b":  ("standby_time_device", 1.0), # PID_STANDBY_TIME: standby timeout in seconds (0=firmware default)
     # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
     "104": ("engine_load",        1.0),   # PID_ENGINE_LOAD (%)
     "105": ("coolant_temp",       1.0),   # PID_COOLANT_TEMP (°C)
@@ -230,3 +249,10 @@ CMD_OTA_INTERVAL = "OTA_INTERVAL={}"
 CMD_LED_WHITE = "LED_WHITE={}"
 CMD_LED_RED   = "LED_RED={}"
 CMD_BEEP      = "BEEP={}"
+# OBD / CAN / standby-time runtime control.
+# Values for OBD and CAN are 1 (enable) or 0 (disable).
+# STANDBY_TIME value is in seconds (60-180; 0 = use firmware default 180 s).
+# Changes take effect immediately AND are persisted to NVS so they survive reboot.
+CMD_OBD          = "OBD={}"
+CMD_CAN          = "CAN={}"
+CMD_STANDBY_TIME = "STANDBY_TIME={}"

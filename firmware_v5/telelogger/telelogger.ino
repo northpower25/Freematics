@@ -178,6 +178,38 @@ bool enableLedRed = true;    // red/power LED: lights up in standby / power-on s
 bool enableLedWhite = true;  // white/network LED: lights up during data transmission
 bool enableBeep = true;      // connection beep: short buzz on WiFi/cellular connect
 
+// Runtime OBD / CAN enable flags.  Loaded from NVS by loadConfig().
+// OBD defaults to true so un-provisioned devices keep the existing behaviour.
+// CAN defaults to false (no CAN sniffing by default).
+// Set via NVS keys OBD_EN and CAN_EN (u8, 0=off 1=on).
+bool enableObd = true;   // OBD-II PID polling (compile-time ENABLE_OBD must also be 1)
+bool enableCan = false;  // CAN bus sniffing (future use; NVS key CAN_EN)
+
+// Standby-time override loaded from NVS key STANDBY_TIME (u16, seconds).
+// 0 means "use the compile-time STATIONARY_TIME_TABLE default" (currently 180 s).
+// When set to a value between 60 and 180 it replaces the last (maximum) entry
+// of the stationary-time table so the device enters standby sooner.
+uint16_t nvsStandbyTimeS = 0;
+
+// ---------------------------------------------------------------------------
+// CAN bus sniffing buffer
+// When enableCan is true, process() calls obd.receiveData() to drain incoming
+// CAN frames from the ELM327's monitor-all (ATM1) queue and appends each
+// frame's bytes as a two-hex-chars-per-byte entry in s_canFrameList.
+// The list is exposed via /api/control?cmd=CAN_DATA and cleared when read.
+// ---------------------------------------------------------------------------
+#define CAN_DATA_LIST_MAX 32    // maximum number of stored CAN frame snapshots
+// Ring buffer storing hex-encoded CAN frame payloads, newest last.
+// Each entry is at most 2*8=16 chars (8 data bytes × 2 hex digits).
+// The buffer is guarded by s_canBufMux for cross-task access from dataserver.
+static char   s_canFrameList[CAN_DATA_LIST_MAX][20];
+static int    s_canFrameCount = 0;   // number of valid entries (0 … CAN_DATA_LIST_MAX)
+static uint32_t s_canFrameTotal = 0; // total CAN frames seen since boot (for display)
+static portMUX_TYPE s_canBufMux = portMUX_INITIALIZER_UNLOCKED;
+// Tracks whether sniffing is currently active so we can call sniff(true/false)
+// only on transitions rather than every process() call.
+static bool s_canSniffActive = false;
+
 // Set to true by handlerOTA while an OTA flash is in progress.
 // The telemetry task checks this flag and yields the WiFi to the OTA upload.
 volatile bool s_ota_active = false;
@@ -196,8 +228,9 @@ volatile bool s_ota_active = false;
 // Also set at startup when a previously staged file is found on SD.
 static volatile bool s_ota_pending = false;
 
-// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85) and the
-// connection-type PID (0x88).  Initialised to -1 so the first call to process()
+// Sentinel values for the LED/beep runtime-state PIDs (0x84 / 0x85), the
+// connection-type PID (0x88), and the OBD/CAN/standby PIDs (0x89/0x8a/0x8b).
+// Initialised to -1 so the first call to process()
 // always adds the PIDs to the buffer.  Reset back to -1 by initialize() and
 // whenever a new WiFi or cellular connection is established (in telemetry()), so
 // the current state is always re-sent after a reconnect — preventing a permanent
@@ -207,6 +240,9 @@ static volatile bool s_ota_pending = false;
 static int8_t s_lastLedWhite = -1;
 static int8_t s_lastBeep     = -1;
 static int8_t s_lastConnType = -1;  // PID_CONN_TYPE sentinel: 1=WiFi, 2=Cellular
+static int8_t  s_lastObd         = -1;   // PID_OBD_STATE sentinel
+static int8_t  s_lastCan         = -1;   // PID_CAN_STATE sentinel
+static int16_t s_lastStandbyTime = -1;   // PID_STANDBY_TIME sentinel (seconds)
 
 // Inject-on-next-packet flag: set whenever the sentinels are reset (new
 // connection established or session start).  The telemetry task checks this
@@ -677,6 +713,9 @@ void initialize()
   s_lastLedWhite    = -1;
   s_lastBeep        = -1;
   s_lastConnType    = -1;
+  s_lastObd         = -1;
+  s_lastCan         = -1;
+  s_lastStandbyTime = -1;
   // Signal the telemetry task to inject IST-Status PIDs into the very next
   // transmitted packet so they are not lost to the getNewest() race.
   s_send_state_pids = true;
@@ -696,8 +735,8 @@ void initialize()
 #endif
 
 #if ENABLE_OBD
-  // initialize OBD communication
-  if (!state.check(STATE_OBD_READY)) {
+  // initialize OBD communication (skipped when enableObd=false via NVS key OBD_EN)
+  if (enableObd && !state.check(STATE_OBD_READY)) {
     timeoutsOBD = 0;
     if (obd.init()) {
       Serial.println("OBD:OK");
@@ -710,6 +749,15 @@ void initialize()
       //state.clear(STATE_WORKING);
       //return;
     }
+  }
+  // CAN bus sniffing: enable/disable only on transitions to minimise AT commands.
+  // sniff(true) sends ATM1 to the ELM327 – puts it in "monitor all" mode so every
+  // CAN frame on the bus is captured and readable via receiveData().
+  // Works independently of STATE_OBD_READY; useful even when OBD-II init fails.
+  if (enableCan != s_canSniffActive) {
+    obd.sniff(enableCan);
+    s_canSniffActive = enableCan;
+    Serial.println(enableCan ? "CAN:sniff on" : "CAN:sniff off");
   }
 #endif
 
@@ -964,7 +1012,41 @@ void process()
   }
 #endif
 
-  if (rssi != rssiLast) {
+#if ENABLE_OBD
+  // CAN bus frame capture (when enableCan=true via NVS key CAN_EN).
+  // Drains all frames currently buffered by the ELM327 ATM1 monitor-all mode.
+  // Each receiveData() call reads one frame's payload bytes.  Frames are
+  // hex-encoded and stored in s_canFrameList (ring buffer, newest last).
+  // The HA integration reads this via /api/control?cmd=CAN_DATA, clears it.
+  if (enableCan) {
+    byte rxbuf[32];  // one CAN frame payload: up to 8 data bytes from receiveData
+    int rxbytes;
+    while ((rxbytes = obd.receiveData(rxbuf, sizeof(rxbuf))) > 0) {
+      // Hex-encode the received payload bytes into a local string.
+      char hexEntry[sizeof(rxbuf) * 2 + 1];
+      int hexLen = 0;
+      for (int i = 0; i < rxbytes && hexLen < (int)sizeof(hexEntry) - 2; i++) {
+        hexLen += snprintf(hexEntry + hexLen, sizeof(hexEntry) - hexLen, "%02X", rxbuf[i]);
+      }
+      hexEntry[hexLen] = 0;
+      portENTER_CRITICAL(&s_canBufMux);
+      if (s_canFrameCount < CAN_DATA_LIST_MAX) {
+        // Append entry to the list.
+        strncpy(s_canFrameList[s_canFrameCount], hexEntry, sizeof(s_canFrameList[0]) - 1);
+        s_canFrameList[s_canFrameCount][sizeof(s_canFrameList[0]) - 1] = 0;
+        s_canFrameCount++;
+      } else {
+        // Ring buffer full – drop oldest entry and shift.
+        memmove(s_canFrameList[0], s_canFrameList[1],
+                (CAN_DATA_LIST_MAX - 1) * sizeof(s_canFrameList[0]));
+        strncpy(s_canFrameList[CAN_DATA_LIST_MAX - 1], hexEntry, sizeof(s_canFrameList[0]) - 1);
+        s_canFrameList[CAN_DATA_LIST_MAX - 1][sizeof(s_canFrameList[0]) - 1] = 0;
+      }
+      s_canFrameTotal++;
+      portEXIT_CRITICAL(&s_canBufMux);
+    }
+  }
+#endif
     int val = (rssiLast = rssi);
     buffer->add(PID_CSQ, ELEMENT_INT32, &val, sizeof(val));
   }
@@ -1042,6 +1124,30 @@ void process()
     if ((int8_t)ctv != s_lastConnType) {
       s_lastConnType = (int8_t)ctv;
       buffer->add(PID_CONN_TYPE, ELEMENT_UINT8, &ctv, sizeof(ctv));
+    }
+  }
+
+  // Report OBD / CAN runtime state (PIDs 0x89 / 0x8a) so HA can display
+  // the live IST-Status alongside the configured value from the options flow.
+  {
+    uint8_t ov = enableObd ? 1 : 0;
+    uint8_t cv = enableCan ? 1 : 0;
+    if ((int8_t)ov != s_lastObd) {
+      s_lastObd = (int8_t)ov;
+      buffer->add(PID_OBD_STATE, ELEMENT_UINT8, &ov, sizeof(ov));
+    }
+    if ((int8_t)cv != s_lastCan) {
+      s_lastCan = (int8_t)cv;
+      buffer->add(PID_CAN_STATE, ELEMENT_UINT8, &cv, sizeof(cv));
+    }
+  }
+
+  // Report standby-time override (PID 0x8b).  0 = firmware compile-time default.
+  {
+    int16_t sv = (int16_t)nvsStandbyTimeS;
+    if (sv != s_lastStandbyTime) {
+      s_lastStandbyTime = sv;
+      buffer->add(PID_STANDBY_TIME, ELEMENT_UINT16, &nvsStandbyTimeS, sizeof(nvsStandbyTimeS));
     }
   }
 
@@ -1133,10 +1239,20 @@ void process()
   const int dataIntervals[] = DATA_INTERVAL_TABLE;
 #if ENABLE_OBD || ENABLE_MEMS
   // motion adaptive data interval control
-  const uint16_t stationaryTime[] = STATIONARY_TIME_TABLE;
+  // Build effective stationary-time table, applying STANDBY_TIME NVS override
+  // (nvsStandbyTimeS, 60-180 s) to the last (maximum-standby) entry when set.
+  const uint16_t stationaryTimeDefaults[] = STATIONARY_TIME_TABLE;
+  const byte stationaryCount = sizeof(stationaryTimeDefaults) / sizeof(stationaryTimeDefaults[0]);
+  uint16_t stationaryTime[stationaryCount];
+  for (byte i = 0; i < stationaryCount; i++) {
+    stationaryTime[i] = stationaryTimeDefaults[i];
+  }
+  if (nvsStandbyTimeS >= 60) {
+    stationaryTime[stationaryCount - 1] = nvsStandbyTimeS;
+  }
   unsigned int motionless = (millis() - lastMotionTime) / 1000;
   bool stationary = true;
-  for (byte i = 0; i < sizeof(stationaryTime) / sizeof(stationaryTime[0]); i++) {
+  for (byte i = 0; i < stationaryCount; i++) {
     dataInterval = dataIntervals[i];
     if (motionless < stationaryTime[i] || stationaryTime[i] == 0) {
       stationary = false;
@@ -1316,6 +1432,9 @@ void telemetry(void* inst)
       s_lastLedWhite    = -1;
       s_lastBeep        = -1;
       s_lastConnType    = -1;
+      s_lastObd         = -1;
+      s_lastCan         = -1;
+      s_lastStandbyTime = -1;
       s_send_state_pids = true;
 
       uint32_t t = millis();
@@ -1387,6 +1506,9 @@ void telemetry(void* inst)
             s_lastLedWhite    = -1;
             s_lastBeep        = -1;
             s_lastConnType    = -1;
+            s_lastObd         = -1;
+            s_lastCan         = -1;
+            s_lastStandbyTime = -1;
             s_send_state_pids = true;
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
@@ -1434,6 +1556,9 @@ void telemetry(void* inst)
         s_lastLedWhite    = -1;
         s_lastBeep        = -1;
         s_lastConnType    = -1;
+        s_lastObd         = -1;
+        s_lastCan         = -1;
+        s_lastStandbyTime = -1;
         s_send_state_pids = true;
       }
 
@@ -1578,6 +1703,20 @@ void telemetry(void* inst)
           uint8_t v = state.check(STATE_WIFI_CONNECTED) ? 1 : 2;
           store.log(PID_CONN_TYPE, &v, 1);
           s_lastConnType = (int8_t)v;
+        }
+        {
+          uint8_t ov = enableObd ? 1 : 0;
+          store.log(PID_OBD_STATE, &ov, 1);
+          s_lastObd = (int8_t)ov;
+        }
+        {
+          uint8_t cv = enableCan ? 1 : 0;
+          store.log(PID_CAN_STATE, &cv, 1);
+          s_lastCan = (int8_t)cv;
+        }
+        {
+          store.log(PID_STANDBY_TIME, &nvsStandbyTimeS, 1);
+          s_lastStandbyTime = (int16_t)nvsStandbyTimeS;
         }
 #if STORAGE == STORAGE_SD
         // s_cachedSdTotalMb/Free are kept current by process(); they are 0
@@ -1947,6 +2086,28 @@ void loadConfig()
   uint8_t nvsBeepEn = 1;
   if (nvs_get_u8(nvs, "BEEP_EN", &nvsBeepEn) == ESP_OK) {
     enableBeep = nvsBeepEn != 0;
+  }
+
+  // OBD querying enable/disable (NVS key OBD_EN, u8).
+  // Defaults to 1 (on) so un-provisioned devices keep existing OBD behaviour.
+  uint8_t nvsObdEn = 1;
+  if (nvs_get_u8(nvs, "OBD_EN", &nvsObdEn) == ESP_OK) {
+    enableObd = nvsObdEn != 0;
+  }
+
+  // CAN bus enable/disable (NVS key CAN_EN, u8).
+  // Defaults to 0 (off); reserved for future CAN sniffing support.
+  uint8_t nvsCanEn = 0;
+  if (nvs_get_u8(nvs, "CAN_EN", &nvsCanEn) == ESP_OK) {
+    enableCan = nvsCanEn != 0;
+  }
+
+  // Standby-time override (NVS key STANDBY_TIME, u16, seconds, 60-180).
+  // 0 means "use compile-time STATIONARY_TIME_TABLE default" (currently 180 s).
+  // Values below 60 are clamped to 0 (use default) for safety.
+  uint16_t nvsStby = 0;
+  if (nvs_get_u16(nvs, "STANDBY_TIME", &nvsStby) == ESP_OK) {
+    nvsStandbyTimeS = (nvsStby >= 60) ? nvsStby : 0;
   }
 
   // Optional data-interval override (milliseconds). Minimum 500 ms to avoid

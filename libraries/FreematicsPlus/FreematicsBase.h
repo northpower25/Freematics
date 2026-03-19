@@ -47,6 +47,11 @@
 // update the "WiFi letzte Verbindung" / "LTE letzte Verbindung" timestamps.
 // Value: 1 = WiFi (STATE_WIFI_CONNECTED), 2 = Cellular (SIM7600/LTE).
 #define PID_CONN_TYPE       0x88  // active transport: 1=WiFi, 2=Cellular
+// Runtime OBD / CAN enable state and standby-time override, reported once per
+// session so Home Assistant can show Konfig vs IST-Status in the debug sensor.
+#define PID_OBD_STATE       0x89  // enableObd: 1=OBD querying active, 0=disabled
+#define PID_CAN_STATE       0x8a  // enableCan: 1=CAN bus active, 0=disabled
+#define PID_STANDBY_TIME    0x8b  // nvsStandbyTimeS: standby timeout in seconds (u16; 0=firmware default 180 s)
 #define PID_EXT_SENSOR1 0x90
 #define PID_EXT_SENSOR2 0x91
 

@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 
 from .const import (
     CONF_BEEP_EN,
+    CONF_CAN_EN,
     CONF_CELL_APN,
     CONF_CELL_DEBUG,
     CONF_CLOUD_HOOK_URL,
@@ -30,6 +31,7 @@ from .const import (
     CONF_FLASH_METHOD,
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
+    CONF_OBD_EN,
     CONF_OPERATING_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
@@ -37,6 +39,7 @@ from .const import (
     CONF_SERIAL_PORT,
     CONF_SETTINGS_VERSION,
     CONF_SIM_PIN,
+    CONF_STANDBY_TIME_S,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
@@ -49,6 +52,7 @@ from .const import (
     DEFAULT_OTA_CHECK_INTERVAL_S,
     DEFAULT_OTA_MODE,
     DEFAULT_OPERATING_MODE,
+    DEFAULT_STANDBY_TIME_S,
     DEFAULT_SYNC_INTERVAL_S,
     DEVICE_MODEL_A,
     DEVICE_MODEL_B,
@@ -84,6 +88,9 @@ _NVS_RELEVANT_KEYS = frozenset({
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_BEEP_EN,
+    CONF_OBD_EN,
+    CONF_CAN_EN,
+    CONF_STANDBY_TIME_S,
     CONF_DATA_INTERVAL_MS,
     CONF_SYNC_INTERVAL_S,
     CONF_OTA_MODE,
@@ -313,6 +320,11 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_LED_RED_EN, default=True): bool,
                     vol.Optional(CONF_LED_WHITE_EN, default=True): bool,
                     vol.Optional(CONF_BEEP_EN, default=True): bool,
+                    vol.Optional(CONF_OBD_EN, default=True): bool,
+                    vol.Optional(CONF_CAN_EN, default=False): bool,
+                    vol.Optional(
+                        CONF_STANDBY_TIME_S, default=DEFAULT_STANDBY_TIME_S
+                    ): vol.All(int, vol.Range(min=60, max=180)),
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -489,6 +501,18 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                         CONF_BEEP_EN,
                         default=current.get(CONF_BEEP_EN, True),
                     ): bool,
+                    vol.Optional(
+                        CONF_OBD_EN,
+                        default=current.get(CONF_OBD_EN, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_CAN_EN,
+                        default=current.get(CONF_CAN_EN, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_STANDBY_TIME_S,
+                        default=current.get(CONF_STANDBY_TIME_S, DEFAULT_STANDBY_TIME_S),
+                    ): vol.All(int, vol.Range(min=60, max=180)),
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,
                         default=current.get(CONF_DATA_INTERVAL_MS, DEFAULT_DATA_INTERVAL_MS),

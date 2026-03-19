@@ -220,6 +220,9 @@ def generate_nvs_partition(
     ota_port: int = 443,
     ota_check_interval_s: int = 0,
     nvs_version: str = "",
+    obd_en: bool = True,
+    can_en: bool = False,
+    standby_time_s: int = 0,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -275,6 +278,16 @@ def generate_nvs_partition(
             "<firmware_version>.<settings_timestamp>", e.g.
             "5.1.2026-03-16T16:11:20+00:00".  Empty string = key not written
             (legacy NVS partitions without this key are silently unaffected).
+        obd_en: When True (default), OBD-II PID polling is enabled.  Set to
+            False to disable OBD queries (OBD_EN=0 written to NVS), e.g. when
+            no OBD-II vehicle is connected or to reduce ECU bus load.
+        can_en: When True, CAN bus sniffing is enabled (CAN_EN=1 in NVS).
+            Defaults to False; reserved for future CAN bus firmware support.
+        standby_time_s: Standby-time override in seconds (60-180).
+            Replaces the maximum standby threshold in the firmware's
+            STATIONARY_TIME_TABLE so the device enters standby sooner.
+            0 = use firmware compile-time default (currently 180 s).
+            Written to NVS key STANDBY_TIME (u16) only when non-zero.
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -382,6 +395,14 @@ def generate_nvs_partition(
     # flash or OTA NVS update.
     if nvs_version:
         _add_str("NVS_VER", nvs_version)
+    # OBD-II polling control.  1 = enabled (default); 0 = disabled.
+    # OBD_EN – when 0 the firmware skips OBD init and PID polling entirely.
+    _add_u8("OBD_EN", 1 if obd_en else 0)
+    # CAN bus control.  0 = disabled (default); 1 = enabled (future use).
+    _add_u8("CAN_EN", 1 if can_en else 0)
+    # Standby-time override (seconds, 60-180).  0 = use firmware default (180 s).
+    if standby_time_s and standby_time_s >= 60:
+        _add_u16("STANDBY_TIME", min(standby_time_s, 180))
 
     csv_content = "\n".join(rows) + "\n"
 
