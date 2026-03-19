@@ -12,7 +12,7 @@
  *  3. Console    – Web Serial terminal at 115200 baud (like miniterm).
  */
 
-const PANEL_VERSION = "1.24.0";
+const PANEL_VERSION = "1.25.0";
 
 /** Leaflet map library version used for CDN URLs. */
 const LEAFLET_VERSION = "1.9.4";
@@ -20,6 +20,43 @@ const LEAFLET_VERSION = "1.9.4";
 /** Default map centre (geographic centre of Europe) shown before first GPS fix. */
 const MAP_DEFAULT_CENTER = [51.0, 10.0]; // approx. centre of Germany/Europe
 const MAP_DEFAULT_ZOOM   = 4;
+
+/**
+ * Mapping from current short sensor suffixes to the legacy entity-ID suffixes
+ * used by older installs (PR-36 era) where entity IDs were derived from the
+ * sensor's friendly name rather than the internal key.
+ *
+ * Example: old install → sensor.freematics_one_d40d0b1b_gps_latitude
+ *          new install → sensor.freematics_d40d0b1b_lat
+ *
+ * The dashboard first tries the current suffix; if no matching entity is found
+ * in hass.states it falls back to the legacy name via _resolveEntityId().
+ *
+ * All sensors whose friendly name differs from their internal key are listed
+ * here – not just GPS/battery/accelerometer – so that a device reported by the
+ * user works fully (including coolant, intake, fuel trims, signal, …) without
+ * requiring any manual entity migration in Home Assistant.
+ */
+const LEGACY_SUFFIX_MAP = {
+  "lat":               "gps_latitude",
+  "lng":               "gps_longitude",
+  "alt":               "gps_altitude",
+  "heading":           "gps_heading",
+  "satellites":        "gps_satellites",
+  "hdop":              "gps_hdop",
+  "battery":           "battery_voltage",
+  "acc_x":             "accelerometer_x",
+  "acc_y":             "accelerometer_y",
+  "acc_z":             "accelerometer_z",
+  "signal":            "signal_strength",
+  "device_temp":       "device_temperature",
+  "coolant_temp":      "coolant_temperature",
+  "intake_temp":       "intake_temperature",
+  "short_fuel_trim_1": "short_term_fuel_trim_b1",
+  "long_fuel_trim_1":  "long_term_fuel_trim_b1",
+  "short_fuel_trim_2": "short_term_fuel_trim_b2",
+  "long_fuel_trim_2":  "long_term_fuel_trim_b2",
+};
 
 /* -------------------------------------------------------------------------
  * Shadow-DOM helper
@@ -378,8 +415,30 @@ class FreematicsPanel extends HTMLElement {
     return [...prefixes];
   }
 
+  /**
+   * Resolve the full entity ID for a given prefix + suffix, transparently
+   * handling legacy entity naming used by older installs (PR-36 era).
+   *
+   * Older installations created entity IDs from the sensor's friendly name
+   * (e.g. "GPS Latitude" → "gps_latitude") while the current code uses the
+   * shorter internal key (e.g. "lat").  This method tries the current-style
+   * entity ID first; if it is absent from hass.states it falls back to the
+   * legacy name from LEGACY_SUFFIX_MAP so both naming conventions work
+   * without any manual entity migration.
+   */
+  _resolveEntityId(prefix, suffix) {
+    const newId = `${prefix}_${suffix}`;
+    if (this._hass && this._hass.states[newId]) return newId;
+    const legacy = LEGACY_SUFFIX_MAP[suffix];
+    if (legacy) {
+      const legacyId = `${prefix}_${legacy}`;
+      if (this._hass && this._hass.states[legacyId]) return legacyId;
+    }
+    return newId; // default to current-style when neither exists
+  }
+
   _val(prefix, suffix, decimals = 1) {
-    const state = this._hass && this._hass.states[`${prefix}_${suffix}`];
+    const state = this._hass && this._hass.states[this._resolveEntityId(prefix, suffix)];
     if (!state) return "—";
     if (state.state === "unavailable" || state.state === "unknown") return "0";
     const v = parseFloat(state.state);
@@ -388,7 +447,7 @@ class FreematicsPanel extends HTMLElement {
   }
 
   _raw(prefix, suffix) {
-    const state = this._hass && this._hass.states[`${prefix}_${suffix}`];
+    const state = this._hass && this._hass.states[this._resolveEntityId(prefix, suffix)];
     if (!state) return null;
     const v = parseFloat(state.state);
     return isNaN(v) ? null : v;
@@ -403,7 +462,7 @@ class FreematicsPanel extends HTMLElement {
    * coordinates (lat/lng) so the map link is never shown pointing to 0°N 0°E.
    */
   _rawZ(prefix, suffix) {
-    const state = this._hass && this._hass.states[`${prefix}_${suffix}`];
+    const state = this._hass && this._hass.states[this._resolveEntityId(prefix, suffix)];
     if (!state) return null;
     const v = parseFloat(state.state);
     return isNaN(v) ? 0 : v;
@@ -853,8 +912,8 @@ class FreematicsPanel extends HTMLElement {
     try {
       const end   = new Date().toISOString();
       const start = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-      const latId = `${prefix}_lat`;
-      const lngId = `${prefix}_lng`;
+      const latId = this._resolveEntityId(prefix, "lat");
+      const lngId = this._resolveEntityId(prefix, "lng");
 
       const [latHist, lngHist] = await Promise.all([
         this._hass.callApi("GET",
