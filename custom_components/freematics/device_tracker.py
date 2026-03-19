@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CONF_WEBHOOK_ID, DOMAIN
 
@@ -45,7 +46,7 @@ async def async_setup_entry(
     )
 
 
-class FreematicsDeviceTracker(TrackerEntity):
+class FreematicsDeviceTracker(RestoreEntity, TrackerEntity):
     """GPS tracker entity that merges lat/lon/alt from the webhook payload.
 
     Entity ID: ``device_tracker.freematics_<id8>_standort``
@@ -79,6 +80,39 @@ class FreematicsDeviceTracker(TrackerEntity):
             "manufacturer": "Freematics",
             "model": "ONE+",
         }
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known GPS position after a Home Assistant restart."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None or last_state.state in ("unavailable", "unknown"):
+            return
+        attrs = last_state.attributes
+        try:
+            lat = attrs.get("latitude")
+            lng = attrs.get("longitude")
+            if lat is not None and lng is not None:
+                self._latitude = float(lat)
+                self._longitude = float(lng)
+        except (TypeError, ValueError):
+            _LOGGER.debug("Could not restore GPS coordinates from last state")
+            return
+        try:
+            alt = attrs.get("altitude")
+            if alt is not None:
+                self._altitude = float(alt)
+        except (TypeError, ValueError):
+            pass
+        try:
+            acc = attrs.get("gps_accuracy")
+            if acc is not None:
+                self._gps_accuracy = max(0, int(acc))
+        except (TypeError, ValueError):
+            pass
 
     # ------------------------------------------------------------------
     # TrackerEntity required properties
