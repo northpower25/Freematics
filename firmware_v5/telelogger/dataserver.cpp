@@ -362,6 +362,20 @@ int handlerControl(UrlHandlerParam* param)
         // the firmware version.  Returns "-" when NVS settings have never been
         // applied via OTA (e.g. device was only serial-flashed without NVS update).
         n = snprintf(buf, bufsize, "%s", nvsVersion[0] ? nvsVersion : "-");
+    } else if (!strcmp(cmd, "OBD?")) {
+        // Return current OBD-II polling state: "1" = enabled, "0" = disabled.
+        // Reflects the live enableObd flag (loaded from NVS key OBD_EN at boot
+        // and updated by OBD= set commands).
+        n = snprintf(buf, bufsize, "%u", (unsigned)enableObd);
+    } else if (!strcmp(cmd, "CAN?")) {
+        // Return current CAN bus sniffing state: "1" = enabled, "0" = disabled.
+        // Reflects the live enableCan flag (loaded from NVS key CAN_EN at boot
+        // and updated by CAN= set commands).
+        n = snprintf(buf, bufsize, "%u", (unsigned)enableCan);
+    } else if (!strcmp(cmd, "STANDBY_TIME?")) {
+        // Return the current standby-time override in seconds.
+        // Returns "0" when no override is set (firmware uses compile-time default).
+        n = snprintf(buf, bufsize, "%u", (unsigned)nvsStandbyTimeS);
 #if ENABLE_WIFI
     } else if (!strcmp(cmd, "SSID?")) {
         n = snprintf(buf, bufsize, "%s", wifiSSID[0] ? wifiSSID : "-");
