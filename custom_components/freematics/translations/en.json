@@ -1,154 +1,169 @@
 {
-  "config": {
-    "step": {
-      "user": {
-        "title": "Freematics ONE+ – Connection Type",
-        "description": "Choose how your Freematics ONE+ device will connect to the internet to send data to Home Assistant.",
-        "data": {
-          "connection_type": "Connection type"
-        }
-      },
-      "wifi": {
-        "title": "Freematics ONE+ – WiFi Credentials",
-        "description": "Enter the WiFi network credentials that the Freematics ONE+ should connect to.",
-        "data": {
-          "wifi_ssid": "WiFi SSID",
-          "wifi_password": "WiFi Password"
+    "config": {
+        "step": {
+            "user": {
+                "title": "Freematics ONE+ – Connection Type",
+                "description": "Choose how your Freematics ONE+ device will connect to the internet to send data to Home Assistant.",
+                "data": {
+                    "connection_type": "Connection type"
+                }
+            },
+            "wifi": {
+                "title": "Freematics ONE+ – WiFi Credentials",
+                "description": "Enter the WiFi network credentials that the Freematics ONE+ should connect to.",
+                "data": {
+                    "wifi_ssid": "WiFi SSID",
+                    "wifi_password": "WiFi Password"
+                },
+                "data_description": {
+                    "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "wifi_password": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
+                }
+            },
+            "cellular": {
+                "title": "Freematics ONE+ – Cellular / SIM",
+                "description": "Enter the APN for your cellular provider. Leave blank to use the default APN. The SIM PIN is only required if your SIM card has a PIN lock.",
+                "data": {
+                    "cell_apn": "Cellular APN",
+                    "sim_pin": "SIM PIN (optional)"
+                },
+                "data_description": {
+                    "cell_apn": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "sim_pin": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "webhook": {
+                "title": "Freematics ONE+ – Webhook / Firmware Settings",
+                "description": "A unique webhook has been generated for your device.\n\nCopy the settings below into your firmware configuration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nFull webhook URL (for reference):\n`{webhook_url}`\n\nYou can edit the Webhook ID below if you want to use a custom value.",
+                "data": {
+                    "webhook_id": "Webhook ID"
+                },
+                "data_description": {
+                    "webhook_id": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "device": {
+                "title": "Freematics ONE+ – Device Model",
+                "description": "Select your Freematics ONE+ hardware model. This helps tailor the recommended firmware settings.\n\n- **Model A**: WiFi + Bluetooth, no cellular module\n- **Model B**: WiFi + Bluetooth + 4G LTE cellular\n- **Model H**: WiFi only (no Bluetooth, no cellular)\n\nDetailed hardware specifications at [freematics.com](https://freematics.com).",
+                "data": {
+                    "device_model": "Device model"
+                },
+                "data_description": {
+                    "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "advanced": {
+                "title": "Freematics ONE+ – Operating Mode & OTA",
+                "description": "Choose how the device should operate after flashing. This controls which firmware features are enabled.\n\n**Telelogger** *(recommended for Home Assistant users)*: Pushes telemetry to the HA webhook. Keep HTTPD and BLE *disabled* to free ~104 KB of heap for the TLS connection — this prevents the `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error.\n\n**Datalogger**: Enables the built-in HTTP server (HTTPD) on port 80, exposing `/api/live`, `/api/info`, and related REST endpoints for local network access. Useful without Home Assistant or alongside a local dashboard.\n\n**BLE** is independent of both modes. Enable it only if you use the Freematics Controller App over Bluetooth.\n\n**Cellular debug logging**: Enable to print verbose cellular diagnostics (TX-Preview, hex-dump, AT+CCHSTATUS? and incoming-data notifications) to the serial console. Use only for troubleshooting; disable in normal operation.\n\n**LED settings**: The red/power LED lights up while the device is on or in standby. The white/network LED flashes briefly during each data transmission over WiFi or cellular. Both can be disabled independently to reduce light in the vehicle cabin.\n\n**Beep**: The buzzer emits a short beep each time a WiFi or cellular connection is established. Disable to suppress in-cabin noise.\n\n**Intervals**: leave at `0` to keep firmware defaults (~1000 ms / 120 s).",
+                "data": {
+                    "operating_mode": "Operating mode",
+                    "enable_ble": "Enable BLE (Bluetooth SPP server)",
+                    "cell_debug": "Enable cellular debug logging (NET_DEBUG)",
+                    "led_red_en": "Enable red/power LED (lights up when device is on or in standby)",
+                    "led_white_en": "Enable white/network LED (flashes during WiFi/cellular data transmission)",
+                    "beep_en": "Enable connection beep (short buzzer sound on WiFi/cellular connect)",
+                    "data_interval_ms": "Data-transmission interval (ms, 0 = default ~1000)",
+                    "sync_interval_s": "Server-sync interval (s, 0 = default 120)",
+                    "ota_mode": "OTA firmware update mode",
+                    "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)",
+                    "obd_en": "Enable OBD-II polling (OBD_EN)",
+                    "can_en": "Enable CAN bus sniffing (CAN_EN)",
+                    "standby_time_s": "Standby timeout (seconds, 60-180)"
+                },
+                "data_description": {
+                    "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "enable_ble": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "cell_debug": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "led_red_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "led_white_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "beep_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "data_interval_ms": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "sync_interval_s": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "ota_mode": "**Disabled** – no OTA. **Variant 1 (Pull-OTA)** – device automatically downloads the latest bundled firmware on every interval. **Variant 2 (Cloud OTA)** – only downloads after you press **Publish Firmware for Cloud OTA**. Both variants use a secret token written to device NVS during flashing.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) — *initial provisioning requires serial flash*",
+                    "ota_check_interval_s": "How often the device checks for updates. Set to 0 to disable polling. The OTA token and interval are written to NVS during flashing — re-flash after changing these settings.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "obd_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "can_en": "CAN sniffing requires OBD to be enabled. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "standby_time_s": "Seconds of no motion before the device enters standby. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
+                }
+            },
+            "flash": {
+                "title": "Freematics ONE+ – Flash Method",
+                "description": "Choose how to flash the firmware onto the device.\n\n**Browser Flasher** *(recommended)*: Uses the Web Serial API (Chrome/Edge 89+) and runs directly in your browser. The device must be connected via USB to the computer where your browser is running — not to the HA server. Open the [Browser Flasher]({flasher_url}) from the Freematics sidebar panel. All settings (WiFi, server, OTA token) are embedded automatically.\n\n**Serial USB (HA server)**: Runs `esptool` on the Home Assistant server. Only works if the Freematics ONE+ is connected via USB **directly to the HA server**. All settings including OTA token and interval are written to NVS automatically.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.\n\nFor detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
+                "data": {
+                    "flash_method": "Flash method",
+                    "device_ip": "Device IP address",
+                    "device_port": "Device HTTP port (default: 80)",
+                    "serial_port": "Serial port (e.g. /dev/ttyUSB0)"
+                },
+                "data_description": {
+                    "flash_method": "→ **HA-only** — controls how HA flashes the device; not written to device NVS",
+                    "device_ip": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+                    "device_port": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+                    "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS"
+                }
+            }
         },
-        "data_description": {
-          "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "wifi_password": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
+        "abort": {
+            "already_configured": "This webhook ID is already configured."
         }
-      },
-      "cellular": {
-        "title": "Freematics ONE+ – Cellular / SIM",
-        "description": "Enter the APN for your cellular provider. Leave blank to use the default APN. The SIM PIN is only required if your SIM card has a PIN lock.",
-        "data": {
-          "cell_apn": "Cellular APN",
-          "sim_pin": "SIM PIN (optional)"
-        },
-        "data_description": {
-          "cell_apn": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "sim_pin": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
-        }
-      },
-      "webhook": {
-        "title": "Freematics ONE+ – Webhook / Firmware Settings",
-        "description": "A unique webhook has been generated for your device.\n\nCopy the settings below into your firmware configuration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nFull webhook URL (for reference):\n`{webhook_url}`\n\nYou can edit the Webhook ID below if you want to use a custom value.",
-        "data": {
-          "webhook_id": "Webhook ID"
-        },
-        "data_description": {
-          "webhook_id": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
-        }
-      },
-      "device": {
-        "title": "Freematics ONE+ – Device Model",
-        "description": "Select your Freematics ONE+ hardware model. This helps tailor the recommended firmware settings.\n\n- **Model A**: WiFi + Bluetooth, no cellular module\n- **Model B**: WiFi + Bluetooth + 4G LTE cellular\n- **Model H**: WiFi only (no Bluetooth, no cellular)\n\nDetailed hardware specifications at [freematics.com](https://freematics.com).",
-        "data": {
-          "device_model": "Device model"
-        },
-        "data_description": {
-          "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
-        }
-      },
-      "advanced": {
-        "title": "Freematics ONE+ – Operating Mode & OTA",
-        "description": "Choose how the device should operate after flashing. This controls which firmware features are enabled.\n\n**Telelogger** *(recommended for Home Assistant users)*: Pushes telemetry to the HA webhook. Keep HTTPD and BLE *disabled* to free ~104 KB of heap for the TLS connection — this prevents the `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error.\n\n**Datalogger**: Enables the built-in HTTP server (HTTPD) on port 80, exposing `/api/live`, `/api/info`, and related REST endpoints for local network access. Useful without Home Assistant or alongside a local dashboard.\n\n**BLE** is independent of both modes. Enable it only if you use the Freematics Controller App over Bluetooth.\n\n**Cellular debug logging**: Enable to print verbose cellular diagnostics (TX-Preview, hex-dump, AT+CCHSTATUS? and incoming-data notifications) to the serial console. Use only for troubleshooting; disable in normal operation.\n\n**LED settings**: The red/power LED lights up while the device is on or in standby. The white/network LED flashes briefly during each data transmission over WiFi or cellular. Both can be disabled independently to reduce light in the vehicle cabin.\n\n**Beep**: The buzzer emits a short beep each time a WiFi or cellular connection is established. Disable to suppress in-cabin noise.\n\n**Intervals**: leave at `0` to keep firmware defaults (~1000 ms / 120 s).",
-        "data": {
-          "operating_mode": "Operating mode",
-          "enable_ble": "Enable BLE (Bluetooth SPP server)",
-          "cell_debug": "Enable cellular debug logging (NET_DEBUG)",
-          "led_red_en": "Enable red/power LED (lights up when device is on or in standby)",
-          "led_white_en": "Enable white/network LED (flashes during WiFi/cellular data transmission)",
-          "beep_en": "Enable connection beep (short buzzer sound on WiFi/cellular connect)",
-          "data_interval_ms": "Data-transmission interval (ms, 0 = default ~1000)",
-          "sync_interval_s": "Server-sync interval (s, 0 = default 120)",
-          "ota_mode": "OTA firmware update mode",
-          "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)"
-        },
-        "data_description": {
-          "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "enable_ble": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "cell_debug": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "led_red_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "led_white_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "beep_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "data_interval_ms": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "sync_interval_s": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "ota_mode": "**Disabled** – no OTA. **Variant 1 (Pull-OTA)** – device automatically downloads the latest bundled firmware on every interval. **Variant 2 (Cloud OTA)** – only downloads after you press **Publish Firmware for Cloud OTA**. Both variants use a secret token written to device NVS during flashing.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) — *initial provisioning requires serial flash*",
-          "ota_check_interval_s": "How often the device checks for updates. Set to 0 to disable polling. The OTA token and interval are written to NVS during flashing — re-flash after changing these settings.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
-        }
-      },
-      "flash": {
-        "title": "Freematics ONE+ – Flash Method",
-        "description": "Choose how to flash the firmware onto the device.\n\n**Browser Flasher** *(recommended)*: Uses the Web Serial API (Chrome/Edge 89+) and runs directly in your browser. The device must be connected via USB to the computer where your browser is running — not to the HA server. Open the [Browser Flasher]({flasher_url}) from the Freematics sidebar panel. All settings (WiFi, server, OTA token) are embedded automatically.\n\n**Serial USB (HA server)**: Runs `esptool` on the Home Assistant server. Only works if the Freematics ONE+ is connected via USB **directly to the HA server**. All settings including OTA token and interval are written to NVS automatically.\n\nAfter completing setup, use the **Flash Firmware** buttons in the integration to start the flash process.\n\nFor detailed instructions see the [documentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
-        "data": {
-          "flash_method": "Flash method",
-          "device_ip": "Device IP address",
-          "device_port": "Device HTTP port (default: 80)",
-          "serial_port": "Serial port (e.g. /dev/ttyUSB0)"
-        },
-        "data_description": {
-          "flash_method": "→ **HA-only** — controls how HA flashes the device; not written to device NVS",
-          "device_ip": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
-          "device_port": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
-          "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS"
-        }
-      }
     },
-    "abort": {
-      "already_configured": "This webhook ID is already configured."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Freematics ONE+ – Update Settings",
-        "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.\n\n⚠️ After changing OTA settings, re-provision the device (re-flash NVS via the Browser Flasher or Serial Flash button) so the new token and interval are written to the device.",
-        "data": {
-          "wifi_ssid": "WiFi SSID",
-          "wifi_password": "WiFi Password",
-          "cell_apn": "Cellular APN",
-          "sim_pin": "SIM PIN (optional)",
-          "device_model": "Device model",
-          "operating_mode": "Operating mode",
-          "enable_ble": "Enable BLE (Bluetooth SPP server)",
-          "cell_debug": "Enable cellular debug logging (NET_DEBUG)",
-          "led_red_en": "Enable red/power LED (lights up when device is on or in standby)",
-          "led_white_en": "Enable white/network LED (flashes during WiFi/cellular data transmission)",
-          "beep_en": "Enable connection beep (short buzzer sound on WiFi/cellular connect)",
-          "data_interval_ms": "Data-transmission interval (ms, 0 = default)",
-          "sync_interval_s": "Server-sync interval (s, 0 = default)",
-          "ota_mode": "OTA firmware update mode",
-          "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)",
-          "device_ip": "Device IP address",
-          "device_port": "Device HTTP port",
-          "flash_method": "Flash method",
-          "serial_port": "Serial port"
-        },
-        "data_description": {
-          "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "wifi_password": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "cell_apn": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "sim_pin": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "enable_ble": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "cell_debug": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "led_red_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "led_white_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "beep_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "data_interval_ms": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "sync_interval_s": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-          "ota_mode": "**Disabled** – no automatic updates. **Variant 1 (Pull-OTA)** – device polls HA every interval and downloads the latest bundled firmware. **Variant 2 (Cloud OTA)** – device polls HA but only downloads after you press the **Publish Firmware for Cloud OTA** button on the device page.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) — *initial provisioning requires serial flash*",
-          "ota_check_interval_s": "How often (seconds) the device checks for a new firmware version. Set to 0 to disable polling even when a variant is selected. Requires re-provisioning the device (re-flash) after changes.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-          "device_ip": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
-          "device_port": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
-          "flash_method": "→ **HA-only** — controls how HA flashes the device; not written to device NVS",
-          "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS"
+    "options": {
+        "step": {
+            "init": {
+                "title": "Freematics ONE+ – Update Settings",
+                "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.\n\n⚠️ After changing OTA settings, re-provision the device (re-flash NVS via the Browser Flasher or Serial Flash button) so the new token and interval are written to the device.",
+                "data": {
+                    "wifi_ssid": "WiFi SSID",
+                    "wifi_password": "WiFi Password",
+                    "cell_apn": "Cellular APN",
+                    "sim_pin": "SIM PIN (optional)",
+                    "device_model": "Device model",
+                    "operating_mode": "Operating mode",
+                    "enable_ble": "Enable BLE (Bluetooth SPP server)",
+                    "cell_debug": "Enable cellular debug logging (NET_DEBUG)",
+                    "led_red_en": "Enable red/power LED (lights up when device is on or in standby)",
+                    "led_white_en": "Enable white/network LED (flashes during WiFi/cellular data transmission)",
+                    "beep_en": "Enable connection beep (short buzzer sound on WiFi/cellular connect)",
+                    "data_interval_ms": "Data-transmission interval (ms, 0 = default)",
+                    "sync_interval_s": "Server-sync interval (s, 0 = default)",
+                    "ota_mode": "OTA firmware update mode",
+                    "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)",
+                    "device_ip": "Device IP address",
+                    "device_port": "Device HTTP port",
+                    "flash_method": "Flash method",
+                    "serial_port": "Serial port",
+                    "obd_en": "Enable OBD-II polling (OBD_EN)",
+                    "can_en": "Enable CAN bus sniffing (CAN_EN)",
+                    "standby_time_s": "Standby timeout (seconds, 60-180)"
+                },
+                "data_description": {
+                    "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "wifi_password": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "cell_apn": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "sim_pin": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "enable_ble": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "cell_debug": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "led_red_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "led_white_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "beep_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "data_interval_ms": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "sync_interval_s": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "ota_mode": "**Disabled** – no automatic updates. **Variant 1 (Pull-OTA)** – device polls HA every interval and downloads the latest bundled firmware. **Variant 2 (Cloud OTA)** – device polls HA but only downloads after you press the **Publish Firmware for Cloud OTA** button on the device page.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) — *initial provisioning requires serial flash*",
+                    "ota_check_interval_s": "How often (seconds) the device checks for a new firmware version. Set to 0 to disable polling even when a variant is selected. Requires re-provisioning the device (re-flash) after changes.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "device_ip": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+                    "device_port": "→ **HA-only** — used by HA for WiFi OTA upload and Send Config; not written to device NVS",
+                    "flash_method": "→ **HA-only** — controls how HA flashes the device; not written to device NVS",
+                    "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS",
+                    "obd_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "can_en": "CAN sniffing requires OBD to be enabled. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "standby_time_s": "Seconds of no motion before the device enters standby. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
+                }
+            }
         }
-      }
+    },
+    "errors": {
+        "can_requires_obd": "CAN bus sniffing requires OBD-II polling to be enabled. Please enable OBD first, then enable CAN."
     }
-  }
 }

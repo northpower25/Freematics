@@ -256,3 +256,11 @@ CMD_BEEP      = "BEEP={}"
 CMD_OBD          = "OBD={}"
 CMD_CAN          = "CAN={}"
 CMD_STANDBY_TIME = "STANDBY_TIME={}"
+# Query commands – read current live device NVS state.
+# Device returns "1" / "0" for boolean states, the numeric value for STANDBY_TIME,
+# and raw CAN frame data (newline-separated) for CAN_DATA.
+# Older firmware versions return "ERR" for unrecognised commands.
+CMD_OBD_QUERY          = "OBD?"
+CMD_CAN_QUERY          = "CAN?"
+CMD_STANDBY_TIME_QUERY = "STANDBY_TIME?"
+CMD_CAN_DATA           = "CAN_DATA?"

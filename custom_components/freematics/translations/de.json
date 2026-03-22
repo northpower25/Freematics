@@ -1,154 +1,169 @@
 {
-  "config": {
-    "step": {
-      "user": {
-        "title": "Freematics ONE+ – Verbindungsart",
-        "description": "Wählen Sie aus, wie Ihr Freematics ONE+ Gerät mit dem Internet verbunden wird, um Daten an Home Assistant zu senden.",
-        "data": {
-          "connection_type": "Verbindungsart"
-        }
-      },
-      "wifi": {
-        "title": "Freematics ONE+ – WLAN-Zugangsdaten",
-        "description": "Geben Sie die WLAN-Zugangsdaten ein, mit denen sich der Freematics ONE+ verbinden soll.",
-        "data": {
-          "wifi_ssid": "WLAN-SSID",
-          "wifi_password": "WLAN-Passwort"
+    "config": {
+        "step": {
+            "user": {
+                "title": "Freematics ONE+ – Verbindungsart",
+                "description": "Wählen Sie aus, wie Ihr Freematics ONE+ Gerät mit dem Internet verbunden wird, um Daten an Home Assistant zu senden.",
+                "data": {
+                    "connection_type": "Verbindungsart"
+                }
+            },
+            "wifi": {
+                "title": "Freematics ONE+ – WLAN-Zugangsdaten",
+                "description": "Geben Sie die WLAN-Zugangsdaten ein, mit denen sich der Freematics ONE+ verbinden soll.",
+                "data": {
+                    "wifi_ssid": "WLAN-SSID",
+                    "wifi_password": "WLAN-Passwort"
+                },
+                "data_description": {
+                    "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "wifi_password": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**"
+                }
+            },
+            "cellular": {
+                "title": "Freematics ONE+ – Mobilfunk / SIM",
+                "description": "Geben Sie den APN Ihres Mobilfunkanbieters ein. Lassen Sie das Feld leer, um den Standard-APN zu verwenden. Die SIM-PIN ist nur erforderlich, wenn Ihre SIM-Karte einen PIN-Schutz hat.",
+                "data": {
+                    "cell_apn": "Mobilfunk-APN",
+                    "sim_pin": "SIM-PIN (optional)"
+                },
+                "data_description": {
+                    "cell_apn": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "sim_pin": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "webhook": {
+                "title": "Freematics ONE+ – Webhook / Firmware-Einstellungen",
+                "description": "Es wurde ein eindeutiger Webhook für Ihr Gerät erstellt.\n\nKopieren Sie die folgenden Einstellungen in Ihre Firmware-Konfiguration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nVollständige Webhook-URL (zur Information):\n`{webhook_url}`\n\nSie können die Webhook-ID unten bearbeiten, wenn Sie einen eigenen Wert verwenden möchten.",
+                "data": {
+                    "webhook_id": "Webhook-ID"
+                },
+                "data_description": {
+                    "webhook_id": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "device": {
+                "title": "Freematics ONE+ – Gerätemodell",
+                "description": "Wählen Sie Ihr Freematics ONE+ Hardwaremodell. Dies hilft, die empfohlenen Firmware-Einstellungen anzupassen.\n\n- **Model A**: WLAN + Bluetooth, kein Mobilfunkmodul\n- **Model B**: WLAN + Bluetooth + 4G LTE Mobilfunk\n- **Model H**: Nur WLAN (kein Bluetooth, kein Mobilfunk)\n\nDetaillierte Hardware-Spezifikationen unter [freematics.com](https://freematics.com).",
+                "data": {
+                    "device_model": "Gerätemodell"
+                },
+                "data_description": {
+                    "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "advanced": {
+                "title": "Freematics ONE+ – Betriebsmodus & OTA",
+                "description": "Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll. Dies bestimmt, welche Firmware-Funktionen aktiviert sind.\n\n**Telelogger** *(empfohlen für Home-Assistant-Nutzer)*: Sendet Telemetriedaten per Webhook an HA. HTTPD und BLE *deaktiviert* lassen, um ~104 KB Heap für die TLS-Verbindung freizugeben – das verhindert den `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)`-Fehler.\n\n**Datalogger**: Aktiviert den internen HTTP-Server (HTTPD) auf Port 80 mit den Endpunkten `/api/live`, `/api/info` usw. für den lokalen Netzwerkzugriff. Sinnvoll ohne Home Assistant oder zusammen mit einem lokalen Dashboard.\n\n**BLE** ist unabhängig von beiden Modi. Aktivieren Sie es nur, wenn Sie die Freematics Controller App über Bluetooth verwenden.\n\n**Mobilfunk-Debug-Protokollierung**: Aktivieren, um ausführliche Mobilfunk-Diagnosemeldungen (TX-Vorschau, Hex-Dump, AT+CCHSTATUS? und Eingangs-Benachrichtigungen) auf der seriellen Konsole auszugeben. Nur zur Fehlersuche verwenden; im Normalbetrieb deaktiviert lassen.\n\n**LED-Einstellungen**: Die rote/Power-LED leuchtet, solange das Gerät eingeschaltet oder im Standby ist. Die weiße/Netzwerk-LED blinkt kurz bei jeder Datenübertragung per WLAN oder Mobilfunk. Beide können unabhängig deaktiviert werden, um Licht im Fahrzeuginneren zu reduzieren.\n\n**Piepton**: Der Summer gibt bei jeder erfolgreichen WLAN- oder Mobilfunkverbindung einen kurzen Ton aus. Deaktivieren, um störende Geräusche im Fahrzeug zu unterdrücken.\n\n**Intervalle**: Auf `0` lassen, um die Firmware-Standards beizubehalten (~1000 ms / 120 s).",
+                "data": {
+                    "operating_mode": "Betriebsmodus",
+                    "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
+                    "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
+                    "led_red_en": "Rote/Power-LED aktivieren (leuchtet wenn Gerät an oder im Standby)",
+                    "led_white_en": "Weiße/Netzwerk-LED aktivieren (blinkt bei WLAN/Mobilfunk-Datenübertragung)",
+                    "beep_en": "Verbindungs-Piepton aktivieren (kurzer Signalton bei WLAN/Mobilfunk-Verbindung)",
+                    "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard ~1000)",
+                    "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard 120)",
+                    "ota_mode": "OTA-Firmware-Update-Modus",
+                    "ota_check_interval_s": "OTA-Prüfintervall (Sekunden, 0 = deaktiviert, Standard 3600)",
+                    "obd_en": "OBD-II Abfrage aktivieren (OBD_EN)",
+                    "can_en": "CAN-Bus Sniffing aktivieren (CAN_EN)",
+                    "standby_time_s": "Standby-Timeout (Sekunden, 60-180)"
+                },
+                "data_description": {
+                    "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "enable_ble": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "cell_debug": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "led_red_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "led_white_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "beep_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "data_interval_ms": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "sync_interval_s": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) — *Ersteinrichtung erfordert serielles Flashen*",
+                    "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "obd_en": "→ **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
+                    "can_en": "CAN-Sniffing erfordert aktiviertes OBD. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
+                    "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**"
+                }
+            },
+            "flash": {
+                "title": "Freematics ONE+ – Flash-Methode",
+                "description": "Wählen Sie aus, wie die Firmware auf das Gerät geflasht werden soll.\n\n**Browser-Flasher** *(empfohlen)*: Nutzt die Web Serial API (Chrome/Edge 89+) und läuft direkt im Browser. Das Gerät muss per USB an **Ihrem Computer** (Browser) angeschlossen sein – nicht am HA-Server. Öffnen Sie den [Browser-Flasher]({flasher_url}) über das Freematics-Sidebar-Panel. Alle Einstellungen (WLAN, Server, OTA-Token) werden automatisch eingebettet.\n\n**Seriell USB (HA-Server)**: Führt `esptool` auf dem Home-Assistant-Server aus. Funktioniert **nur**, wenn der Freematics ONE+ per USB **direkt am HA-Server** angeschlossen ist. Alle Einstellungen einschließlich OTA-Token und Intervall werden automatisch in das NVS geschrieben.\n\nNach dem Einrichten können Sie die **Firmware flashen**-Buttons in der Integration verwenden, um den Flash-Vorgang zu starten.\n\nDetaillierte Anweisungen finden Sie in der [Dokumentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
+                "data": {
+                    "flash_method": "Flash-Methode",
+                    "device_ip": "Geräte-IP-Adresse",
+                    "device_port": "HTTP-Port des Geräts (Standard: 80)",
+                    "serial_port": "Serieller Port (z.B. /dev/ttyUSB0)"
+                },
+                "data_description": {
+                    "flash_method": "→ **Nur HA-intern** — steuert, wie HA das Gerät flasht; wird nicht in das Geräte-NVS geschrieben",
+                    "device_ip": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+                    "device_port": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+                    "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS"
+                }
+            }
         },
-        "data_description": {
-          "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "wifi_password": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**"
+        "abort": {
+            "already_configured": "Diese Webhook-ID ist bereits konfiguriert."
         }
-      },
-      "cellular": {
-        "title": "Freematics ONE+ – Mobilfunk / SIM",
-        "description": "Geben Sie den APN Ihres Mobilfunkanbieters ein. Lassen Sie das Feld leer, um den Standard-APN zu verwenden. Die SIM-PIN ist nur erforderlich, wenn Ihre SIM-Karte einen PIN-Schutz hat.",
-        "data": {
-          "cell_apn": "Mobilfunk-APN",
-          "sim_pin": "SIM-PIN (optional)"
-        },
-        "data_description": {
-          "cell_apn": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "sim_pin": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
-        }
-      },
-      "webhook": {
-        "title": "Freematics ONE+ – Webhook / Firmware-Einstellungen",
-        "description": "Es wurde ein eindeutiger Webhook für Ihr Gerät erstellt.\n\nKopieren Sie die folgenden Einstellungen in Ihre Firmware-Konfiguration:\n\n**SERVER_HOST**: `{ha_host}`\n**SERVER_PORT**: `443`\n**HA_WEBHOOK_ID**: `{webhook_id}`\n\nVollständige Webhook-URL (zur Information):\n`{webhook_url}`\n\nSie können die Webhook-ID unten bearbeiten, wenn Sie einen eigenen Wert verwenden möchten.",
-        "data": {
-          "webhook_id": "Webhook-ID"
-        },
-        "data_description": {
-          "webhook_id": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
-        }
-      },
-      "device": {
-        "title": "Freematics ONE+ – Gerätemodell",
-        "description": "Wählen Sie Ihr Freematics ONE+ Hardwaremodell. Dies hilft, die empfohlenen Firmware-Einstellungen anzupassen.\n\n- **Model A**: WLAN + Bluetooth, kein Mobilfunkmodul\n- **Model B**: WLAN + Bluetooth + 4G LTE Mobilfunk\n- **Model H**: Nur WLAN (kein Bluetooth, kein Mobilfunk)\n\nDetaillierte Hardware-Spezifikationen unter [freematics.com](https://freematics.com).",
-        "data": {
-          "device_model": "Gerätemodell"
-        },
-        "data_description": {
-          "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
-        }
-      },
-      "advanced": {
-        "title": "Freematics ONE+ – Betriebsmodus & OTA",
-        "description": "Wählen Sie, wie das Gerät nach dem Flashen betrieben werden soll. Dies bestimmt, welche Firmware-Funktionen aktiviert sind.\n\n**Telelogger** *(empfohlen für Home-Assistant-Nutzer)*: Sendet Telemetriedaten per Webhook an HA. HTTPD und BLE *deaktiviert* lassen, um ~104 KB Heap für die TLS-Verbindung freizugeben – das verhindert den `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)`-Fehler.\n\n**Datalogger**: Aktiviert den internen HTTP-Server (HTTPD) auf Port 80 mit den Endpunkten `/api/live`, `/api/info` usw. für den lokalen Netzwerkzugriff. Sinnvoll ohne Home Assistant oder zusammen mit einem lokalen Dashboard.\n\n**BLE** ist unabhängig von beiden Modi. Aktivieren Sie es nur, wenn Sie die Freematics Controller App über Bluetooth verwenden.\n\n**Mobilfunk-Debug-Protokollierung**: Aktivieren, um ausführliche Mobilfunk-Diagnosemeldungen (TX-Vorschau, Hex-Dump, AT+CCHSTATUS? und Eingangs-Benachrichtigungen) auf der seriellen Konsole auszugeben. Nur zur Fehlersuche verwenden; im Normalbetrieb deaktiviert lassen.\n\n**LED-Einstellungen**: Die rote/Power-LED leuchtet, solange das Gerät eingeschaltet oder im Standby ist. Die weiße/Netzwerk-LED blinkt kurz bei jeder Datenübertragung per WLAN oder Mobilfunk. Beide können unabhängig deaktiviert werden, um Licht im Fahrzeuginneren zu reduzieren.\n\n**Piepton**: Der Summer gibt bei jeder erfolgreichen WLAN- oder Mobilfunkverbindung einen kurzen Ton aus. Deaktivieren, um störende Geräusche im Fahrzeug zu unterdrücken.\n\n**Intervalle**: Auf `0` lassen, um die Firmware-Standards beizubehalten (~1000 ms / 120 s).",
-        "data": {
-          "operating_mode": "Betriebsmodus",
-          "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
-          "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
-          "led_red_en": "Rote/Power-LED aktivieren (leuchtet wenn Gerät an oder im Standby)",
-          "led_white_en": "Weiße/Netzwerk-LED aktivieren (blinkt bei WLAN/Mobilfunk-Datenübertragung)",
-          "beep_en": "Verbindungs-Piepton aktivieren (kurzer Signalton bei WLAN/Mobilfunk-Verbindung)",
-          "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard ~1000)",
-          "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard 120)",
-          "ota_mode": "OTA-Firmware-Update-Modus",
-          "ota_check_interval_s": "OTA-Prüfintervall (Sekunden, 0 = deaktiviert, Standard 3600)"
-        },
-        "data_description": {
-          "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "enable_ble": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "cell_debug": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "led_red_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "led_white_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "beep_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "data_interval_ms": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "sync_interval_s": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) — *Ersteinrichtung erfordert serielles Flashen*",
-          "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**"
-        }
-      },
-      "flash": {
-        "title": "Freematics ONE+ – Flash-Methode",
-        "description": "Wählen Sie aus, wie die Firmware auf das Gerät geflasht werden soll.\n\n**Browser-Flasher** *(empfohlen)*: Nutzt die Web Serial API (Chrome/Edge 89+) und läuft direkt im Browser. Das Gerät muss per USB an **Ihrem Computer** (Browser) angeschlossen sein – nicht am HA-Server. Öffnen Sie den [Browser-Flasher]({flasher_url}) über das Freematics-Sidebar-Panel. Alle Einstellungen (WLAN, Server, OTA-Token) werden automatisch eingebettet.\n\n**Seriell USB (HA-Server)**: Führt `esptool` auf dem Home-Assistant-Server aus. Funktioniert **nur**, wenn der Freematics ONE+ per USB **direkt am HA-Server** angeschlossen ist. Alle Einstellungen einschließlich OTA-Token und Intervall werden automatisch in das NVS geschrieben.\n\nNach dem Einrichten können Sie die **Firmware flashen**-Buttons in der Integration verwenden, um den Flash-Vorgang zu starten.\n\nDetaillierte Anweisungen finden Sie in der [Dokumentation](https://github.com/northpower25/Freematics/blob/master/docs/README.md#firmware-flashing).",
-        "data": {
-          "flash_method": "Flash-Methode",
-          "device_ip": "Geräte-IP-Adresse",
-          "device_port": "HTTP-Port des Geräts (Standard: 80)",
-          "serial_port": "Serieller Port (z.B. /dev/ttyUSB0)"
-        },
-        "data_description": {
-          "flash_method": "→ **Nur HA-intern** — steuert, wie HA das Gerät flasht; wird nicht in das Geräte-NVS geschrieben",
-          "device_ip": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
-          "device_port": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
-          "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS"
-        }
-      }
     },
-    "abort": {
-      "already_configured": "Diese Webhook-ID ist bereits konfiguriert."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Freematics ONE+ – Einstellungen aktualisieren",
-        "description": "Aktualisieren Sie die Geräteeinstellungen. Änderungen werden beim nächsten Flash-Vorgang oder beim Drücken von **Konfiguration an Gerät senden** übernommen.\n\n⚠️ Nach Änderungen an OTA-Einstellungen muss das Gerät neu provisioniert werden (NVS neu flashen via Browser-Flasher oder Seriell-Flash-Button), damit der neue Token und das Intervall auf das Gerät geschrieben werden.",
-        "data": {
-          "wifi_ssid": "WLAN-SSID",
-          "wifi_password": "WLAN-Passwort",
-          "cell_apn": "Mobilfunk-APN",
-          "sim_pin": "SIM-PIN (optional)",
-          "device_model": "Gerätemodell",
-          "operating_mode": "Betriebsmodus",
-          "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
-          "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
-          "led_red_en": "Rote/Power-LED aktivieren (leuchtet wenn Gerät an oder im Standby)",
-          "led_white_en": "Weiße/Netzwerk-LED aktivieren (blinkt bei WLAN/Mobilfunk-Datenübertragung)",
-          "beep_en": "Verbindungs-Piepton aktivieren (kurzer Signalton bei WLAN/Mobilfunk-Verbindung)",
-          "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard)",
-          "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard)",
-          "ota_mode": "OTA-Firmware-Update-Modus",
-          "ota_check_interval_s": "OTA-Prüfintervall (Sekunden, 0 = deaktiviert, Standard 3600)",
-          "device_ip": "Geräte-IP-Adresse",
-          "device_port": "HTTP-Port des Geräts",
-          "flash_method": "Flash-Methode",
-          "serial_port": "Serieller Port"
-        },
-        "data_description": {
-          "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "wifi_password": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "cell_apn": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "sim_pin": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "enable_ble": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "cell_debug": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "led_red_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "led_white_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "beep_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "data_interval_ms": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "sync_interval_s": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-          "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) — *Ersteinrichtung erfordert serielles Flashen*",
-          "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
-          "device_ip": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
-          "device_port": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
-          "flash_method": "→ **Nur HA-intern** — steuert, wie HA das Gerät flasht; wird nicht in das Geräte-NVS geschrieben",
-          "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS"
+    "options": {
+        "step": {
+            "init": {
+                "title": "Freematics ONE+ – Einstellungen aktualisieren",
+                "description": "Aktualisieren Sie die Geräteeinstellungen. Änderungen werden beim nächsten Flash-Vorgang oder beim Drücken von **Konfiguration an Gerät senden** übernommen.\n\n⚠️ Nach Änderungen an OTA-Einstellungen muss das Gerät neu provisioniert werden (NVS neu flashen via Browser-Flasher oder Seriell-Flash-Button), damit der neue Token und das Intervall auf das Gerät geschrieben werden.",
+                "data": {
+                    "wifi_ssid": "WLAN-SSID",
+                    "wifi_password": "WLAN-Passwort",
+                    "cell_apn": "Mobilfunk-APN",
+                    "sim_pin": "SIM-PIN (optional)",
+                    "device_model": "Gerätemodell",
+                    "operating_mode": "Betriebsmodus",
+                    "enable_ble": "BLE aktivieren (Bluetooth-SPP-Server)",
+                    "cell_debug": "Mobilfunk-Debug-Protokollierung aktivieren (NET_DEBUG)",
+                    "led_red_en": "Rote/Power-LED aktivieren (leuchtet wenn Gerät an oder im Standby)",
+                    "led_white_en": "Weiße/Netzwerk-LED aktivieren (blinkt bei WLAN/Mobilfunk-Datenübertragung)",
+                    "beep_en": "Verbindungs-Piepton aktivieren (kurzer Signalton bei WLAN/Mobilfunk-Verbindung)",
+                    "data_interval_ms": "Datenübertragungs-Intervall (ms, 0 = Standard)",
+                    "sync_interval_s": "Server-Sync-Intervall (s, 0 = Standard)",
+                    "ota_mode": "OTA-Firmware-Update-Modus",
+                    "ota_check_interval_s": "OTA-Prüfintervall (Sekunden, 0 = deaktiviert, Standard 3600)",
+                    "device_ip": "Geräte-IP-Adresse",
+                    "device_port": "HTTP-Port des Geräts",
+                    "flash_method": "Flash-Methode",
+                    "serial_port": "Serieller Port",
+                    "obd_en": "OBD-II Abfrage aktivieren (OBD_EN)",
+                    "can_en": "CAN-Bus Sniffing aktivieren (CAN_EN)",
+                    "standby_time_s": "Standby-Timeout (Sekunden, 60-180)"
+                },
+                "data_description": {
+                    "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "wifi_password": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "cell_apn": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "sim_pin": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "enable_ble": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "cell_debug": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "led_red_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "led_white_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "beep_en": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "data_interval_ms": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "sync_interval_s": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
+                    "ota_mode": "**Deaktiviert** – kein OTA. **Variante 1 (Pull-OTA)** – Gerät lädt die neueste Firmware automatisch bei jedem Prüfintervall herunter. **Variante 2 (Cloud OTA)** – lädt erst herunter, wenn Sie **Firmware für Cloud OTA veröffentlichen** drücken. Beide Varianten verwenden einen geheimen Token, der beim Flashen in das Geräte-NVS geschrieben wird.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) — *Ersteinrichtung erfordert serielles Flashen*",
+                    "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
+                    "device_ip": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+                    "device_port": "→ **Nur HA-intern** — wird von HA für WLAN-OTA-Upload und Konfiguration senden genutzt; nicht im Geräte-NVS",
+                    "flash_method": "→ **Nur HA-intern** — steuert, wie HA das Gerät flasht; wird nicht in das Geräte-NVS geschrieben",
+                    "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS",
+                    "obd_en": "→ **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
+                    "can_en": "CAN-Sniffing erfordert aktiviertes OBD. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
+                    "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**"
+                }
+            }
         }
-      }
+    },
+    "errors": {
+        "can_requires_obd": "CAN-Bus Sniffing erfordert aktiviertes OBD-II. Bitte zuerst OBD aktivieren, dann CAN aktivieren."
     }
-  }
 }

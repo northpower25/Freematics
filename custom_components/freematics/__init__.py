@@ -46,6 +46,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import CONF_WEBHOOK_ID, DOMAIN, PID_MAP
 from .const import (
+    CONF_CAN_EN,
     CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DEVICE_IP,
@@ -53,16 +54,19 @@ from .const import (
     CONF_ENABLE_BLE,
     CONF_BEEP_EN,
     CONF_LED_WHITE_EN,
+    CONF_OBD_EN,
     CONF_OPERATING_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
     CONF_SETTINGS_VERSION,
+    CONF_STANDBY_TIME_S,
     CONF_WIFI_SSID,
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEBUG_HISTORY_SIZE,
     DEFAULT_DEVICE_PORT,
+    DEFAULT_STANDBY_TIME_S,
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
     OTA_MODE_DISABLED,
@@ -316,6 +320,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _ble_enabled: bool = bool(_cfg.get(CONF_ENABLE_BLE, False))
     _led_white_en: bool = bool(_cfg.get(CONF_LED_WHITE_EN, True))
     _beep_en: bool = bool(_cfg.get(CONF_BEEP_EN, True))
+    _obd_en: bool = bool(_cfg.get(CONF_OBD_EN, True))
+    _can_en: bool = bool(_cfg.get(CONF_CAN_EN, False))
+    _standby_time_s: int = int(_cfg.get(CONF_STANDBY_TIME_S, DEFAULT_STANDBY_TIME_S))
     # WiFi SSID from config — shown in the debug entity as the "configured" SSID
     # so the user can confirm which credentials were last provisioned to the device.
     _wifi_ssid_configured: str = _cfg.get(CONF_WIFI_SSID, "")
@@ -422,6 +429,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # None means "not yet reported by device".
         "led_white_device": None,
         "beep_device": None,
+        # OBD state (PID 0x89), CAN state (PID 0x8a), standby time (PID 0x8b) –
+        # live device state reported in telemetry.  None means "not yet received".
+        "obd_state_device": None,
+        "can_state_device": None,
+        "standby_time_device": None,
+        # Raw CAN frames from CAN_DATA? query (list of strings, refreshed every 60 s).
+        "can_frames": [],
         # WiFi SSID reported by the device via /api/control?cmd=SSID? query.
         # Queried at most once per minute alongside SD info (rate-limited via
         # _last_info_query_t).  None means not yet queried or no device IP.
@@ -508,6 +522,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         _ota_meta_url,
                         _wifi_ssid_configured,
                         _effective_version,
+                        _obd_en, _can_en, _standby_time_s,
                     ),
                 )
             return
@@ -579,6 +594,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if "beep_state" in data:
             diag["beep_device"] = bool(data["beep_state"])
 
+        # OBD state (PID 0x89), CAN state (PID 0x8a), standby time (PID 0x8b) –
+        # firmware reports these so HA can show the live device configuration.
+        # Values arrive as floats after PID_MAP scale (1.0 = active, 0.0 = disabled).
+        if "obd_state" in data:
+            diag["obd_state_device"] = bool(data["obd_state"])
+        if "can_state" in data:
+            diag["can_state_device"] = bool(data["can_state"])
+        if "standby_time_device" in data:
+            # Store as integer seconds; 0 means "use firmware default".
+            diag["standby_time_device"] = int(data["standby_time_device"])
+
         # Live SD card status – firmware sends PID 0x86 (sd_total_mb) and
         # 0x87 (sd_free_mb) once per minute.  sd_total_mb == 0 means no card.
         # Both PIDs are always transmitted together in the same buffer, but
@@ -622,7 +648,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _ota_meta_url,
                 _wifi_ssid_configured,
                 _effective_version,
+                _obd_en, _can_en, _standby_time_s,
             ),
+        )
+        # Notify the CAN debug sensor with the latest CAN state and frames.
+        async_dispatcher_send(
+            hass,
+            f"{DOMAIN}_{webhook_id}_can_debug",
+            _build_can_debug_payload(diag, _can_en, now_iso),
         )
 
     async def _refresh_device_info() -> None:
@@ -633,9 +666,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         they never disrupt normal telemetry processing.
 
         Queries:
-          - /api/info       → SD card total/used bytes, fw/nvs_ver
-          - /api/control?cmd=SSID?    → WiFi SSID currently in NVS on the device
-          - /api/control?cmd=NVS_VER? → NVS settings version currently in NVS
+          - /api/info                    → SD card total/used bytes, fw/nvs_ver
+          - /api/control?cmd=SSID?       → WiFi SSID currently in NVS on the device
+          - /api/control?cmd=NVS_VER?    → NVS settings version currently in NVS
+          - /api/control?cmd=OBD?        → OBD polling enabled state (1/0)
+          - /api/control?cmd=CAN?        → CAN sniffing enabled state (1/0)
+          - /api/control?cmd=STANDBY_TIME? → standby timeout in seconds
+          - /api/control?cmd=CAN_DATA?   → raw CAN frames snapshot (newline-separated)
         """
         url = f"http://{_device_ip}:{_httpd_port}/api/info"
         try:
@@ -716,6 +753,76 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Freematics NVS_VER? query to %s failed: %s", nvs_ver_url, exc)
 
+        # Query live OBD polling state from device NVS (OBD?).
+        # "1" = OBD active, "0" = OBD disabled.  "ERR" / "-" = not supported.
+        obd_state_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=OBD?"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(obd_state_url) as resp:
+                    if resp.status == 200:
+                        obd_raw = (await resp.text()).strip()
+                        if obd_raw and obd_raw not in ("ERR", "-"):
+                            diag["obd_state_device"] = obd_raw == "1"
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Freematics OBD? query to %s failed: %s", obd_state_url, exc)
+
+        # Query live CAN sniffing state from device NVS (CAN?).
+        # "1" = CAN active, "0" = CAN disabled.  "ERR" / "-" = not supported.
+        can_state_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=CAN?"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(can_state_url) as resp:
+                    if resp.status == 200:
+                        can_raw = (await resp.text()).strip()
+                        if can_raw and can_raw not in ("ERR", "-"):
+                            diag["can_state_device"] = can_raw == "1"
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Freematics CAN? query to %s failed: %s", can_state_url, exc)
+
+        # Query live standby timeout from device NVS (STANDBY_TIME?).
+        # Returns the current standby time in seconds (e.g. "180").
+        standby_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=STANDBY_TIME?"
+        try:
+            session = async_get_clientsession(hass)
+            async with asyncio.timeout(5):
+                async with session.get(standby_url) as resp:
+                    if resp.status == 200:
+                        standby_raw = (await resp.text()).strip()
+                        if standby_raw and standby_raw not in ("ERR", "-"):
+                            try:
+                                diag["standby_time_device"] = int(standby_raw)
+                            except ValueError:
+                                pass
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug(
+                "Freematics STANDBY_TIME? query to %s failed: %s", standby_url, exc
+            )
+
+        # Query raw CAN frame snapshot from the device (CAN_DATA?).
+        # Returns newline-separated CAN frame strings (e.g. "0x123:DE AD BE EF\n...").
+        # Only queried when CAN sniffing is configured to be enabled.
+        if _can_en:
+            can_data_url = f"http://{_device_ip}:{_httpd_port}/api/control?cmd=CAN_DATA?"
+            try:
+                session = async_get_clientsession(hass)
+                async with asyncio.timeout(5):
+                    async with session.get(can_data_url) as resp:
+                        if resp.status == 200:
+                            can_data_raw = (await resp.text()).strip()
+                            if can_data_raw and can_data_raw not in ("ERR", "-"):
+                                # Split into individual frame strings; trim blank lines.
+                                diag["can_frames"] = [
+                                    line for line in can_data_raw.splitlines() if line.strip()
+                                ]
+                            else:
+                                diag["can_frames"] = []
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Freematics CAN_DATA? query to %s failed: %s", can_data_url, exc
+                )
+
     async_register(
         hass,
         DOMAIN,
@@ -748,7 +855,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _ota_meta_url,
             _wifi_ssid_configured,
             _effective_version,
+            _obd_en, _can_en, _standby_time_s,
         ),
+        # Initial CAN debug payload so FreematicsCanDebugSensor is informative
+        # immediately (before any webhook or device query arrives).
+        "initial_can_debug": _build_can_debug_payload(diag, _can_en, ""),
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -785,6 +896,9 @@ def _build_debug_payload(
     ota_meta_url: str = "",
     wifi_ssid_configured: str = "",
     fw_version_config: str = "",
+    obd_en: bool = True,
+    can_en: bool = False,
+    standby_time_s: int = DEFAULT_STANDBY_TIME_S,
 ) -> dict:
     """Assemble the debug dispatcher payload from current diagnostic state."""
     _UNK = "Unbekannt"
@@ -809,6 +923,15 @@ def _build_debug_payload(
         "disabled": "Deaktiviert",
     }
     _ota_mode_label = _ota_mode_labels.get(ota_mode, ota_mode or "Deaktiviert")
+
+    # Standby-time display: show seconds or "Firmware-Standard" when 0.
+    _standby_time_conf = (
+        f"{standby_time_s} s" if standby_time_s > 0 else "Firmware-Standard (180 s)"
+    )
+    _standby_time_raw = diag.get("standby_time_device")
+    _standby_time_dev = (
+        f"{_standby_time_raw} s" if _standby_time_raw is not None else _UNK
+    )
 
     return {
         "connection_type": conn_label,
@@ -864,6 +987,14 @@ def _build_debug_payload(
         # Stays "Unbekannt" until the device sends its first telemetry packet.
         "led_white_device": _opt_bool(diag.get("led_white_device")),
         "beep_device": _opt_bool(diag.get("beep_device")),
+        # OBD / CAN / standby-time – configured value (from HA config entry) and
+        # live device state (from telemetry PID 0x89/0x8a/0x8b or device query).
+        "obd_enable_configured": _JA if obd_en else _NEIN,
+        "obd_state_device": _opt_bool(diag.get("obd_state_device")),
+        "can_enable_configured": _JA if can_en else _NEIN,
+        "can_state_device": _opt_bool(diag.get("can_state_device")),
+        "standby_time_configured": _standby_time_conf,
+        "standby_time_device": _standby_time_dev,
         # FW version (config) – the effective version HA expects the device to have.
         # Format: "<FIRMWARE_VERSION>.<settings_timestamp>" (e.g. "5.1.2026-03-17T16:32:29+00:00")
         # or just FIRMWARE_VERSION when no NVS settings version is set.
@@ -894,6 +1025,26 @@ def _build_debug_payload(
         # Raw data for advanced debugging
         "raw_data": list(raw_history),
         "errors": list(error_log),
+    }
+
+
+def _build_can_debug_payload(
+    diag: dict,
+    can_en: bool,
+    now_iso: str,
+) -> dict:
+    """Assemble the CAN debug dispatcher payload from current diagnostic state."""
+    _UNK = "Unbekannt"
+    _JA = "Ja"
+    _NEIN = "Nein"
+    can_state = diag.get("can_state_device")
+    return {
+        "can_enable_configured": _JA if can_en else _NEIN,
+        "can_state_device": (
+            _JA if can_state is True else (_NEIN if can_state is False else _UNK)
+        ),
+        "can_frames": list(diag.get("can_frames") or []),
+        "last_update": now_iso or _UNK,
     }
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
