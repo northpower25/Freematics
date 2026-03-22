@@ -1047,6 +1047,7 @@ void process()
     }
   }
 #endif
+  if (rssi != rssiLast) {
     int val = (rssiLast = rssi);
     buffer->add(PID_CSQ, ELEMENT_INT32, &val, sizeof(val));
   }
