@@ -69,6 +69,7 @@ from .const import (
     CONF_CELL_APN,
     CONF_CELL_DEBUG,
     CONF_BEEP_EN,
+    CONF_CAN_EN,
     CONF_CLOUD_HOOK_URL,
     CONF_DATA_INTERVAL_MS,
     CONF_DEVICE_IP,
@@ -77,17 +78,20 @@ from .const import (
     CONF_ENABLE_HTTPD,
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
+    CONF_OBD_EN,
     CONF_OPERATING_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
     CONF_OTA_TOKEN,
     CONF_SETTINGS_VERSION,
     CONF_SIM_PIN,
+    CONF_STANDBY_TIME_S,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
     DEFAULT_DEVICE_PORT,
+    DEFAULT_STANDBY_TIME_S,
     DOMAIN,
     FIRMWARE_VERSION,
     OPERATING_MODE_DATALOGGER,
@@ -852,6 +856,14 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     led_red_en = bool(cfg.get(CONF_LED_RED_EN, True))
     led_white_en = bool(cfg.get(CONF_LED_WHITE_EN, True))
     beep_en = bool(cfg.get(CONF_BEEP_EN, True))
+    obd_en = bool(cfg.get(CONF_OBD_EN, True))
+    can_en = bool(cfg.get(CONF_CAN_EN, False))
+    standby_time_s = int(cfg.get(CONF_STANDBY_TIME_S, DEFAULT_STANDBY_TIME_S))
+    # Clamp to valid range; treat 180 (firmware default) as 0 = use compile-time default
+    if standby_time_s >= 180:
+        standby_time_s = 0
+    elif standby_time_s > 0 and standby_time_s < 60:
+        standby_time_s = 60
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
     # NVS settings version: "<firmware_version>.<settings_timestamp>" so the
@@ -1171,6 +1183,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "led_red_en": led_red_en,
         "led_white_en": led_white_en,
         "beep_en": beep_en,
+        "obd_en": obd_en,
+        "can_en": can_en,
+        "standby_time_s": standby_time_s,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
         "ota_token": ota_token,
@@ -1247,6 +1262,9 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs.get("ota_port", 443),
             kwargs.get("ota_check_interval_s", 0),
             kwargs.get("nvs_version", ""),
+            kwargs.get("obd_en", True),
+            kwargs.get("can_en", False),
+            kwargs.get("standby_time_s", 0),
         )
 
         if nvs_data is None:
@@ -1349,6 +1367,9 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs.get("ota_port", 443),
             kwargs.get("ota_check_interval_s", 0),
             kwargs.get("nvs_version", ""),
+            kwargs.get("obd_en", True),
+            kwargs.get("can_en", False),
+            kwargs.get("standby_time_s", 0),
         )
 
         if nvs_data is None:
@@ -1840,6 +1861,9 @@ class FreematicsOtaPullView(HomeAssistantView):
                     kwargs.get("ota_port", 443),
                     kwargs.get("ota_check_interval_s", 0),
                     kwargs.get("nvs_version", ""),
+                    kwargs.get("obd_en", True),
+                    kwargs.get("can_en", False),
+                    kwargs.get("standby_time_s", 0),
                 )
             except ImportError:
                 nvs_data = None

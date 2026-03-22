@@ -55,6 +55,14 @@ async def async_setup_entry(
     )
     initial_entities.append(debug_sensor)
 
+    # CAN Bus Debug sensor – shows CAN active state; raw CAN frames as attributes.
+    initial_can_debug = entry_data.get("initial_can_debug", {})
+    can_debug_sensor = FreematicsCanDebugSensor(
+        webhook_id=webhook_id,
+        initial_can_debug=initial_can_debug,
+    )
+    initial_entities.append(can_debug_sensor)
+
     async_add_entities(initial_entities)
 
     @callback
@@ -74,6 +82,11 @@ async def async_setup_entry(
         """Forward debug / history data to the debug sensor."""
         debug_sensor.update_debug(debug_data)
 
+    @callback
+    def handle_can_debug(can_data: dict) -> None:
+        """Forward CAN debug data to the CAN debug sensor."""
+        can_debug_sensor.update_can_data(can_data)
+
     entry.async_on_unload(
         async_dispatcher_connect(
             hass,
@@ -86,6 +99,13 @@ async def async_setup_entry(
             hass,
             f"{DOMAIN}_{webhook_id}_debug",
             handle_debug,
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            f"{DOMAIN}_{webhook_id}_can_debug",
+            handle_can_debug,
         )
     )
 
@@ -249,6 +269,13 @@ class FreematicsDebugSensor(SensorEntity):
             # White LED and beep tone live device state (reported by firmware via PID 0x84/0x85)
             "led_white_device": _u,
             "beep_device": _u,
+            # OBD / CAN / standby – Konfig (from HA config entry) and IST (from device PIDs)
+            "obd_enable_configured": _u,
+            "obd_state_device": _u,
+            "can_enable_configured": _u,
+            "can_state_device": _u,
+            "standby_time_configured": _u,
+            "standby_time_device": _u,
             # WiFi SSID – configured value (from HA setup/config flow) and live
             # device value (queried via /api/control?cmd=SSID? when device IP is set).
             "wifi_ssid_configured": _u,
@@ -323,6 +350,13 @@ class FreematicsDebugSensor(SensorEntity):
             # "Unbekannt" until the device sends its first telemetry packet with PID 0x84/0x85.
             "Weiße LED (IST)": d["led_white_device"],
             "Beep Ton (IST)": d["beep_device"],
+            # OBD / CAN / standby-time – configured value and live device state
+            "OBD aktiviert (Konfig)": d["obd_enable_configured"],
+            "OBD aktiviert (IST)": d["obd_state_device"],
+            "CAN aktiviert (Konfig)": d["can_enable_configured"],
+            "CAN aktiviert (IST)": d["can_state_device"],
+            "Standby Zeit (Konfig)": d["standby_time_configured"],
+            "Standby Zeit (IST)": d["standby_time_device"],
             # OTA configuration (from HA config entry – what was provisioned at last flash)
             "OTA Modus": d["ota_mode"],
             "OTA Token gesetzt": d["ota_token_set"],
@@ -353,5 +387,86 @@ class FreematicsDebugSensor(SensorEntity):
             if key in debug_data:
                 self._debug[key] = debug_data[key]
 
+        self.async_write_ha_state()
+
+
+class FreematicsCanDebugSensor(SensorEntity):
+    """Dedicated CAN Bus Debug sensor.
+
+    Exposes the live CAN bus state and a snapshot of raw CAN frames captured by
+    the device.  The entity state reflects whether CAN sniffing is currently
+    active on the device; the attributes contain the last known raw frame data
+    queried via ``/api/control?cmd=CAN_DATA?`` and the configured / device
+    CAN enable states.
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:can-bus"
+
+    _UNK = "Unbekannt"
+
+    def __init__(
+        self,
+        webhook_id: str,
+        initial_can_debug: dict | None = None,
+    ) -> None:
+        """Initialise the CAN debug sensor."""
+        device_slug = webhook_id[:8]
+        self._webhook_id = webhook_id
+        self._attr_name = "CAN Debug"
+        self._attr_unique_id = f"freematics_{webhook_id}_can_debug"
+        self._attr_suggested_object_id = f"freematics_{device_slug}_can_debug"
+        self._attr_native_value = self._UNK
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, webhook_id)},
+            "name": f"Freematics ONE+ ({device_slug})",
+            "manufacturer": "Freematics",
+            "model": "ONE+",
+        }
+
+        _u = self._UNK
+        self._can_data: dict = {
+            # Whether CAN sniffing is enabled in the HA config entry (NVS provisioned).
+            "can_enable_configured": _u,
+            # Live device CAN state (from PID 0x8a or CAN? query).
+            "can_state_device": _u,
+            # Raw CAN frames from CAN_DATA? device query (list of strings).
+            "can_frames": [],
+            # ISO timestamp of the last CAN data update.
+            "last_update": _u,
+        }
+
+        # Apply initial values provided at setup time.
+        if initial_can_debug:
+            for key in self._can_data:
+                if key in initial_can_debug:
+                    self._can_data[key] = initial_can_debug[key]
+            # Set initial state from configured CAN enable flag.
+            self._attr_native_value = initial_can_debug.get(
+                "can_state_device", self._UNK
+            )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return CAN bus diagnostic attributes."""
+        d = self._can_data
+        return {
+            "CAN aktiviert (Konfig)": d["can_enable_configured"],
+            "CAN Zustand (IST)": d["can_state_device"],
+            "CAN Frames (letzter Abruf)": d["can_frames"],
+            "Letzte Aktualisierung": d["last_update"],
+        }
+
+    @callback
+    def update_can_data(self, can_data: dict) -> None:
+        """Receive updated CAN debug info from the webhook handler or device query."""
+        # Merge all incoming fields into the stored CAN data dict.
+        for key in self._can_data:
+            if key in can_data:
+                self._can_data[key] = can_data[key]
+
+        # Update entity state to reflect the live CAN device state.
+        self._attr_native_value = self._can_data.get("can_state_device", self._UNK)
         self.async_write_ha_state()
 

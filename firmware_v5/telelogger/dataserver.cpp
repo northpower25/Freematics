@@ -62,6 +62,19 @@ int handlerLiveData(UrlHandlerParam* param);
 extern nvs_handle_t nvs;
 extern void loadConfig();
 extern bool enableLedRed;  // read here to apply LED state immediately in handlerControl
+extern bool enableObd;         // runtime OBD enable flag (NVS key OBD_EN)
+extern bool enableCan;         // runtime CAN enable flag (NVS key CAN_EN)
+extern uint16_t nvsStandbyTimeS; // runtime standby-time override (NVS key STANDBY_TIME, 0=default)
+// CAN bus sniffing ring buffer (populated by process() when enableCan=true).
+// s_canFrameList holds up to CAN_DATA_LIST_MAX hex-encoded CAN frame payloads.
+// s_canFrameCount is the current number of valid entries.
+// s_canFrameTotal is the total frames seen since boot.
+// s_canBufMux guards cross-task access.
+#define CAN_DATA_LIST_MAX 32
+extern char s_canFrameList[CAN_DATA_LIST_MAX][20];
+extern int  s_canFrameCount;
+extern uint32_t s_canFrameTotal;
+extern portMUX_TYPE s_canBufMux;
 // Set to true while an OTA flash is in progress so the telemetry task yields
 // the WiFi radio to the upload (defined in telelogger.ino).
 extern volatile bool s_ota_active;
@@ -349,6 +362,20 @@ int handlerControl(UrlHandlerParam* param)
         // the firmware version.  Returns "-" when NVS settings have never been
         // applied via OTA (e.g. device was only serial-flashed without NVS update).
         n = snprintf(buf, bufsize, "%s", nvsVersion[0] ? nvsVersion : "-");
+    } else if (!strcmp(cmd, "OBD?")) {
+        // Return current OBD-II polling state: "1" = enabled, "0" = disabled.
+        // Reflects the live enableObd flag (loaded from NVS key OBD_EN at boot
+        // and updated by OBD= set commands).
+        n = snprintf(buf, bufsize, "%u", (unsigned)enableObd);
+    } else if (!strcmp(cmd, "CAN?")) {
+        // Return current CAN bus sniffing state: "1" = enabled, "0" = disabled.
+        // Reflects the live enableCan flag (loaded from NVS key CAN_EN at boot
+        // and updated by CAN= set commands).
+        n = snprintf(buf, bufsize, "%u", (unsigned)enableCan);
+    } else if (!strcmp(cmd, "STANDBY_TIME?")) {
+        // Return the current standby-time override in seconds.
+        // Returns "0" when no override is set (firmware uses compile-time default).
+        n = snprintf(buf, bufsize, "%u", (unsigned)nvsStandbyTimeS);
 #if ENABLE_WIFI
     } else if (!strcmp(cmd, "SSID?")) {
         n = snprintf(buf, bufsize, "%s", wifiSSID[0] ? wifiSSID : "-");
@@ -418,6 +445,32 @@ int handlerControl(UrlHandlerParam* param)
             nvs_set_u8(nvs, "BEEP_EN", v) == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
+    } else if (!strncmp(cmd, "OBD=", 4)) {
+        // Enable (1) or disable (0) OBD-II PID polling at runtime.
+        // Written to NVS key OBD_EN so the setting survives reboot.
+        uint8_t v = (uint8_t)atoi(cmd + 4);
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u8(nvs, "OBD_EN", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strncmp(cmd, "CAN=", 4)) {
+        // Enable (1) or disable (0) CAN bus at runtime.
+        // Written to NVS key CAN_EN so the setting survives reboot.
+        uint8_t v = (uint8_t)atoi(cmd + 4);
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u8(nvs, "CAN_EN", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strncmp(cmd, "STANDBY_TIME=", 13)) {
+        // Set standby-time override in seconds (60-180; 0 = use firmware default).
+        // Written to NVS key STANDBY_TIME (u16) so the setting survives reboot.
+        uint16_t v = (uint16_t)atoi(cmd + 13);
+        if (v != 0 && v < 60) v = 60;
+        if (v > 180) v = 180;
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u16(nvs, "STANDBY_TIME", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
     } else if (!strncmp(cmd, "OTA_TOKEN=", 10)) {
         // Provision (or clear) the pull-OTA authentication token in NVS so
         // the device can check for updates without a full serial re-flash.
@@ -453,6 +506,26 @@ int handlerControl(UrlHandlerParam* param)
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
         printOtaStatus();
+    } else if (!strcmp(cmd, "CAN_DATA?")) {
+        // Return accumulated CAN bus raw frame data (hex-encoded) and clear the buffer.
+        // Each frame's payload bytes are represented as consecutive two-char hex pairs.
+        // Multiple frames are comma-separated.  Returns "-" when no frames have been
+        // captured (CAN disabled or no frames received yet).
+        // Also returns the total frame count seen since boot as a suffix "|<count>".
+        portENTER_CRITICAL(&s_canBufMux);
+        if (s_canFrameCount == 0) {
+            n = snprintf(buf, bufsize, "-|%lu", (unsigned long)s_canFrameTotal);
+        } else {
+            n = 0;
+            for (int i = 0; i < s_canFrameCount && n < bufsize - 2; i++) {
+                if (i > 0) n += snprintf(buf + n, bufsize - n, ",");
+                n += snprintf(buf + n, bufsize - n, "%s", s_canFrameList[i]);
+            }
+            n += snprintf(buf + n, bufsize - n, "|%lu", (unsigned long)s_canFrameTotal);
+            // Clear buffer after read.
+            s_canFrameCount = 0;
+        }
+        portEXIT_CRITICAL(&s_canBufMux);
     } else {
         n = snprintf(buf, bufsize, "ERR");
     }

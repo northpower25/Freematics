@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 
 from .const import (
     CONF_BEEP_EN,
+    CONF_CAN_EN,
     CONF_CELL_APN,
     CONF_CELL_DEBUG,
     CONF_CLOUD_HOOK_URL,
@@ -30,6 +31,7 @@ from .const import (
     CONF_FLASH_METHOD,
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
+    CONF_OBD_EN,
     CONF_OPERATING_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OTA_MODE,
@@ -37,6 +39,7 @@ from .const import (
     CONF_SERIAL_PORT,
     CONF_SETTINGS_VERSION,
     CONF_SIM_PIN,
+    CONF_STANDBY_TIME_S,
     CONF_SYNC_INTERVAL_S,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
@@ -49,6 +52,7 @@ from .const import (
     DEFAULT_OTA_CHECK_INTERVAL_S,
     DEFAULT_OTA_MODE,
     DEFAULT_OPERATING_MODE,
+    DEFAULT_STANDBY_TIME_S,
     DEFAULT_SYNC_INTERVAL_S,
     DEVICE_MODEL_A,
     DEVICE_MODEL_B,
@@ -84,6 +88,9 @@ _NVS_RELEVANT_KEYS = frozenset({
     CONF_LED_RED_EN,
     CONF_LED_WHITE_EN,
     CONF_BEEP_EN,
+    CONF_OBD_EN,
+    CONF_CAN_EN,
+    CONF_STANDBY_TIME_S,
     CONF_DATA_INTERVAL_MS,
     CONF_SYNC_INTERVAL_S,
     CONF_OTA_MODE,
@@ -286,18 +293,32 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
     async def async_step_advanced(self, user_input=None):
         """Select operating mode and optional firmware tuning."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            self._data.update(user_input)
-            # Auto-generate a persistent OTA token when the user enables
-            # pull-OTA or cloud-OTA, so it is embedded in NVS during the
-            # first flash without requiring a separate provisioning step.
-            ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
-            if ota_mode != OTA_MODE_DISABLED and not self._data.get(CONF_OTA_TOKEN):
-                self._data[CONF_OTA_TOKEN] = secrets.token_hex(32)
-            return await self.async_step_flash()
+            # Enforce OBD → CAN dependency:
+            # CAN bus sniffing requires the OBD stack to be active because the
+            # firmware initialises the CAN controller as part of the OBD setup.
+            # Reject the invalid combination with a descriptive field-level error
+            # so the user knows to enable OBD first before enabling CAN.
+            obd_en = user_input.get(CONF_OBD_EN, True)
+            can_en = user_input.get(CONF_CAN_EN, False)
+            if can_en and not obd_en:
+                errors[CONF_CAN_EN] = "can_requires_obd"
+
+            if not errors:
+                self._data.update(user_input)
+                # Auto-generate a persistent OTA token when the user enables
+                # pull-OTA or cloud-OTA, so it is embedded in NVS during the
+                # first flash without requiring a separate provisioning step.
+                ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
+                if ota_mode != OTA_MODE_DISABLED and not self._data.get(CONF_OTA_TOKEN):
+                    self._data[CONF_OTA_TOKEN] = secrets.token_hex(32)
+                return await self.async_step_flash()
 
         return self.async_show_form(
             step_id="advanced",
+            errors=errors,
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -313,6 +334,11 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_LED_RED_EN, default=True): bool,
                     vol.Optional(CONF_LED_WHITE_EN, default=True): bool,
                     vol.Optional(CONF_BEEP_EN, default=True): bool,
+                    vol.Optional(CONF_OBD_EN, default=True): bool,
+                    vol.Optional(CONF_CAN_EN, default=False): bool,
+                    vol.Optional(
+                        CONF_STANDBY_TIME_S, default=DEFAULT_STANDBY_TIME_S
+                    ): vol.All(int, vol.Range(min=60, max=180)),
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -395,37 +421,45 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         """Manage options."""
         current = {**self._config_entry.data, **self._config_entry.options}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Auto-generate an OTA token when the user enables OTA for the
-            # first time (switches away from disabled without a stored token).
-            ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
-            current_token = (
-                self._config_entry.options.get(CONF_OTA_TOKEN)
-                or self._config_entry.data.get(CONF_OTA_TOKEN, "")
-            )
-            user_input = dict(user_input)
-            if ota_mode != OTA_MODE_DISABLED:
-                if current_token:
-                    # Preserve the existing token – the options form does not
-                    # have a token field, so user_input never carries it.
-                    # Without this the token is silently dropped from
-                    # entry.options on every save, breaking pull-OTA.
-                    user_input[CONF_OTA_TOKEN] = current_token
-                else:
-                    user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
+            # Enforce OBD → CAN dependency (same rule as in the initial setup flow).
+            obd_en = user_input.get(CONF_OBD_EN, True)
+            can_en = user_input.get(CONF_CAN_EN, False)
+            if can_en and not obd_en:
+                errors[CONF_CAN_EN] = "can_requires_obd"
 
-            # Bump settings_version only when NVS-relevant settings actually
-            # changed so the device is not triggered to re-flash on every save.
-            if _nvs_settings_hash(user_input) != _nvs_settings_hash(current):
-                user_input[CONF_SETTINGS_VERSION] = datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%S+00:00"
+            if not errors:
+                # Auto-generate an OTA token when the user enables OTA for the
+                # first time (switches away from disabled without a stored token).
+                ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
+                current_token = (
+                    self._config_entry.options.get(CONF_OTA_TOKEN)
+                    or self._config_entry.data.get(CONF_OTA_TOKEN, "")
                 )
-            else:
-                # Preserve the existing version (no NVS change = no re-flash needed).
-                user_input[CONF_SETTINGS_VERSION] = current.get(CONF_SETTINGS_VERSION, "")
+                user_input = dict(user_input)
+                if ota_mode != OTA_MODE_DISABLED:
+                    if current_token:
+                        # Preserve the existing token – the options form does not
+                        # have a token field, so user_input never carries it.
+                        # Without this the token is silently dropped from
+                        # entry.options on every save, breaking pull-OTA.
+                        user_input[CONF_OTA_TOKEN] = current_token
+                    else:
+                        user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
 
-            return self.async_create_entry(title="", data=user_input)
+                # Bump settings_version only when NVS-relevant settings actually
+                # changed so the device is not triggered to re-flash on every save.
+                if _nvs_settings_hash(user_input) != _nvs_settings_hash(current):
+                    user_input[CONF_SETTINGS_VERSION] = datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%S+00:00"
+                    )
+                else:
+                    # Preserve the existing version (no NVS change = no re-flash needed).
+                    user_input[CONF_SETTINGS_VERSION] = current.get(CONF_SETTINGS_VERSION, "")
+
+                return self.async_create_entry(title="", data=user_input)
 
         # Derive current operating mode with backwards-compat fallback.
         # Entries created before the operating_mode field was added have an
@@ -444,6 +478,7 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
+            errors=errors,
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_WIFI_SSID, default=current.get(CONF_WIFI_SSID, "")): str,
@@ -489,6 +524,18 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                         CONF_BEEP_EN,
                         default=current.get(CONF_BEEP_EN, True),
                     ): bool,
+                    vol.Optional(
+                        CONF_OBD_EN,
+                        default=current.get(CONF_OBD_EN, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_CAN_EN,
+                        default=current.get(CONF_CAN_EN, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_STANDBY_TIME_S,
+                        default=current.get(CONF_STANDBY_TIME_S, DEFAULT_STANDBY_TIME_S),
+                    ): vol.All(int, vol.Range(min=60, max=180)),
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,
                         default=current.get(CONF_DATA_INTERVAL_MS, DEFAULT_DATA_INTERVAL_MS),
