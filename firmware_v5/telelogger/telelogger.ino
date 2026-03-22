@@ -202,10 +202,10 @@ uint16_t nvsStandbyTimeS = 0;
 // Ring buffer storing hex-encoded CAN frame payloads, newest last.
 // Each entry is at most 2*8=16 chars (8 data bytes × 2 hex digits).
 // The buffer is guarded by s_canBufMux for cross-task access from dataserver.
-static char   s_canFrameList[CAN_DATA_LIST_MAX][20];
-static int    s_canFrameCount = 0;   // number of valid entries (0 … CAN_DATA_LIST_MAX)
-static uint32_t s_canFrameTotal = 0; // total CAN frames seen since boot (for display)
-static portMUX_TYPE s_canBufMux = portMUX_INITIALIZER_UNLOCKED;
+char   s_canFrameList[CAN_DATA_LIST_MAX][20];
+int    s_canFrameCount = 0;   // number of valid entries (0 … CAN_DATA_LIST_MAX)
+uint32_t s_canFrameTotal = 0; // total CAN frames seen since boot (for display)
+portMUX_TYPE s_canBufMux = portMUX_INITIALIZER_UNLOCKED;
 // Tracks whether sniffing is currently active so we can call sniff(true/false)
 // only on transitions rather than every process() call.
 static bool s_canSniffActive = false;
