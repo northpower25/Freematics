@@ -1900,9 +1900,9 @@ void standby()
 
   // Deep standby: use ESP32 deep sleep for lower power consumption.
   // The device restarts after the wake-up timer expires (nvsStandbyTimeS seconds,
-  // minimum 10 s).  Wake-up fully reinitialises all subsystems.
+  // minimum 5 s).  Wake-up fully reinitialises all subsystems.
   if (enableDeepStandby) {
-    uint64_t sleep_us = ((nvsStandbyTimeS >= 10) ? (uint64_t)nvsStandbyTimeS : 180ULL) * 1000000ULL;
+    uint64_t sleep_us = ((nvsStandbyTimeS >= 5) ? (uint64_t)nvsStandbyTimeS : 180ULL) * 1000000ULL;
     Serial.print("DEEP_SLEEP ");
     Serial.print((unsigned)(sleep_us / 1000000ULL));
     Serial.println("s");

@@ -951,13 +951,13 @@ def _build_debug_payload(
 
     # Standby-time display: show seconds or "Firmware-Standard" when 0.
     _standby_time_conf = (
-        f"{standby_time_s} s" if standby_time_s > 0 else "Firmware-Standard (180 s)"
+        f"{standby_time_s} s" if standby_time_s > 0 else f"Firmware-Standard ({DEFAULT_STANDBY_TIME_S} s)"
     )
     _standby_time_raw = diag.get("standby_time_device")
     _standby_time_dev = (
         f"{_standby_time_raw} s"
         if _standby_time_raw is not None and _standby_time_raw > 0
-        else ("Firmware-Standard (180 s)" if _standby_time_raw == 0 else _UNK)
+        else (f"Firmware-Standard ({DEFAULT_STANDBY_TIME_S} s)" if _standby_time_raw == 0 else _UNK)
     )
 
     return {
