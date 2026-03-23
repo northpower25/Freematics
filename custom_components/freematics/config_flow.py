@@ -526,7 +526,8 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Store entry for later use."""
         self._config_entry = config_entry
-        # Holds partial data when vehicle profile sub-steps are active.
+        # Holds accumulated options data while vehicle profile sub-steps are active.
+        # Populated only when the user ticks "Configure vehicle profile" in async_step_init.
         self._options_data: dict = {}
 
     async def async_step_init(self, user_input=None):
@@ -564,8 +565,8 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                         user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
 
                 if configure_vehicle:
-                    # Store partial data and continue through vehicle sub-steps.
-                    self._options_data = user_input
+                    # Store a copy of partial data and continue through vehicle sub-steps.
+                    self._options_data = dict(user_input)
                     return await self.async_step_vehicle_make()
 
                 # No vehicle change – carry over existing vehicle selections and
