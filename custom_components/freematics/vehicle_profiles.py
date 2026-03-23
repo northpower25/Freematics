@@ -6,6 +6,18 @@ vehicle-specific and should be polled in addition to the standard OBD-II
 PID set.  These are written to the device NVS as VEHICLE_PIDS so the
 firmware can poll them automatically.
 
+The firmware only polls a PID if `isValidPID()` confirms the ECU supports it
+(based on the OBD2 PID-support bitmaps returned by the vehicle).  This means
+it is safe to include extra PIDs here even if not all vehicles in a range
+support every listed PID – unsupported ones are automatically skipped.
+
+**Important**: The PID lists below are community-sourced best-effort entries.
+Manufacturer implementations vary between individual production batches, engine
+variants, and regional markets even within the same model year.  Always verify
+that your specific vehicle actually responds to a PID before relying on its
+value.  The Freematics ONE+ will silently skip any PID that the ECU does not
+report as supported.
+
 Sources for vehicle-specific PIDs:
   - https://github.com/iDoka/awesome-automotive-can-id
   - Various community OBD2 PID databases

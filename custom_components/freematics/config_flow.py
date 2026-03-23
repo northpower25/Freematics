@@ -130,8 +130,9 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
       3. cellular    – APN / SIM PIN (if cellular/both)
       4. webhook     – review auto-generated webhook URL / firmware settings
       5. device      – select device model (A / B / H)
-      6. advanced    – operating mode (Telelogger vs Datalogger), BLE, intervals
-      7. flash       – choose flash method and device address
+      6. vehicle     – select vehicle make / model / year for vehicle-specific PIDs
+      7. advanced    – operating mode (Telelogger vs Datalogger), BLE, intervals
+      8. flash       – choose flash method and device address
     """
 
     VERSION = 2

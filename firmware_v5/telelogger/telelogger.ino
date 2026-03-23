@@ -2299,6 +2299,8 @@ void loadConfig()
     char *tok = strtok(tmp, ",");
     while (tok && vehicleObdDataCount < MAX_VEHICLE_PIDS) {
       byte pid = (byte)strtol(tok, nullptr, 16);
+      // Skip PID 0x00 (the "PIDs supported [01-20]" support bitmap) – it is
+      // handled internally by isValidPID() and not a pollable value PID.
       if (pid > 0) {
         vehicleObdData[vehicleObdDataCount].pid   = pid;
         vehicleObdData[vehicleObdDataCount].tier  = 3;
