@@ -64,6 +64,7 @@ extern void loadConfig();
 extern bool enableLedRed;  // read here to apply LED state immediately in handlerControl
 extern bool enableObd;         // runtime OBD enable flag (NVS key OBD_EN)
 extern bool enableCan;         // runtime CAN enable flag (NVS key CAN_EN)
+extern bool enableDeepStandby; // runtime deep-standby flag (NVS key DEEP_STANDBY)
 extern uint16_t nvsStandbyTimeS; // runtime standby-time override (NVS key STANDBY_TIME, 0=default)
 // CAN bus sniffing ring buffer (populated by process() when enableCan=true).
 // s_canFrameList holds up to CAN_DATA_LIST_MAX hex-encoded CAN frame payloads.
@@ -376,6 +377,9 @@ int handlerControl(UrlHandlerParam* param)
         // Return the current standby-time override in seconds.
         // Returns "0" when no override is set (firmware uses compile-time default).
         n = snprintf(buf, bufsize, "%u", (unsigned)nvsStandbyTimeS);
+    } else if (!strcmp(cmd, "DEEP_STANDBY?")) {
+        // Return current deep-standby mode state: "1" = enabled, "0" = disabled.
+        n = snprintf(buf, bufsize, "%u", (unsigned)enableDeepStandby);
 #if ENABLE_WIFI
     } else if (!strcmp(cmd, "SSID?")) {
         n = snprintf(buf, bufsize, "%s", wifiSSID[0] ? wifiSSID : "-");
@@ -462,13 +466,21 @@ int handlerControl(UrlHandlerParam* param)
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
     } else if (!strncmp(cmd, "STANDBY_TIME=", 13)) {
-        // Set standby-time override in seconds (60-180; 0 = use firmware default).
+        // Set standby-time override in seconds (5-900; 0 = use firmware default).
         // Written to NVS key STANDBY_TIME (u16) so the setting survives reboot.
         uint16_t v = (uint16_t)atoi(cmd + 13);
-        if (v != 0 && v < 60) v = 60;
-        if (v > 180) v = 180;
+        if (v != 0 && v < 5) v = 5;
+        if (v > 900) v = 900;
         n = snprintf(buf, bufsize, "%s",
             nvs_set_u16(nvs, "STANDBY_TIME", v) == ESP_OK
+            && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
+        loadConfig();
+    } else if (!strncmp(cmd, "DEEP_STANDBY=", 13)) {
+        // Enable or disable deep-standby mode (NVS key DEEP_STANDBY, u8).
+        // 1 = use ESP32 deep sleep during standby, 0 = normal standby.
+        uint8_t v = atoi(cmd + 13) ? 1 : 0;
+        n = snprintf(buf, bufsize, "%s",
+            nvs_set_u8(nvs, "DEEP_STANDBY", v) == ESP_OK
             && nvs_commit(nvs) == ESP_OK ? "OK" : "ERR");
         loadConfig();
     } else if (!strncmp(cmd, "OTA_TOKEN=", 10)) {

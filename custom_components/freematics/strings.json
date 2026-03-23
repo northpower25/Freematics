@@ -68,7 +68,8 @@
                     "ota_check_interval_s": "OTA check interval (seconds, 0 = disabled, default 3600)",
                     "obd_en": "Enable OBD-II polling (OBD_EN)",
                     "can_en": "Enable CAN bus sniffing (CAN_EN)",
-                    "standby_time_s": "Standby timeout (seconds, 60-180)"
+                    "standby_time_s": "Standby timeout (seconds, 5-900)",
+                    "deep_standby": "Enable deep standby (DEEP_STANDBY)"
                 },
                 "data_description": {
                     "operating_mode": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)",
@@ -83,7 +84,8 @@
                     "ota_check_interval_s": "How often the device checks for updates. Set to 0 to disable polling. The OTA token and interval are written to NVS during flashing — re-flash after changing these settings.\n\n→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
                     "obd_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
                     "can_en": "CAN sniffing requires OBD to be enabled. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-                    "standby_time_s": "Seconds of no motion before the device enters standby. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
+                    "standby_time_s": "Seconds of no motion before the device enters standby. Range: 5–900 s. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "deep_standby": "When enabled the device uses ESP32 deep sleep during standby. Saves more power but the device fully restarts on wake-up. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
                 }
             },
             "flash": {
@@ -134,7 +136,8 @@
                     "serial_port": "Serial port",
                     "obd_en": "Enable OBD-II polling (OBD_EN)",
                     "can_en": "Enable CAN bus sniffing (CAN_EN)",
-                    "standby_time_s": "Standby timeout (seconds, 60-180)"
+                    "standby_time_s": "Standby timeout (seconds, 5-900)",
+                    "deep_standby": "Enable deep standby (DEEP_STANDBY)"
                 },
                 "data_description": {
                     "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
@@ -158,7 +161,8 @@
                     "serial_port": "→ **HA-only** — used by HA for serial flash; not written to device NVS",
                     "obd_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
                     "can_en": "CAN sniffing requires OBD to be enabled. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-                    "standby_time_s": "Seconds of no motion before the device enters standby. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button"
+                    "standby_time_s": "Seconds of no motion before the device enters standby. Range: 5–900 s. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
+                    "deep_standby": "When enabled the device uses ESP32 deep sleep during standby. Saves more power but the device fully restarts on wake-up. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
                 }
             }
         }

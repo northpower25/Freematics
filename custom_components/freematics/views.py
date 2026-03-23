@@ -72,6 +72,7 @@ from .const import (
     CONF_CAN_EN,
     CONF_CLOUD_HOOK_URL,
     CONF_DATA_INTERVAL_MS,
+    CONF_DEEP_STANDBY,
     CONF_DEVICE_IP,
     CONF_DEVICE_PORT,
     CONF_ENABLE_BLE,
@@ -90,6 +91,7 @@ from .const import (
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
+    DEFAULT_DEEP_STANDBY,
     DEFAULT_DEVICE_PORT,
     DEFAULT_STANDBY_TIME_S,
     DOMAIN,
@@ -862,8 +864,9 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
     # Clamp to valid range; treat 180 (firmware default) as 0 = use compile-time default
     if standby_time_s >= 180:
         standby_time_s = 0
-    elif standby_time_s > 0 and standby_time_s < 60:
-        standby_time_s = 60
+    elif standby_time_s > 0 and standby_time_s < 5:
+        standby_time_s = 5
+    deep_standby = bool(cfg.get(CONF_DEEP_STANDBY, DEFAULT_DEEP_STANDBY))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
     # NVS settings version: "<firmware_version>.<settings_timestamp>" so the
@@ -1186,6 +1189,7 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "obd_en": obd_en,
         "can_en": can_en,
         "standby_time_s": standby_time_s,
+        "deep_standby": deep_standby,
         "data_interval_ms": data_interval_ms,
         "sync_interval_s": sync_interval_s,
         "ota_token": ota_token,
@@ -1265,6 +1269,7 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs.get("obd_en", True),
             kwargs.get("can_en", False),
             kwargs.get("standby_time_s", 0),
+            kwargs.get("deep_standby", False),
         )
 
         if nvs_data is None:
@@ -1370,6 +1375,7 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs.get("obd_en", True),
             kwargs.get("can_en", False),
             kwargs.get("standby_time_s", 0),
+            kwargs.get("deep_standby", False),
         )
 
         if nvs_data is None:
@@ -1864,6 +1870,7 @@ class FreematicsOtaPullView(HomeAssistantView):
                     kwargs.get("obd_en", True),
                     kwargs.get("can_en", False),
                     kwargs.get("standby_time_s", 0),
+                    kwargs.get("deep_standby", False),
                 )
             except ImportError:
                 nvs_data = None

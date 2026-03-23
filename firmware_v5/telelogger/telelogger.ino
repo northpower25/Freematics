@@ -27,6 +27,7 @@
 #include "driver/adc.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_sleep.h"
 #if ENABLE_OLED
 #include "FreematicsOLED.h"
 #endif
@@ -185,9 +186,14 @@ bool enableBeep = true;      // connection beep: short buzz on WiFi/cellular con
 bool enableObd = true;   // OBD-II PID polling (compile-time ENABLE_OBD must also be 1)
 bool enableCan = false;  // CAN bus sniffing (future use; NVS key CAN_EN)
 
+// Deep-standby flag.  When true the device uses ESP32 deep sleep during
+// standby instead of the normal active-wait loop.  Loaded from NVS key
+// DEEP_STANDBY (u8, 0=off 1=on).  Defaults to false.
+bool enableDeepStandby = false;
+
 // Standby-time override loaded from NVS key STANDBY_TIME (u16, seconds).
 // 0 means "use the compile-time STATIONARY_TIME_TABLE default" (currently 180 s).
-// When set to a value between 60 and 180 it replaces the last (maximum) entry
+// When set to a value between 5 and 900 it replaces the last (maximum) entry
 // of the stationary-time table so the device enters standby sooner.
 uint16_t nvsStandbyTimeS = 0;
 
@@ -243,6 +249,7 @@ static int8_t s_lastConnType = -1;  // PID_CONN_TYPE sentinel: 1=WiFi, 2=Cellula
 static int8_t  s_lastObd         = -1;   // PID_OBD_STATE sentinel
 static int8_t  s_lastCan         = -1;   // PID_CAN_STATE sentinel
 static int16_t s_lastStandbyTime = -1;   // PID_STANDBY_TIME sentinel (seconds)
+static int8_t  s_lastDeepStandby = -1;   // PID_DEEP_STANDBY sentinel
 
 // Inject-on-next-packet flag: set whenever the sentinels are reset (new
 // connection established or session start).  The telemetry task checks this
@@ -1152,6 +1159,15 @@ void process()
     }
   }
 
+  // Report deep-standby mode (PID 0x8c): 1 = deep sleep on standby, 0 = normal.
+  {
+    uint8_t dv = enableDeepStandby ? 1 : 0;
+    if ((int8_t)dv != s_lastDeepStandby) {
+      s_lastDeepStandby = (int8_t)dv;
+      buffer->add(PID_DEEP_STANDBY, ELEMENT_UINT8, &dv, sizeof(dv));
+    }
+  }
+
 #if STORAGE == STORAGE_SD
   // Report SD card total/free space once per minute so HA can display SD
   // presence and usage without a direct HTTP connection to the device.
@@ -1241,14 +1257,14 @@ void process()
 #if ENABLE_OBD || ENABLE_MEMS
   // motion adaptive data interval control
   // Build effective stationary-time table, applying STANDBY_TIME NVS override
-  // (nvsStandbyTimeS, 60-180 s) to the last (maximum-standby) entry when set.
+  // (nvsStandbyTimeS, 5-900 s) to the last (maximum-standby) entry when set.
   const uint16_t stationaryTimeDefaults[] = STATIONARY_TIME_TABLE;
   const byte stationaryCount = sizeof(stationaryTimeDefaults) / sizeof(stationaryTimeDefaults[0]);
   uint16_t stationaryTime[stationaryCount];
   for (byte i = 0; i < stationaryCount; i++) {
     stationaryTime[i] = stationaryTimeDefaults[i];
   }
-  if (nvsStandbyTimeS >= 60) {
+  if (nvsStandbyTimeS >= 5) {
     stationaryTime[stationaryCount - 1] = nvsStandbyTimeS;
   }
   unsigned int motionless = (millis() - lastMotionTime) / 1000;
@@ -1719,6 +1735,11 @@ void telemetry(void* inst)
           store.log(PID_STANDBY_TIME, &nvsStandbyTimeS, 1);
           s_lastStandbyTime = (int16_t)nvsStandbyTimeS;
         }
+        {
+          uint8_t dv = enableDeepStandby ? 1 : 0;
+          store.log(PID_DEEP_STANDBY, &dv, 1);
+          s_lastDeepStandby = (int8_t)dv;
+        }
 #if STORAGE == STORAGE_SD
         // s_cachedSdTotalMb/Free are kept current by process(); they are 0
         // before the first SD read which HA correctly interprets as "no card".
@@ -1876,6 +1897,20 @@ void standby()
 #endif
   Serial.println("STANDBY");
   obd.enterLowPowerMode();
+
+  // Deep standby: use ESP32 deep sleep for lower power consumption.
+  // The device restarts after the wake-up timer expires (nvsStandbyTimeS seconds,
+  // minimum 10 s).  Wake-up fully reinitialises all subsystems.
+  if (enableDeepStandby) {
+    uint64_t sleep_us = ((nvsStandbyTimeS >= 10) ? (uint64_t)nvsStandbyTimeS : 180ULL) * 1000000ULL;
+    Serial.print("DEEP_SLEEP ");
+    Serial.print((unsigned)(sleep_us / 1000000ULL));
+    Serial.println("s");
+    esp_sleep_enable_timer_wakeup(sleep_us);
+    esp_deep_sleep_start();
+    // Never reached: device restarts from setup() after wake-up.
+  }
+
 #if ENABLE_MEMS
   calibrateMEMS();
   waitMotion(-1);
@@ -2103,12 +2138,19 @@ void loadConfig()
     enableCan = nvsCanEn != 0;
   }
 
-  // Standby-time override (NVS key STANDBY_TIME, u16, seconds, 60-180).
+  // Deep-standby mode (NVS key DEEP_STANDBY, u8, 0=off 1=on).
+  // When enabled the device uses ESP32 deep sleep during standby.
+  uint8_t nvsDeepStandby = 0;
+  if (nvs_get_u8(nvs, "DEEP_STANDBY", &nvsDeepStandby) == ESP_OK) {
+    enableDeepStandby = nvsDeepStandby != 0;
+  }
+
+  // Standby-time override (NVS key STANDBY_TIME, u16, seconds, 5-900).
   // 0 means "use compile-time STATIONARY_TIME_TABLE default" (currently 180 s).
-  // Values below 60 are clamped to 0 (use default) for safety.
+  // Values below 5 are clamped to 0 (use default) for safety.
   uint16_t nvsStby = 0;
   if (nvs_get_u16(nvs, "STANDBY_TIME", &nvsStby) == ESP_OK) {
-    nvsStandbyTimeS = (nvsStby >= 60) ? nvsStby : 0;
+    nvsStandbyTimeS = (nvsStby >= 5) ? nvsStby : 0;
   }
 
   // Optional data-interval override (milliseconds). Minimum 500 ms to avoid

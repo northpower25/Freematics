@@ -223,6 +223,7 @@ def generate_nvs_partition(
     obd_en: bool = True,
     can_en: bool = False,
     standby_time_s: int = 0,
+    deep_standby: bool = False,
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -283,11 +284,14 @@ def generate_nvs_partition(
             no OBD-II vehicle is connected or to reduce ECU bus load.
         can_en: When True, CAN bus sniffing is enabled (CAN_EN=1 in NVS).
             Defaults to False; reserved for future CAN bus firmware support.
-        standby_time_s: Standby-time override in seconds (60-180).
+        standby_time_s: Standby-time override in seconds (5-900).
             Replaces the maximum standby threshold in the firmware's
             STATIONARY_TIME_TABLE so the device enters standby sooner.
             0 = use firmware compile-time default (currently 180 s).
             Written to NVS key STANDBY_TIME (u16) only when non-zero.
+        deep_standby: When True, the firmware uses ESP32 deep sleep during
+            standby (DEEP_STANDBY=1 written to NVS).  Deep sleep cuts power
+            consumption further; the device restarts fully on wake-up.
     """
     try:
         from esp_idf_nvs_partition_gen import nvs_partition_gen  # noqa: PLC0415
@@ -400,9 +404,11 @@ def generate_nvs_partition(
     _add_u8("OBD_EN", 1 if obd_en else 0)
     # CAN bus control.  0 = disabled (default); 1 = enabled (future use).
     _add_u8("CAN_EN", 1 if can_en else 0)
-    # Standby-time override (seconds, 60-180).  0 = use firmware default (180 s).
-    if standby_time_s and standby_time_s >= 60:
-        _add_u16("STANDBY_TIME", min(standby_time_s, 180))
+    # Standby-time override (seconds, 5-900).  0 = use firmware default (180 s).
+    if standby_time_s and standby_time_s >= 5:
+        _add_u16("STANDBY_TIME", min(standby_time_s, 900))
+    # Deep standby: when 1 the firmware uses ESP32 deep sleep during standby.
+    _add_u8("DEEP_STANDBY", 1 if deep_standby else 0)
 
     csv_content = "\n".join(rows) + "\n"
 

@@ -83,11 +83,17 @@ CONF_OBD_EN = "obd_en"
 # Reserved for future CAN bus sniffing support.  Defaults to disabled.
 CONF_CAN_EN = "can_en"
 
-# Standby-time override (maps to STANDBY_TIME NVS key, u16, seconds 60-180).
+# Standby-time override (maps to STANDBY_TIME NVS key, u16, seconds 5-900).
 # The device enters standby after this many seconds of no motion.
 # 0 means "use firmware compile-time default" (currently 180 s).
 CONF_STANDBY_TIME_S = "standby_time_s"
 DEFAULT_STANDBY_TIME_S = 180  # matches STATIONARY_TIME_TABLE last entry
+
+# Deep standby mode (maps to DEEP_STANDBY NVS key, u8, 0=off 1=on).
+# When enabled the device uses ESP32 deep sleep during standby, cutting power
+# consumption further.  The device restarts fully on wake-up.
+CONF_DEEP_STANDBY = "deep_standby"
+DEFAULT_DEEP_STANDBY = False
 
 # Device model identifiers (Freematics ONE+ variants)
 CONF_DEVICE_MODEL = "device_model"
@@ -170,8 +176,9 @@ PID_MAP: dict[str, _PidMapping] = {
     "87":  ("sd_free_mb",      1.0),   # PID_SD_FREE_MB: SD free space in MiB
     "88":  ("conn_type",       1.0),   # PID_CONN_TYPE: active transport (1=WiFi, 2=Cellular/LTE)
     "89":  ("obd_state",       1.0),   # PID_OBD_STATE: 1=OBD polling active, 0=disabled
-    "8a":  ("can_state",       1.0),   # PID_CAN_STATE: 1=CAN bus active, 0=disabled
-    "8b":  ("standby_time_device", 1.0), # PID_STANDBY_TIME: standby timeout in seconds (0=firmware default)
+    "8A":  ("can_state",       1.0),   # PID_CAN_STATE: 1=CAN bus active, 0=disabled
+    "8B":  ("standby_time_device", 1.0), # PID_STANDBY_TIME: standby timeout in seconds (0=firmware default)
+    "8C":  ("deep_standby_device", 1.0), # PID_DEEP_STANDBY: 1=deep sleep on standby, 0=disabled
     # ── OBD-II PIDs (0x100 bit set by firmware) ──────────────────────
     "104": ("engine_load",        1.0),   # PID_ENGINE_LOAD (%)
     "105": ("coolant_temp",       1.0),   # PID_COOLANT_TEMP (°C)
@@ -251,16 +258,18 @@ CMD_LED_RED   = "LED_RED={}"
 CMD_BEEP      = "BEEP={}"
 # OBD / CAN / standby-time runtime control.
 # Values for OBD and CAN are 1 (enable) or 0 (disable).
-# STANDBY_TIME value is in seconds (60-180; 0 = use firmware default 180 s).
+# STANDBY_TIME value is in seconds (5-900; 0 = use firmware default 180 s).
 # Changes take effect immediately AND are persisted to NVS so they survive reboot.
 CMD_OBD          = "OBD={}"
 CMD_CAN          = "CAN={}"
 CMD_STANDBY_TIME = "STANDBY_TIME={}"
+CMD_DEEP_STANDBY = "DEEP_STANDBY={}"
 # Query commands – read current live device NVS state.
 # Device returns "1" / "0" for boolean states, the numeric value for STANDBY_TIME,
 # and raw CAN frame data (newline-separated) for CAN_DATA.
 # Older firmware versions return "ERR" for unrecognised commands.
-CMD_OBD_QUERY          = "OBD?"
-CMD_CAN_QUERY          = "CAN?"
-CMD_STANDBY_TIME_QUERY = "STANDBY_TIME?"
-CMD_CAN_DATA           = "CAN_DATA?"
+CMD_OBD_QUERY           = "OBD?"
+CMD_CAN_QUERY           = "CAN?"
+CMD_STANDBY_TIME_QUERY  = "STANDBY_TIME?"
+CMD_DEEP_STANDBY_QUERY  = "DEEP_STANDBY?"
+CMD_CAN_DATA            = "CAN_DATA?"
