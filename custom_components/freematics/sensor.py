@@ -269,13 +269,15 @@ class FreematicsDebugSensor(SensorEntity):
             # White LED and beep tone live device state (reported by firmware via PID 0x84/0x85)
             "led_white_device": _u,
             "beep_device": _u,
-            # OBD / CAN / standby – Konfig (from HA config entry) and IST (from device PIDs)
+            # OBD / CAN / standby / deep_standby – Konfig and IST (from device PIDs)
             "obd_enable_configured": _u,
             "obd_state_device": _u,
             "can_enable_configured": _u,
             "can_state_device": _u,
             "standby_time_configured": _u,
             "standby_time_device": _u,
+            "deep_standby_configured": _u,
+            "deep_standby_device": _u,
             # WiFi SSID – configured value (from HA setup/config flow) and live
             # device value (queried via /api/control?cmd=SSID? when device IP is set).
             "wifi_ssid_configured": _u,
@@ -350,13 +352,15 @@ class FreematicsDebugSensor(SensorEntity):
             # "Unbekannt" until the device sends its first telemetry packet with PID 0x84/0x85.
             "Weiße LED (IST)": d["led_white_device"],
             "Beep Ton (IST)": d["beep_device"],
-            # OBD / CAN / standby-time – configured value and live device state
+            # OBD / CAN / standby-time / deep-standby – configured value and live device state
             "OBD aktiviert (Konfig)": d["obd_enable_configured"],
             "OBD aktiviert (IST)": d["obd_state_device"],
             "CAN aktiviert (Konfig)": d["can_enable_configured"],
             "CAN aktiviert (IST)": d["can_state_device"],
             "Standby Zeit (Konfig)": d["standby_time_configured"],
             "Standby Zeit (IST)": d["standby_time_device"],
+            "Deep Standby (Konfig)": d["deep_standby_configured"],
+            "Deep Standby (IST)": d["deep_standby_device"],
             # OTA configuration (from HA config entry – what was provisioned at last flash)
             "OTA Modus": d["ota_mode"],
             "OTA Token gesetzt": d["ota_token_set"],

@@ -68,7 +68,8 @@
                     "ota_check_interval_s": "OTA-Prüfintervall (Sekunden, 0 = deaktiviert, Standard 3600)",
                     "obd_en": "OBD-II Abfrage aktivieren (OBD_EN)",
                     "can_en": "CAN-Bus Sniffing aktivieren (CAN_EN)",
-                    "standby_time_s": "Standby-Timeout (Sekunden, 60-180)"
+                    "standby_time_s": "Standby-Timeout (Sekunden, 5-900)",
+                    "deep_standby": "Deep Standby aktivieren (DEEP_STANDBY)"
                 },
                 "data_description": {
                     "operating_mode": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
@@ -83,7 +84,8 @@
                     "ota_check_interval_s": "Wie oft das Gerät auf Updates prüft (Sekunden). 0 deaktiviert die Abfrage. Der OTA-Token und das Intervall werden beim Flashen in das NVS geschrieben – nach Änderungen muss das Gerät neu geflasht werden.\n\n→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
                     "obd_en": "→ **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
                     "can_en": "CAN-Sniffing erfordert aktiviertes OBD. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
-                    "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**"
+                    "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Bereich: 5–900 s. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
+                    "deep_standby": "Wenn aktiviert, nutzt das Gerät im Standby den ESP32-Deep-Sleep für niedrigeren Stromverbrauch. Das Gerät startet beim Aufwachen vollständig neu. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk)"
                 }
             },
             "flash": {
@@ -134,7 +136,8 @@
                     "serial_port": "Serieller Port",
                     "obd_en": "OBD-II Abfrage aktivieren (OBD_EN)",
                     "can_en": "CAN-Bus Sniffing aktivieren (CAN_EN)",
-                    "standby_time_s": "Standby-Timeout (Sekunden, 60-180)"
+                    "standby_time_s": "Standby-Timeout (Sekunden, 5-900)",
+                    "deep_standby": "Deep Standby aktivieren (DEEP_STANDBY)"
                 },
                 "data_description": {
                     "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
@@ -158,7 +161,8 @@
                     "serial_port": "→ **Nur HA-intern** — wird von HA für serielles Flashen genutzt; nicht im Geräte-NVS",
                     "obd_en": "→ **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
                     "can_en": "CAN-Sniffing erfordert aktiviertes OBD. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
-                    "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**"
+                    "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Bereich: 5–900 s. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
+                    "deep_standby": "Wenn aktiviert, nutzt das Gerät im Standby den ESP32-Deep-Sleep für niedrigeren Stromverbrauch. Das Gerät startet beim Aufwachen vollständig neu. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk)"
                 }
             }
         }

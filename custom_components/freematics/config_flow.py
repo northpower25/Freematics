@@ -24,6 +24,7 @@ from .const import (
     CONF_CLOUD_HOOK_URL,
     CONF_CONNECTION_TYPE,
     CONF_DATA_INTERVAL_MS,
+    CONF_DEEP_STANDBY,
     CONF_DEVICE_IP,
     CONF_DEVICE_MODEL,
     CONF_DEVICE_PORT,
@@ -48,6 +49,7 @@ from .const import (
     CONN_TYPE_CELLULAR,
     CONN_TYPE_WIFI,
     DEFAULT_DATA_INTERVAL_MS,
+    DEFAULT_DEEP_STANDBY,
     DEFAULT_DEVICE_PORT,
     DEFAULT_OTA_CHECK_INTERVAL_S,
     DEFAULT_OTA_MODE,
@@ -91,6 +93,7 @@ _NVS_RELEVANT_KEYS = frozenset({
     CONF_OBD_EN,
     CONF_CAN_EN,
     CONF_STANDBY_TIME_S,
+    CONF_DEEP_STANDBY,
     CONF_DATA_INTERVAL_MS,
     CONF_SYNC_INTERVAL_S,
     CONF_OTA_MODE,
@@ -338,7 +341,10 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_CAN_EN, default=False): bool,
                     vol.Optional(
                         CONF_STANDBY_TIME_S, default=DEFAULT_STANDBY_TIME_S
-                    ): vol.All(int, vol.Range(min=60, max=180)),
+                    ): vol.All(int, vol.Range(min=5, max=900)),
+                    vol.Optional(
+                        CONF_DEEP_STANDBY, default=DEFAULT_DEEP_STANDBY
+                    ): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS, default=DEFAULT_DATA_INTERVAL_MS
                     ): vol.All(int, vol.Range(min=0, max=60000)),
@@ -535,7 +541,11 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_STANDBY_TIME_S,
                         default=current.get(CONF_STANDBY_TIME_S, DEFAULT_STANDBY_TIME_S),
-                    ): vol.All(int, vol.Range(min=60, max=180)),
+                    ): vol.All(int, vol.Range(min=5, max=900)),
+                    vol.Optional(
+                        CONF_DEEP_STANDBY,
+                        default=current.get(CONF_DEEP_STANDBY, DEFAULT_DEEP_STANDBY),
+                    ): bool,
                     vol.Optional(
                         CONF_DATA_INTERVAL_MS,
                         default=current.get(CONF_DATA_INTERVAL_MS, DEFAULT_DATA_INTERVAL_MS),

@@ -229,3 +229,29 @@ async def async_send_config(
         return False, [f"Session error: {exc}"]
 
     return all_ok, results
+
+
+async def async_send_restart(
+    device_ip: str,
+    device_port: int,
+) -> tuple[bool, str]:
+    """Send a RESET command to a running device via /api/control.
+
+    The device closes the connection immediately after receiving RESET, so a
+    connection error or short timeout is expected and treated as success.
+    Returns (success, message).
+    """
+    try:
+        import aiohttp  # noqa: PLC0415
+    except ImportError:
+        return False, "aiohttp not available – cannot restart device over WiFi."
+
+    url = f"http://{device_ip}:{device_port}{CONTROL_PATH}?cmd=RESET"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                return True, f"RESET sent, HTTP {resp.status}"
+    except Exception as exc:  # noqa: BLE001
+        # Device resets immediately after receiving RESET – a connection error
+        # or EOF at this point is expected and should be treated as success.
+        return True, f"RESET sent (device restarted: {exc})"

@@ -49,6 +49,7 @@ from .flash_manager import (
     FIRMWARE_PATH,
     async_flash_serial,
     async_send_config,
+    async_send_restart,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -352,19 +353,17 @@ class RestartDeviceButton(_FreematicsButton):
         device_port = self._cfg(CONF_DEVICE_PORT, DEFAULT_DEVICE_PORT)
         if not device_ip:
             _LOGGER.error(
-                "Freematics: no device IP configured. "
+                "Freematics: no device IP configured for restart. "
                 "Set the device IP in the integration options."
             )
             return
 
-        try:
-            import aiohttp  # noqa: PLC0415
-            url = f"http://{device_ip}:{device_port}{CONTROL_PATH}?cmd=RESET"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    _LOGGER.info("Freematics restart sent, HTTP %s", resp.status)
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Freematics restart command error (device may have restarted): %s", exc)
+        _LOGGER.info("Freematics: sending restart to %s:%s", device_ip, device_port)
+        ok, msg = await async_send_restart(device_ip, device_port)
+        if ok:
+            _LOGGER.info("Freematics restart: %s", msg)
+        else:
+            _LOGGER.error("Freematics restart error: %s", msg)
 
 
 class PublishCloudOtaButton(_FreematicsButton):
