@@ -52,18 +52,34 @@
                     "device_model": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
                 }
             },
-            "vehicle": {
-                "title": "Freematics ONE+ – Fahrzeugprofil",
-                "description": "Wählen Sie Ihr Fahrzeug, um fahrzeugspezifische OBD2-PIDs zu aktivieren. Die Firmware fragt zusätzliche herstellerspezifische Datenpunkte ab, sofern Ihr Fahrzeug diese unterstützt.\n\nLassen Sie die Felder leer, um die fahrzeugspezifische Konfiguration zu überspringen. Standard-OBD2-PIDs (Geschwindigkeit, Drehzahl, Temperatur usw.) werden unabhängig von dieser Auswahl immer abgefragt.\n\n*Hinweis*: Nach dem Ändern des Herstellers speichern und die Einstellungen erneut öffnen, um die aktualisierte Modellliste zu sehen.",
+            "vehicle_make": {
+                "title": "Freematics ONE+ – Fahrzeughersteller",
+                "description": "Wählen Sie Ihren Fahrzeughersteller, um fahrzeugspezifische OBD2-PIDs zu aktivieren.\n\nLassen Sie das Feld leer, um die fahrzeugspezifische Konfiguration zu überspringen. Standard-OBD2-PIDs (Geschwindigkeit, Drehzahl, Temperatur usw.) werden unabhängig davon immer abgefragt.",
                 "data": {
-                    "vehicle_make": "Fahrzeughersteller",
-                    "vehicle_model": "Fahrzeugmodell",
+                    "vehicle_make": "Fahrzeughersteller"
+                },
+                "data_description": {
+                    "vehicle_make": "Fahrzeughersteller auswählen (z. B. BMW, Mercedes, Volkswagen). → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "vehicle_model": {
+                "title": "Freematics ONE+ – Fahrzeugmodell",
+                "description": "Wählen Sie das Modell für den ausgewählten Hersteller.",
+                "data": {
+                    "vehicle_model": "Fahrzeugmodell"
+                },
+                "data_description": {
+                    "vehicle_model": "Es werden nur Modelle des ausgewählten Herstellers angezeigt. → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "vehicle_year": {
+                "title": "Freematics ONE+ – Baujahr-Bereich",
+                "description": "Wählen Sie den Baujahr-Bereich Ihres Fahrzeugs.",
+                "data": {
                     "vehicle_year_range": "Baujahr-Bereich"
                 },
                 "data_description": {
-                    "vehicle_make": "Fahrzeughersteller auswählen. → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)",
-                    "vehicle_model": "Fahrzeugmodell auswählen (gefiltert nach Hersteller). → **Übertragung:** Serielles Flashen · OTA",
-                    "vehicle_year_range": "Baujahr-Bereich des Fahrzeugs auswählen. → **Übertragung:** Serielles Flashen · OTA"
+                    "vehicle_year_range": "Die Firmware fragt zusätzliche herstellerspezifische PIDs für diesen Baujahr-Bereich ab. → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
                 }
             },
             "advanced": {
@@ -152,9 +168,7 @@
                     "can_en": "CAN-Bus Sniffing aktivieren (CAN_EN)",
                     "standby_time_s": "Standby-Timeout (Sekunden, 5-900)",
                     "deep_standby": "Deep Standby aktivieren (DEEP_STANDBY)",
-                    "vehicle_make": "Fahrzeughersteller",
-                    "vehicle_model": "Fahrzeugmodell",
-                    "vehicle_year_range": "Baujahr-Bereich"
+                    "configure_vehicle": "Fahrzeugprofil konfigurieren"
                 },
                 "data_description": {
                     "wifi_ssid": "→ **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk) · Button **Konfiguration senden**",
@@ -179,7 +193,38 @@
                     "obd_en": "→ **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
                     "can_en": "CAN-Sniffing erfordert aktiviertes OBD. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
                     "standby_time_s": "Sekunden ohne Bewegung, bevor das Gerät in den Standby geht. Bereich: 5–900 s. Standard: 180 s. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk) · Schaltfläche **Konfig senden**",
-                    "deep_standby": "Wenn aktiviert, nutzt das Gerät im Standby den ESP32-Deep-Sleep für niedrigeren Stromverbrauch. Das Gerät startet beim Aufwachen vollständig neu. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk)"
+                    "deep_standby": "Wenn aktiviert, nutzt das Gerät im Standby den ESP32-Deep-Sleep für niedrigeren Stromverbrauch. Das Gerät startet beim Aufwachen vollständig neu. → **Anwenden über:** Seriell-Flash · OTA (WLAN & Mobilfunk)",
+                    "configure_vehicle": "Aktuelles Profil: {vehicle_summary}. Aktivieren, um Hersteller, Modell und Baujahr in geführten Unterschritten zu aktualisieren."
+                }
+            },
+            "vehicle_make": {
+                "title": "Freematics ONE+ – Fahrzeughersteller",
+                "description": "Wählen Sie Ihren Fahrzeughersteller.\n\nLassen Sie das Feld leer, um das aktuelle Fahrzeugprofil zu löschen.",
+                "data": {
+                    "vehicle_make": "Fahrzeughersteller"
+                },
+                "data_description": {
+                    "vehicle_make": "Fahrzeughersteller auswählen (z. B. BMW, Mercedes, Volkswagen). → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "vehicle_model": {
+                "title": "Freematics ONE+ – Fahrzeugmodell",
+                "description": "Wählen Sie das Modell für den ausgewählten Hersteller.",
+                "data": {
+                    "vehicle_model": "Fahrzeugmodell"
+                },
+                "data_description": {
+                    "vehicle_model": "Es werden nur Modelle des ausgewählten Herstellers angezeigt. → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
+                }
+            },
+            "vehicle_year": {
+                "title": "Freematics ONE+ – Baujahr-Bereich",
+                "description": "Wählen Sie den Baujahr-Bereich Ihres Fahrzeugs.",
+                "data": {
+                    "vehicle_year_range": "Baujahr-Bereich"
+                },
+                "data_description": {
+                    "vehicle_year_range": "Die Firmware fragt zusätzliche herstellerspezifische PIDs für diesen Baujahr-Bereich ab. → **Übertragung:** Serielles Flashen · OTA (WLAN & Mobilfunk)"
                 }
             }
         }

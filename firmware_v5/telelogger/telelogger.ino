@@ -803,19 +803,28 @@ void initialize()
   // initialize OBD communication (skipped when enableObd=false via NVS key OBD_EN)
   if (enableObd && !state.check(STATE_OBD_READY)) {
     timeoutsOBD = 0;
+    // Pre-wake: send OBD2 diagnostic requests BEFORE obd.init() so the vehicle ECU
+    // is active when init() tries to communicate.  Many vehicles (especially VAG:
+    // VW/Skoda/Audi/Seat, but also BMW and Mercedes) keep the diagnostic CAN bus
+    // silent until they receive an initial request — obd.init() alone may time out
+    // because it expects the ECU to already be responsive.
+    // Sequence: minimal ELM327 reset + two PID requests (RPM=0x0C, coolant=0x05).
+    // The ECU may not reply yet (still waking up), which is fine; the intent is to
+    // put a frame on the bus and let the ECU's diagnostic stack initialise before
+    // obd.init() fires its own PID_SPEED probe.
+    if (obd.link) {
+      char wbuf[64];
+      obd.link->sendCommand("ATZ\r",  wbuf, sizeof(wbuf), 1000); // reset ELM327
+      obd.link->sendCommand("ATE0\r", wbuf, sizeof(wbuf),  500); // disable echo
+      obd.link->sendCommand("ATH0\r", wbuf, sizeof(wbuf),  500); // disable headers
+      obd.link->sendCommand("010C\r", wbuf, sizeof(wbuf),  500); // RPM – wake req 1
+      obd.link->sendCommand("0105\r", wbuf, sizeof(wbuf),  500); // coolant – wake req 2
+      Serial.println("OBD:pre-wake sent");
+      delay(100); // give ECU time to start its diagnostic task
+    }
     if (obd.init()) {
       Serial.println("OBD:OK");
       state.set(STATE_OBD_READY);
-      // Send initial wake-up PID sequence to activate the ECU's diagnostic bus.
-      // Many vehicles (especially VAG: VW/Skoda/Audi/Seat) keep the diagnostic
-      // CAN port silent until a valid OBD2 request is received.  Sending RPM and
-      // coolant-temp here guarantees the ECU is awake before normal polling starts.
-      {
-        int dummy;
-        obd.readPID(PID_RPM, dummy);         // 01 0C – wake request 1
-        obd.readPID(PID_COOLANT_TEMP, dummy); // 01 05 – wake request 2
-        Serial.println("OBD:wake-up sent");
-      }
 #if ENABLE_OLED
       oled.println("OBD OK");
 #endif
