@@ -42,6 +42,9 @@ from .const import (
     CONF_SIM_PIN,
     CONF_STANDBY_TIME_S,
     CONF_SYNC_INTERVAL_S,
+    CONF_VEHICLE_MAKE,
+    CONF_VEHICLE_MODEL,
+    CONF_VEHICLE_YEAR_RANGE,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
@@ -99,6 +102,9 @@ _NVS_RELEVANT_KEYS = frozenset({
     CONF_OTA_MODE,
     CONF_OTA_CHECK_INTERVAL_S,
     CONF_OPERATING_MODE,
+    CONF_VEHICLE_MAKE,
+    CONF_VEHICLE_MODEL,
+    CONF_VEHICLE_YEAR_RANGE,
 })
 
 
@@ -274,7 +280,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Select the Freematics ONE+ hardware model."""
         if user_input is not None:
             self._data.update(user_input)
-            return await self.async_step_advanced()
+            return await self.async_step_vehicle()
 
         return self.async_show_form(
             step_id="device",
@@ -287,6 +293,50 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             DEVICE_MODEL_H: "Model H – WiFi only (no BT/cellular)",
                         }
                     ),
+                }
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Step 5b – Vehicle selection
+    # ------------------------------------------------------------------
+    async def async_step_vehicle(self, user_input=None):
+        """Select vehicle manufacturer, model and year range for vehicle-specific PIDs."""
+        from .vehicle_profiles import get_makes, get_models, get_year_ranges, get_vehicle_pids  # noqa: PLC0415
+
+        if user_input is not None:
+            self._data.update(user_input)
+            make  = user_input.get(CONF_VEHICLE_MAKE, "")
+            model = user_input.get(CONF_VEHICLE_MODEL, "")
+            year  = user_input.get(CONF_VEHICLE_YEAR_RANGE, "")
+            if make and model and year:
+                # Populate vehicle-specific PIDs string so it gets written to NVS
+                pids = get_vehicle_pids(make, model, year)
+                self._data["vehicle_pids"] = pids
+            return await self.async_step_advanced()
+
+        makes = get_makes()
+        current_make = self._data.get(CONF_VEHICLE_MAKE, "")
+        models = get_models(current_make) if current_make else []
+        current_model = self._data.get(CONF_VEHICLE_MODEL, "")
+        year_ranges = get_year_ranges(current_make, current_model) if current_make and current_model else []
+
+        make_options: dict[str, str] = {"": "— Not specified —"}
+        make_options.update({m: m for m in makes})
+
+        model_options: dict[str, str] = {"": "— Not specified —"}
+        model_options.update({m: m for m in models})
+
+        year_options: dict[str, str] = {"": "— Not specified —"}
+        year_options.update({y: y for y in year_ranges})
+
+        return self.async_show_form(
+            step_id="vehicle",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_VEHICLE_MAKE,       default=current_make):  vol.In(make_options),
+                    vol.Optional(CONF_VEHICLE_MODEL,      default=current_model): vol.In(model_options),
+                    vol.Optional(CONF_VEHICLE_YEAR_RANGE, default=""):            vol.In(year_options),
                 }
             ),
         )
@@ -455,6 +505,14 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     else:
                         user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
 
+                # Recalculate vehicle-specific PIDs when vehicle selection changes
+                from .vehicle_profiles import get_vehicle_pids  # noqa: PLC0415
+                v_make  = user_input.get(CONF_VEHICLE_MAKE, "")
+                v_model = user_input.get(CONF_VEHICLE_MODEL, "")
+                v_year  = user_input.get(CONF_VEHICLE_YEAR_RANGE, "")
+                if v_make and v_model and v_year:
+                    user_input["vehicle_pids"] = get_vehicle_pids(v_make, v_model, v_year)
+
                 # Bump settings_version only when NVS-relevant settings actually
                 # changed so the device is not triggered to re-flash on every save.
                 if _nvs_settings_hash(user_input) != _nvs_settings_hash(current):
@@ -501,6 +559,18 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                             DEVICE_MODEL_H: "Model H – WiFi only",
                         }
                     ),
+                    vol.Optional(
+                        CONF_VEHICLE_MAKE,
+                        default=current.get(CONF_VEHICLE_MAKE, ""),
+                    ): str,
+                    vol.Optional(
+                        CONF_VEHICLE_MODEL,
+                        default=current.get(CONF_VEHICLE_MODEL, ""),
+                    ): str,
+                    vol.Optional(
+                        CONF_VEHICLE_YEAR_RANGE,
+                        default=current.get(CONF_VEHICLE_YEAR_RANGE, ""),
+                    ): str,
                     vol.Required(
                         CONF_OPERATING_MODE,
                         default=stored_mode,

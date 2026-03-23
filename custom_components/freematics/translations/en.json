@@ -52,6 +52,20 @@
                     "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
                 }
             },
+            "vehicle": {
+                "title": "Freematics ONE+ – Vehicle Profile",
+                "description": "Select your vehicle to enable vehicle-specific OBD2 PIDs. The firmware will poll additional manufacturer-specific data points when your vehicle supports them.\n\nLeave fields empty to skip vehicle-specific configuration. Standard OBD2 PIDs (speed, RPM, temperature, etc.) are always polled regardless of this selection.\n\n*Note*: After changing the manufacturer, save and re-open settings to see the updated model list.",
+                "data": {
+                    "vehicle_make": "Vehicle manufacturer",
+                    "vehicle_model": "Vehicle model",
+                    "vehicle_year_range": "Year range"
+                },
+                "data_description": {
+                    "vehicle_make": "Select the vehicle manufacturer. → **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "vehicle_model": "Select the vehicle model (filtered by manufacturer). → **Applied via:** Serial flash · OTA",
+                    "vehicle_year_range": "Select the production year range of your vehicle. → **Applied via:** Serial flash · OTA"
+                }
+            },
             "advanced": {
                 "title": "Freematics ONE+ – Operating Mode & OTA",
                 "description": "Choose how the device should operate after flashing. This controls which firmware features are enabled.\n\n**Telelogger** *(recommended for Home Assistant users)*: Pushes telemetry to the HA webhook. Keep HTTPD and BLE *disabled* to free ~104 KB of heap for the TLS connection — this prevents the `MBEDTLS_ERR_SSL_ALLOC_FAILED (-32512)` error.\n\n**Datalogger**: Enables the built-in HTTP server (HTTPD) on port 80, exposing `/api/live`, `/api/info`, and related REST endpoints for local network access. Useful without Home Assistant or alongside a local dashboard.\n\n**BLE** is independent of both modes. Enable it only if you use the Freematics Controller App over Bluetooth.\n\n**Cellular debug logging**: Enable to print verbose cellular diagnostics (TX-Preview, hex-dump, AT+CCHSTATUS? and incoming-data notifications) to the serial console. Use only for troubleshooting; disable in normal operation.\n\n**LED settings**: The red/power LED lights up while the device is on or in standby. The white/network LED flashes briefly during each data transmission over WiFi or cellular. Both can be disabled independently to reduce light in the vehicle cabin.\n\n**Beep**: The buzzer emits a short beep each time a WiFi or cellular connection is established. Disable to suppress in-cabin noise.\n\n**Intervals**: leave at `0` to keep firmware defaults (~1000 ms / 120 s).",
@@ -137,7 +151,10 @@
                     "obd_en": "Enable OBD-II polling (OBD_EN)",
                     "can_en": "Enable CAN bus sniffing (CAN_EN)",
                     "standby_time_s": "Standby timeout (seconds, 5-900)",
-                    "deep_standby": "Enable deep standby (DEEP_STANDBY)"
+                    "deep_standby": "Enable deep standby (DEEP_STANDBY)",
+                    "vehicle_make": "Vehicle manufacturer",
+                    "vehicle_model": "Vehicle model",
+                    "vehicle_year_range": "Year range"
                 },
                 "data_description": {
                     "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",

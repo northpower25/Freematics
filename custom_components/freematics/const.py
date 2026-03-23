@@ -137,6 +137,29 @@ SENSOR_DEFINITIONS = {
     "battery":              ("Battery Voltage",            "V",     "voltage",          "measurement"),
     "signal":               ("Signal Strength",            "dBm",   "signal_strength",  "measurement"),
     "device_temp":          ("Device Temperature",         "°C",    "temperature",      "measurement"),
+    # Additional standard OBD-II sensors (polled when ECU supports them)
+    "intake_map":              ("Intake Manifold Pressure",     "kPa",   "pressure",         "measurement"),
+    "maf_flow":                ("MAF Air Flow Rate",            "g/s",   None,               "measurement"),
+    "runtime":                 ("Engine Run Time",              "s",     "duration",         "total_increasing"),
+    "fuel_level":              ("Fuel Tank Level",              "%",     None,               "measurement"),
+    "barometric":              ("Barometric Pressure",          "kPa",   "pressure",         "measurement"),
+    "control_module_voltage":  ("Control Module Voltage",       "V",     "voltage",          "measurement"),
+    "absolute_engine_load":    ("Absolute Engine Load",         "%",     None,               "measurement"),
+    "relative_throttle":       ("Relative Throttle Position",   "%",     None,               "measurement"),
+    "ambient_temp":            ("Ambient Air Temperature",      "°C",    "temperature",      "measurement"),
+    "accel_pedal_d":           ("Accelerator Pedal Position D", "%",     None,               "measurement"),
+    "accel_pedal_e":           ("Accelerator Pedal Position E", "%",     None,               "measurement"),
+    "engine_oil_temp":         ("Engine Oil Temperature",       "°C",    "temperature",      "measurement"),
+    "ethanol_fuel":            ("Ethanol Fuel Percentage",      "%",     None,               "measurement"),
+    "hybrid_battery":          ("Hybrid Battery Remaining",     "%",     "battery",          "measurement"),
+    "engine_fuel_rate":        ("Engine Fuel Rate",             "L/h",   None,               "measurement"),
+    "rel_accel_pedal":         ("Relative Accel. Pedal",        "%",     None,               "measurement"),
+    "odometer":                ("Odometer",                     "km",    "distance",         "total_increasing"),
+    "catalyst_temp_b1s1":      ("Catalyst Temp B1S1",           "°C",    "temperature",      "measurement"),
+    "catalyst_temp_b2s1":      ("Catalyst Temp B2S1",           "°C",    "temperature",      "measurement"),
+    "engine_torque_demanded":  ("Engine Torque Demanded",       "%",     None,               "measurement"),
+    "engine_torque_actual":    ("Engine Torque Actual",         "%",     None,               "measurement"),
+    "engine_ref_torque":       ("Engine Reference Torque",      "Nm",    None,               "measurement"),
 }
 
 # Mapping from Freematics hex PID strings (as printed by %X) to (sensor_key, scale_factor).
@@ -192,6 +215,28 @@ PID_MAP: dict[str, _PidMapping] = {
     "10E": ("timing_advance",     1.0),   # PID_TIMING_ADVANCE (°)
     "10F": ("intake_temp",        1.0),   # PID_INTAKE_TEMP (°C)
     "111": ("throttle",           1.0),   # PID_THROTTLE (%)
+    "10B": ("intake_map",             1.0),   # PID_INTAKE_MAP (kPa)
+    "110": ("maf_flow",               0.01),  # PID_MAF_FLOW (g/s, raw/100)
+    "11F": ("runtime",                1.0),   # PID_RUNTIME (seconds)
+    "12F": ("fuel_level",             1.0),   # PID_FUEL_LEVEL (%)
+    "133": ("barometric",             1.0),   # PID_BAROMETRIC (kPa)
+    "142": ("control_module_voltage", 0.001), # PID_CONTROL_MODULE_VOLTAGE (V, raw/1000)
+    "143": ("absolute_engine_load",   1.0),   # PID_ABSOLUTE_ENGINE_LOAD (%)
+    "145": ("relative_throttle",      1.0),   # PID_RELATIVE_THROTTLE_POS (%)
+    "146": ("ambient_temp",           1.0),   # PID_AMBIENT_TEMP (°C)
+    "149": ("accel_pedal_d",          1.0),   # PID_ACC_PEDAL_POS_D (%)
+    "14A": ("accel_pedal_e",          1.0),   # PID_ACC_PEDAL_POS_E (%)
+    "15C": ("engine_oil_temp",        1.0),   # PID_ENGINE_OIL_TEMP (°C)
+    "152": ("ethanol_fuel",           1.0),   # PID_ETHANOL_FUEL (%)
+    "15B": ("hybrid_battery",         1.0),   # PID_HYBRID_BATTERY_PERCENTAGE (%)
+    "15E": ("engine_fuel_rate",       0.05),  # PID_ENGINE_FUEL_RATE (L/h, raw*0.05)
+    "15A": ("rel_accel_pedal",        1.0),   # PID_REL_ACCEL_PEDAL (%)
+    "1A6": ("odometer",               0.1),   # PID_ODOMETER (km, raw*0.1)
+    "13C": ("catalyst_temp_b1s1",     0.1),   # PID_CATALYST_TEMP_B1S1 (°C, raw*0.1 - 40)
+    "13D": ("catalyst_temp_b2s1",     0.1),   # PID_CATALYST_TEMP_B2S1 (°C)
+    "161": ("engine_torque_demanded", 1.0),   # PID_ENGINE_TORQUE_DEMANDED (%)
+    "162": ("engine_torque_actual",   1.0),   # PID_ENGINE_TORQUE_PERCENTAGE (%)
+    "163": ("engine_ref_torque",      1.0),   # PID_ENGINE_REF_TORQUE (Nm)
 }
 
 # PID_CONN_TYPE (0x88) values – active transport reported by the firmware.
@@ -273,3 +318,11 @@ CMD_CAN_QUERY           = "CAN?"
 CMD_STANDBY_TIME_QUERY  = "STANDBY_TIME?"
 CMD_DEEP_STANDBY_QUERY  = "DEEP_STANDBY?"
 CMD_CAN_DATA            = "CAN_DATA?"
+
+# Vehicle identification configuration keys.
+# Stored in the config entry so vehicle-specific OBD2 PIDs can be provisioned
+# to the device via NVS.  Optional – devices without a vehicle profile still
+# poll all supported standard OBD2 PIDs.
+CONF_VEHICLE_MAKE = "vehicle_make"
+CONF_VEHICLE_MODEL = "vehicle_model"
+CONF_VEHICLE_YEAR_RANGE = "vehicle_year_range"

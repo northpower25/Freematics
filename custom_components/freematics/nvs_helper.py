@@ -43,6 +43,11 @@ Stored NVS keys (namespace "storage"):
                   verify the correct NVS partition was applied.  Format:
                   "<firmware_version>.<settings_timestamp>", e.g.
                   "5.1.2026-03-16T16:11:20+00:00".
+  VEHICLE_MAKE  – Vehicle manufacturer name (optional, e.g. "Volkswagen")
+  VEHICLE_MODEL – Vehicle model name (optional, e.g. "Golf")
+  VEHICLE_YEAR  – Vehicle year range (optional, e.g. "2020+")
+  VEHICLE_PIDS  – Comma-separated hex Mode-1 PID list for vehicle-specific polling
+                  (optional, e.g. "5C,5E,61,62,63,A6")
 
 Single-file flash image (esptool)
 ----------------------------------
@@ -224,6 +229,10 @@ def generate_nvs_partition(
     can_en: bool = False,
     standby_time_s: int = 0,
     deep_standby: bool = False,
+    vehicle_make: str = "",
+    vehicle_model: str = "",
+    vehicle_year_range: str = "",
+    vehicle_pids: str = "",
 ) -> bytes | None:
     """Generate an ESP32 NVS partition image with Freematics device settings.
 
@@ -409,6 +418,20 @@ def generate_nvs_partition(
         _add_u16("STANDBY_TIME", min(standby_time_s, 900))
     # Deep standby: when 1 the firmware uses ESP32 deep sleep during standby.
     _add_u8("DEEP_STANDBY", 1 if deep_standby else 0)
+
+    # Vehicle identification (NVS keys VEHICLE_MAKE, VEHICLE_MODEL, VEHICLE_YEAR).
+    # Written to NVS so the firmware can log the vehicle and select vehicle-
+    # specific PIDs at startup.  All are optional; absent keys are silently ignored.
+    if vehicle_make:
+        _add_str("VEHICLE_MAKE", vehicle_make)
+    if vehicle_model:
+        _add_str("VEHICLE_MODEL", vehicle_model)
+    if vehicle_year_range:
+        _add_str("VEHICLE_YEAR", vehicle_year_range)
+    # Vehicle-specific extra PIDs (comma-separated hex values, e.g. "5C,5E,A6").
+    # Parsed by the firmware at boot to build a vehicle-specific PID poll list.
+    if vehicle_pids:
+        _add_str("VEHICLE_PIDS", vehicle_pids)
 
     csv_content = "\n".join(rows) + "\n"
 
