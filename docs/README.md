@@ -417,40 +417,172 @@ If the device is already running and reachable on the network, and the firmware 
 
 ## Entities Reference
 
+All entities are created per device and are named using the first 8 characters of the webhook ID as a unique device slug (e.g. `sensor.freematics_b1af617d_speed`).
+
+> **Metadata attributes:** Every entity exposes four informational attributes that can be read in Developer Tools → States:
+> - `purpose` – what the entity measures or does
+> - `data_source` – exact protocol path from hardware to Home Assistant
+> - `dependencies` – required firmware settings or hardware preconditions
+> - `documentation_url` – link to the relevant documentation section
+
+---
+
 ### Sensor Entities
 
-| Entity | Description | Unit |
-|---|---|---|
-| `sensor.…_speed` | Vehicle speed (OBD) | km/h |
-| `sensor.…_rpm` | Engine RPM | rpm |
-| `sensor.…_throttle` | Throttle position | % |
-| `sensor.…_engine_load` | Engine load | % |
-| `sensor.…_coolant_temp` | Coolant temperature | °C |
-| `sensor.…_intake_temp` | Intake air temperature | °C |
-| `sensor.…_fuel_pressure` | Fuel pressure | kPa |
-| `sensor.…_timing_advance` | Ignition timing advance | ° |
-| `sensor.…_lat` | GPS latitude | ° |
-| `sensor.…_lng` | GPS longitude | ° |
-| `sensor.…_alt` | GPS altitude | m |
-| `sensor.…_gps_speed` | GPS speed | km/h |
-| `sensor.…_heading` | GPS heading | ° |
-| `sensor.…_satellites` | GPS satellite count | — |
-| `sensor.…_hdop` | GPS HDOP | — |
-| `sensor.…_acc_x` | Accelerometer X | m/s² |
-| `sensor.…_acc_y` | Accelerometer Y | m/s² |
-| `sensor.…_acc_z` | Accelerometer Z | m/s² |
-| `sensor.…_battery` | Battery voltage | V |
-| `sensor.…_signal` | Signal strength | dBm |
-| `sensor.…_device_temp` | Device temperature | °C |
+All telemetry sensor entities are pre-created at integration setup and show as *unavailable* until the first matching data arrives from the device. They are webhook-driven (no polling) and restore their last value after a Home Assistant restart.
+
+#### Core OBD-II Sensors
+
+| Entity suffix | Friendly name | Unit | Source | OBD-II PID |
+|---|---|---|---|---|
+| `_speed` | Speed | km/h | ECU | 0x0D (fw: 0x10D) |
+| `_rpm` | RPM | rpm | ECU | 0x0C (fw: 0x10C) |
+| `_throttle` | Throttle | % | ECU | 0x11 (fw: 0x111) |
+| `_engine_load` | Engine Load | % | ECU | 0x04 (fw: 0x104) |
+| `_coolant_temp` | Coolant Temperature | °C | ECU | 0x05 (fw: 0x105) |
+| `_intake_temp` | Intake Temperature | °C | ECU | 0x0F (fw: 0x10F) |
+| `_fuel_pressure` | Fuel Pressure | kPa | ECU | 0x0A (fw: 0x10A) |
+| `_timing_advance` | Timing Advance | ° | ECU | 0x0E (fw: 0x10E) |
+| `_short_fuel_trim_1` | Short-Term Fuel Trim B1 | % | ECU | 0x06 (fw: 0x106) |
+| `_long_fuel_trim_1` | Long-Term Fuel Trim B1 | % | ECU | 0x07 (fw: 0x107) |
+| `_short_fuel_trim_2` | Short-Term Fuel Trim B2 | % | ECU | 0x08 (fw: 0x108) |
+| `_long_fuel_trim_2` | Long-Term Fuel Trim B2 | % | ECU | 0x09 (fw: 0x109) |
+
+**Dependencies:** All OBD-II sensors require `OBD_EN=1` (default) in device NVS and the vehicle ECU must support the respective OBD-II service 01 PID.
+
+#### Extended OBD-II Sensors
+
+These sensors are polled when the ECU reports support for them. They remain *unavailable* on vehicles that do not implement the corresponding PID.
+
+| Entity suffix | Friendly name | Unit | OBD-II PID |
+|---|---|---|---|
+| `_intake_map` | Intake Manifold Pressure | kPa | 0x0B (fw: 0x10B) |
+| `_maf_flow` | MAF Air Flow Rate | g/s | 0x10 (fw: 0x110) |
+| `_runtime` | Engine Run Time | s | 0x1F (fw: 0x11F) |
+| `_fuel_level` | Fuel Tank Level | % | 0x2F (fw: 0x12F) |
+| `_barometric` | Barometric Pressure | kPa | 0x33 (fw: 0x133) |
+| `_control_module_voltage` | Control Module Voltage | V | 0x42 (fw: 0x142) |
+| `_absolute_engine_load` | Absolute Engine Load | % | 0x43 (fw: 0x143) |
+| `_relative_throttle` | Relative Throttle Position | % | 0x45 (fw: 0x145) |
+| `_ambient_temp` | Ambient Air Temperature | °C | 0x46 (fw: 0x146) |
+| `_accel_pedal_d` | Accelerator Pedal Position D | % | 0x49 (fw: 0x149) |
+| `_accel_pedal_e` | Accelerator Pedal Position E | % | 0x4A (fw: 0x14A) |
+| `_engine_oil_temp` | Engine Oil Temperature | °C | 0x5C (fw: 0x15C) |
+| `_ethanol_fuel` | Ethanol Fuel Percentage | % | 0x52 (fw: 0x152) |
+| `_hybrid_battery` | Hybrid Battery Remaining | % | 0x5B (fw: 0x15B) |
+| `_engine_fuel_rate` | Engine Fuel Rate | L/h | 0x5E (fw: 0x15E) |
+| `_rel_accel_pedal` | Relative Accel. Pedal | % | 0x5A (fw: 0x15A) |
+| `_odometer` | Odometer | km | 0xA6 (fw: 0x1A6) |
+| `_catalyst_temp_b1s1` | Catalyst Temp B1S1 | °C | 0x3C (fw: 0x13C) |
+| `_catalyst_temp_b2s1` | Catalyst Temp B2S1 | °C | 0x3D (fw: 0x13D) |
+| `_engine_torque_demanded` | Engine Torque Demanded | % | 0x61 (fw: 0x161) |
+| `_engine_torque_actual` | Engine Torque Actual | % | 0x62 (fw: 0x162) |
+| `_engine_ref_torque` | Engine Reference Torque | Nm | 0x63 (fw: 0x163) |
+
+> **Note on firmware hex keys:** The firmware adds `0x100` to all standard OBD-II PIDs before serialising them as hex strings so they don't collide with the custom device PIDs that share the same low-byte values (e.g. `PID_SPEED 0x0D` → firmware key `0x10D`).
+
+#### GPS Sensors
+
+| Entity suffix | Friendly name | Unit | Firmware PID |
+|---|---|---|---|
+| `_lat` | GPS Latitude | ° | 0x0A (hex: `A`) |
+| `_lng` | GPS Longitude | ° | 0x0B (hex: `B`) |
+| `_alt` | GPS Altitude | m | 0x0C (hex: `C`) |
+| `_gps_speed` | GPS Speed | km/h | 0x0D (hex: `D`) |
+| `_heading` | GPS Heading | ° | 0x0E (hex: `E`) |
+| `_satellites` | GPS Satellites | — | 0x0F (hex: `F`) |
+| `_hdop` | GPS HDOP | — | 0x12 (hex: `12`) |
+
+**Dependencies:** GPS module must be active (`GPS_EN=1`). Requires an outdoor GPS fix (or active GPS antenna).
+
+#### Accelerometer Sensors
+
+| Entity suffix | Friendly name | Unit | Firmware PID |
+|---|---|---|---|
+| `_acc_x` | Accelerometer X | g | 0x20 (hex: `20`) — X component of combined X;Y;Z field |
+| `_acc_y` | Accelerometer Y | g | 0x20 (hex: `20`) — Y component |
+| `_acc_z` | Accelerometer Z | g | 0x20 (hex: `20`) — Z component (~1 g at rest) |
+
+**Data source:** Onboard MPU-6050 3-axis accelerometer. The firmware transmits the three axes as a single `X;Y;Z` field; the integration splits them into three sensor entities.
+
+#### Device Hardware Sensors
+
+| Entity suffix | Friendly name | Unit | Firmware PID | Notes |
+|---|---|---|---|---|
+| `_battery` | Battery Voltage | V | 0x24 (hex: `24`) | On-device ADC on the OBD VBATT pin. Raw value ÷ 100. |
+| `_signal` | Signal Strength | dBm | 0x81 (hex: `81`) | WiFi RSSI or cellular RSSI depending on active transport. |
+| `_device_temp` | Device Temperature | °C | 0x82 (hex: `82`) | ESP32 internal temperature sensor. |
+
+---
+
+### Diagnostic Sensor Entities
+
+#### Debug Sensor (`sensor.freematics_<id8>_debug`)
+
+**State:** Active connection type — `WiFi` or `LTE`.
+
+**Purpose:** Exposes the complete device configuration and runtime state as attributes. Intended for troubleshooting and monitoring the integration's health.
+
+**Attributes include:**
+- Firmware version (binary, configured NVS version, actual device NVS version)
+- Connection mode and error counters
+- Last WiFi / LTE / GPS / OBD connection timestamps
+- WiFi SSID (configured vs. device-reported)
+- GPS, OBD2, SD card, HTTPD, BLE: configured and active state
+- LED and beep settings (configured vs. live device state)
+- OBD/CAN/standby/deep-standby (configured vs. live device state)
+- OTA mode, token status, check interval, meta URL
+- OTA last transmission timestamp, last error, last version applied
+- Full raw webhook payload history (last 5000 entries) and error log
+
+**Data source:** Combination of HA config entry options, telemetry PIDs 0x81–0x8C via webhook, device HTTP API queries (`/api/control`, `/api/info`), and OTA pull-view events.
+
+**Dependencies:** Full diagnostics require the device IP configured in integration options so HA can query `/api/control` and `/api/info`.
+
+---
+
+#### CAN Bus Debug Sensor (`sensor.freematics_<id8>_can_debug`)
+
+**State:** `aktiv` / `inaktiv` / `Unbekannt` — live CAN bus active state.
+
+**Purpose:** Shows CAN bus configuration and live state; captures raw CAN frames for analysis.
+
+**Attributes:**
+- `CAN aktiviert (Konfig)` – Whether CAN is enabled in the HA config entry (NVS key `CAN_EN`)
+- `CAN Zustand (IST)` – Live CAN bus state from device PID 0x8A
+- `CAN Frames (letzter Abruf)` – List of raw CAN frame strings from the most recent `CAN_DATA?` query
+- `Letzte Aktualisierung` – ISO timestamp of last CAN data update
+
+**Dependencies:** CAN bus sniffing must be enabled (`CAN_EN=1`). Raw frame capture requires device IP configured in options. Firmware v5.1+ required for `CAN_DATA?` query.
+
+---
+
+### Device Tracker (`device_tracker.freematics_one_<id8>_standort`)
+
+**Purpose:** GPS device tracker combining latitude, longitude, altitude and GPS accuracy into a single HA tracker entity, compatible with the Map card and zone automations.
+
+**Data source:** Derives position from `sensor.freematics_<id8>_lat` and `sensor.freematics_<id8>_lng`. GPS accuracy is estimated as `HDOP × 5` metres from `sensor.freematics_<id8>_hdop`.
+
+**Attributes:**
+- `latitude`, `longitude` – decimal degrees (WGS-84)
+- `altitude` – metres above sea level
+- `gps_accuracy` – horizontal accuracy estimate in metres
+- `vertical_accuracy` – always `null` (not calculated)
+
+**Dependencies:** GPS module active, GPS fix acquired.
+
+---
 
 ### Button Entities
 
-| Entity | Description |
-|---|---|
-| `button.…_flash_firmware_via_serial` | Flash firmware via USB serial |
-| `button.…_flash_firmware_via_wifi_ota` | Flash firmware via WiFi OTA |
-| `button.…_send_config_to_device` | Push WiFi/APN config to device |
-| `button.…_restart_device` | Restart the device |
+| Entity suffix | Friendly name | Description |
+|---|---|---|
+| `_flash_firmware_via_serial` | Flash Firmware via Serial | Flashes bundled firmware + NVS via esptool on the HA server over USB |
+| `_send_config` | Send Config to Device | Pushes WiFi, APN, LED, beep and OTA settings to running device via HTTP API |
+| `_restart` | Restart Device | Sends RESET command to device via HTTP API |
+| `_publish_cloud_ota` | Publish Firmware for Cloud OTA | Copies firmware binary + version.json to `/config/www/FreematicsONE/<id>/` for Cloud OTA Variant 2 |
+
+**All button entities** expose `purpose`, `data_source`, `dependencies` and `documentation_url` attributes describing exactly what each button does, what it reads/writes, and what preconditions are required.
 
 ---
 
@@ -734,6 +866,88 @@ The integration uses `PROTOCOL_HA_WEBHOOK` (value `4`) which POSTs JSON telemetr
 }
 ```
 
+### Firmware Modifications vs. Upstream Freematics Source
+
+This integration ships a custom firmware (`telelogger.bin`, firmware version 5.1) that extends the upstream [Freematics ONE+ firmware](https://github.com/stanleyhuangyc/Freematics) with the following additions:
+
+#### New NVS Configuration Keys
+
+The firmware reads these keys from the ESP32 NVS (Non-Volatile Storage) partition at boot, allowing the integration to provision the device fully via serial flash or OTA without modifying firmware source code:
+
+| NVS Key | Type | Default | Description |
+|---|---|---|---|
+| `HA_WEBHOOK_ID` | string | — | Home Assistant webhook ID (required) |
+| `SERVER_HOST` | string | — | HA server hostname for telemetry and OTA |
+| `SERVER_PORT` | u16 | 443 | HTTPS port |
+| `SERVER_PROTOCOL` | u8 | 4 | Protocol selector (4 = HA Webhook) |
+| `WIFI_SSID` | string | — | WiFi network SSID |
+| `WIFI_PASSWORD` | string | — | WiFi network password |
+| `APN` | string | — | Cellular APN |
+| `SIM_PIN` | string | — | SIM card PIN |
+| `OTA_TOKEN` | string | — | Pull-OTA authentication token (path component) |
+| `OTA_HOST` | string | — | OTA server hostname (defaults to SERVER_HOST) |
+| `OTA_INTERVAL` | u16 | 0 | OTA check interval in seconds (0 = disabled) |
+| `LED_WHITE_EN` | u8 | 1 | White/network LED enable (0 = off) |
+| `LED_RED_EN` | u8 | 1 | Red/power LED enable (0 = off) |
+| `BEEP_EN` | u8 | 1 | Buzzer enable on connection (0 = off) |
+| `OBD_EN` | u8 | 1 | OBD-II polling enable (0 = suppress OBD queries) |
+| `CAN_EN` | u8 | 0 | CAN bus sniffing enable |
+| `STANDBY_TIME` | u16 | 180 | Seconds of inactivity before standby |
+| `DEEP_STANDBY` | u8 | 0 | Use ESP32 deep sleep for standby |
+| `NVS_VER` | string | — | NVS partition version string (written by integration OTA) |
+
+#### New Custom Telemetry PIDs
+
+In addition to the standard OBD-II PIDs, the firmware transmits device-level telemetry using custom PID values (no `0x100` offset):
+
+| Firmware PID (hex) | JSON key | Description |
+|---|---|---|
+| `0x81` | `signal` | WiFi RSSI or cellular RSSI (dBm) |
+| `0x82` | `device_temp` | ESP32 internal temperature (°C) |
+| `0x84` | — | White LED live state (1/0) |
+| `0x85` | — | Beep live state (1/0) |
+| `0x86` | — | SD card total capacity (MiB) |
+| `0x87` | — | SD card free space (MiB) |
+| `0x88` | — | Active transport (1=WiFi, 2=Cellular) |
+| `0x89` | — | OBD polling live state (1/0) |
+| `0x8A` | — | CAN bus live state (1/0) |
+| `0x8B` | — | Standby timeout live value (seconds) |
+| `0x8C` | — | Deep standby live state (1/0) |
+
+#### Pull-OTA Mechanism
+
+The custom firmware implements a **two-phase pull-OTA** update flow:
+
+1. **Phase 1 – Firmware download:** The device periodically polls `GET /api/freematics/ota/<device_slug>/meta.json?token=<OTA_TOKEN>` on the HA server. When a newer version is available, it downloads `firmware.bin` to the SD card (`/ota_fw.bin`) and immediately restarts.
+
+2. **Phase 2 – NVS update:** On the next boot, the freshly booted firmware detects `/ota_fw.bin` and flashes it. It then polls for NVS-only updates (`nvs_only=true` flag in `meta.json`) to receive updated NVS settings (WiFi credentials, LED/beep preferences, etc.) without re-flashing the full firmware binary.
+
+This design means that changing **any setting** in the integration options (WiFi, LED, beep, standby time, etc.) causes the device to receive a silent NVS-only update on the next OTA check — no full re-flash required.
+
+#### HTTP API (`/api/control`)
+
+The firmware exposes an HTTP API on port 80 (HTTPD enabled by default) that the integration uses for:
+- Pushing configuration changes to a running device (`Send Config to Device` button)
+- Reading live device state (SSID, OBD/CAN state, standby settings)
+- Querying raw CAN frames (`CAN_DATA?`)
+- Triggering a device restart (`RESET`)
+- Querying firmware and NVS version (`/api/info`)
+
+#### Integration Capabilities Enabled by the Custom Firmware
+
+| Capability | How it works |
+|---|---|
+| **Zero-config sensor creation** | 63 sensor entities pre-created at setup; populated as data arrives |
+| **Real-time telemetry** | Webhook-driven; no polling by HA |
+| **WiFi Pull-OTA** | HA serves firmware binary + NVS; device downloads and flashes |
+| **Cloud OTA (manual)** | User publishes firmware to `/local/`; device polls via NabuCasa URL |
+| **Live config push** | `/api/control` commands update device NVS immediately |
+| **LED/beep control** | Settings stored in NVS; pushed via OTA or `Send Config` button |
+| **OBD suppression** | `OBD_EN=0` disables ECU polling (e.g. for non-OBD use cases) |
+| **CAN bus sniffing** | `CAN_EN=1` enables CAN raw frame capture via `/api/control` |
+| **Deep standby** | `DEEP_STANDBY=1` for ultra-low power in parked vehicles |
+| **Firmware version tracking** | `NVS_VER` key lets HA track whether device has applied latest NVS |
+
 ### OTA Flash Architecture
 
 The integration bundles `telelogger.bin` (the pre-compiled firmware). When you press **Flash Firmware via WiFi OTA**, the integration:
@@ -742,6 +956,10 @@ The integration bundles `telelogger.bin` (the pre-compiled firmware). When you p
 3. The device's HTTP server writes the firmware and restarts
 
 For Serial flashing, `esptool.py` is invoked as a subprocess with the bundled binary.
+
+For **Pull-OTA** (Variant 1), the device checks `GET /api/freematics/ota/<slug>/meta.json` on each OTA check interval and downloads firmware when the version changes.
+
+For **Cloud OTA** (Variant 2), the `Publish Firmware for Cloud OTA` button writes `firmware.bin` and `version.json` to `/config/www/FreematicsONE/<id>/`, accessible via the HA external URL at `/local/FreematicsONE/<id>/`.
 
 ---
 

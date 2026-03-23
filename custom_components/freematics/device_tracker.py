@@ -26,7 +26,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import CONF_WEBHOOK_ID, DOMAIN
+from .const import CONF_WEBHOOK_ID, DEVICE_TRACKER_METADATA, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -235,11 +235,15 @@ class FreematicsDeviceTracker(RestoreEntity, TrackerEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Return altitude and vertical accuracy as extra attributes."""
+        """Return altitude, vertical accuracy and entity metadata as extra attributes."""
         attrs: dict = {}
         if self._altitude is not None:
             attrs["altitude"] = self._altitude
         attrs["vertical_accuracy"] = None
+        attrs["purpose"] = DEVICE_TRACKER_METADATA["purpose"]
+        attrs["data_source"] = DEVICE_TRACKER_METADATA["data_source"]
+        attrs["dependencies"] = DEVICE_TRACKER_METADATA["dependencies"]
+        attrs["documentation_url"] = DEVICE_TRACKER_METADATA["documentation_url"]
         return attrs
 
     # ------------------------------------------------------------------

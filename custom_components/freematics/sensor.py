@@ -15,7 +15,14 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import CONF_WEBHOOK_ID, DOMAIN, SENSOR_DEFINITIONS
+from .const import (
+    CAN_DEBUG_SENSOR_METADATA,
+    CONF_WEBHOOK_ID,
+    DEBUG_SENSOR_METADATA,
+    DOMAIN,
+    SENSOR_DEFINITIONS,
+    SENSOR_METADATA,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -193,6 +200,19 @@ class FreematicsSensor(RestoreEntity, SensorEntity):
                 self._attr_native_value = float(last_state.state)
             except (TypeError, ValueError):
                 self._attr_native_value = last_state.state
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Return metadata about this sensor (purpose, data source, dependencies, docs)."""
+        meta = SENSOR_METADATA.get(self._key)
+        if not meta:
+            return None
+        return {
+            "purpose": meta["purpose"],
+            "data_source": meta["data_source"],
+            "dependencies": meta["dependencies"],
+            "documentation_url": meta["documentation_url"],
+        }
 
 
 class FreematicsDebugSensor(SensorEntity):
@@ -377,6 +397,11 @@ class FreematicsDebugSensor(SensorEntity):
             # Raw debug data
             "raw_data": d["raw_data"],
             "errors": d["errors"],
+            # Entity metadata
+            "purpose": DEBUG_SENSOR_METADATA["purpose"],
+            "data_source": DEBUG_SENSOR_METADATA["data_source"],
+            "dependencies": DEBUG_SENSOR_METADATA["dependencies"],
+            "documentation_url": DEBUG_SENSOR_METADATA["documentation_url"],
         }
 
     @callback
@@ -460,6 +485,11 @@ class FreematicsCanDebugSensor(SensorEntity):
             "CAN Zustand (IST)": d["can_state_device"],
             "CAN Frames (letzter Abruf)": d["can_frames"],
             "Letzte Aktualisierung": d["last_update"],
+            # Entity metadata
+            "purpose": CAN_DEBUG_SENSOR_METADATA["purpose"],
+            "data_source": CAN_DEBUG_SENSOR_METADATA["data_source"],
+            "dependencies": CAN_DEBUG_SENSOR_METADATA["dependencies"],
+            "documentation_url": CAN_DEBUG_SENSOR_METADATA["documentation_url"],
         }
 
     @callback
