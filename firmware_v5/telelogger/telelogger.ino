@@ -803,19 +803,28 @@ void initialize()
   // initialize OBD communication (skipped when enableObd=false via NVS key OBD_EN)
   if (enableObd && !state.check(STATE_OBD_READY)) {
     timeoutsOBD = 0;
+    // Pre-wake: send OBD2 diagnostic requests BEFORE obd.init() so the vehicle ECU
+    // is active when init() tries to communicate.  Many vehicles (especially VAG:
+    // VW/Skoda/Audi/Seat, but also BMW and Mercedes) keep the diagnostic CAN bus
+    // silent until they receive an initial request — obd.init() alone may time out
+    // because it expects the ECU to already be responsive.
+    // Sequence: minimal ELM327 reset + two PID requests (RPM=0x0C, coolant=0x05).
+    // The ECU may not reply yet (still waking up), which is fine; the intent is to
+    // put a frame on the bus and let the ECU's diagnostic stack initialise before
+    // obd.init() fires its own PID_SPEED probe.
+    if (obd.link) {
+      char wbuf[64];
+      obd.link->sendCommand("ATZ\r",  wbuf, sizeof(wbuf), 1000); // reset ELM327
+      obd.link->sendCommand("ATE0\r", wbuf, sizeof(wbuf),  500); // disable echo
+      obd.link->sendCommand("ATH0\r", wbuf, sizeof(wbuf),  500); // disable headers
+      obd.link->sendCommand("010C\r", wbuf, sizeof(wbuf),  500); // RPM – wake req 1
+      obd.link->sendCommand("0105\r", wbuf, sizeof(wbuf),  500); // coolant – wake req 2
+      Serial.println("OBD:pre-wake sent");
+      delay(100); // give ECU time to start its diagnostic task
+    }
     if (obd.init()) {
       Serial.println("OBD:OK");
       state.set(STATE_OBD_READY);
-      // Send initial wake-up PID sequence to activate the ECU's diagnostic bus.
-      // Many vehicles (especially VAG: VW/Skoda/Audi/Seat) keep the diagnostic
-      // CAN port silent until a valid OBD2 request is received.  Sending RPM and
-      // coolant-temp here guarantees the ECU is awake before normal polling starts.
-      {
-        int dummy;
-        obd.readPID(PID_RPM, dummy);         // 01 0C – wake request 1
-        obd.readPID(PID_COOLANT_TEMP, dummy); // 01 05 – wake request 2
-        Serial.println("OBD:wake-up sent");
-      }
 #if ENABLE_OLED
       oled.println("OBD OK");
 #endif
@@ -1354,6 +1363,41 @@ void process()
       break;
     }
   }
+  // OBD alive check: fires once per stationary period, as soon as the device
+  // first enters the standby countdown (motionless >= stationaryTime[0], i.e.
+  // 10 s by default).  Goal: detect "ignition off" early so the Freematics
+  // stops polling the OBD2 port immediately.  Some vehicles with factory alarms
+  // monitor the OBD2 bus; continued requests after the ignition is cut can
+  // trigger a false alarm.
+  // The check is skipped when OBD is disabled or the ECU was never connected
+  // (STATE_OBD_READY not set), in which case the normal countdown applies.
+#if ENABLE_OBD
+  {
+    static bool s_obdAliveChecked = false; // reset each time motion resumes
+    const bool inStationaryPhase = (motionless >= stationaryTime[0]);
+    if (!inStationaryPhase) {
+      // Vehicle is moving – clear the flag so we probe again next time it stops.
+      s_obdAliveChecked = false;
+    } else if (enableObd && state.check(STATE_OBD_READY) && !s_obdAliveChecked) {
+      s_obdAliveChecked = true;
+      // Probe with "01 00" (Mode 1 PID 0 – supported PIDs [01-20]).  This is a
+      // read-only request with no side effects; 1 s timeout keeps the check
+      // non-blocking.  The ELM327 link is accessed directly to control the
+      // timeout, bypassing obd.readPID() which uses OBD_TIMEOUT_LONG (10 s).
+      char abuf[32] = {};
+      const int ret = obd.link ? obd.link->sendCommand("0100\r", abuf, sizeof(abuf), 1000) : 0;
+      if (ret <= 0) {
+        // No response: ECU is offline (ignition cut).  Enter standby now
+        // without waiting for the full countdown to expire.
+        Serial.println("OBD:ECU offline at standby-timer start - entering standby immediately");
+        state.clear(STATE_WORKING);
+        return;
+      }
+      Serial.println("OBD:ECU alive - standby countdown running");
+    }
+  }
+#endif
+
   if (stationary) {
     // stationery timeout
     Serial.print("Stationary for ");

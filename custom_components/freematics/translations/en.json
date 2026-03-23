@@ -52,18 +52,34 @@
                     "device_model": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular)"
                 }
             },
-            "vehicle": {
-                "title": "Freematics ONE+ – Vehicle Profile",
-                "description": "Select your vehicle to enable vehicle-specific OBD2 PIDs. The firmware will poll additional manufacturer-specific data points when your vehicle supports them.\n\nLeave fields empty to skip vehicle-specific configuration. Standard OBD2 PIDs (speed, RPM, temperature, etc.) are always polled regardless of this selection.\n\n*Note*: After changing the manufacturer, save and re-open settings to see the updated model list.",
+            "vehicle_make": {
+                "title": "Freematics ONE+ – Vehicle Manufacturer",
+                "description": "Select your vehicle manufacturer to enable vehicle-specific OBD2 PIDs.\n\nLeave empty to skip vehicle-specific configuration. Standard OBD2 PIDs (speed, RPM, temperature, etc.) are always polled regardless of this selection.",
                 "data": {
-                    "vehicle_make": "Vehicle manufacturer",
-                    "vehicle_model": "Vehicle model",
+                    "vehicle_make": "Vehicle manufacturer"
+                },
+                "data_description": {
+                    "vehicle_make": "Select the vehicle manufacturer (e.g. BMW, Mercedes, Volkswagen). → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "vehicle_model": {
+                "title": "Freematics ONE+ – Vehicle Model",
+                "description": "Select the model for your chosen manufacturer.",
+                "data": {
+                    "vehicle_model": "Vehicle model"
+                },
+                "data_description": {
+                    "vehicle_model": "Select the vehicle model. Only models for the selected manufacturer are shown. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "vehicle_year": {
+                "title": "Freematics ONE+ – Vehicle Year Range",
+                "description": "Select the production year range for your vehicle.",
+                "data": {
                     "vehicle_year_range": "Year range"
                 },
                 "data_description": {
-                    "vehicle_make": "Select the vehicle manufacturer. → **Applied via:** Serial flash · OTA (WiFi & Cellular)",
-                    "vehicle_model": "Select the vehicle model (filtered by manufacturer). → **Applied via:** Serial flash · OTA",
-                    "vehicle_year_range": "Select the production year range of your vehicle. → **Applied via:** Serial flash · OTA"
+                    "vehicle_year_range": "Select the production year range matching your vehicle. The firmware will poll additional manufacturer-specific PIDs for this model year. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
                 }
             },
             "advanced": {
@@ -127,7 +143,7 @@
         "step": {
             "init": {
                 "title": "Freematics ONE+ – Update Settings",
-                "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.\n\n⚠️ After changing OTA settings, re-provision the device (re-flash NVS via the Browser Flasher or Serial Flash button) so the new token and interval are written to the device.",
+                "description": "Update the device settings. Changes are applied on the next flash or when you press **Send Config to Device**.\n\n⚠️ After changing OTA settings, re-provision the device (re-flash NVS via the Browser Flasher or Serial Flash button) so the new token and interval are written to the device.\n\nThe currently configured vehicle profile is shown when you tick \"Configure vehicle profile\".",
                 "data": {
                     "wifi_ssid": "WiFi SSID",
                     "wifi_password": "WiFi Password",
@@ -152,9 +168,7 @@
                     "can_en": "Enable CAN bus sniffing (CAN_EN)",
                     "standby_time_s": "Standby timeout (seconds, 5-900)",
                     "deep_standby": "Enable deep standby (DEEP_STANDBY)",
-                    "vehicle_make": "Vehicle manufacturer",
-                    "vehicle_model": "Vehicle model",
-                    "vehicle_year_range": "Year range"
+                    "configure_vehicle": "Configure vehicle profile"
                 },
                 "data_description": {
                     "wifi_ssid": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
@@ -179,7 +193,38 @@
                     "obd_en": "→ **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
                     "can_en": "CAN sniffing requires OBD to be enabled. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
                     "standby_time_s": "Seconds of no motion before the device enters standby. Range: 5–900 s. Default: 180 s. → **Applied via:** Serial flash · OTA (WiFi & Cellular) · **Send Config** button",
-                    "deep_standby": "When enabled the device uses ESP32 deep sleep during standby. Saves more power but the device fully restarts on wake-up. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                    "deep_standby": "When enabled the device uses ESP32 deep sleep during standby. Saves more power but the device fully restarts on wake-up. → **Applied via:** Serial flash · OTA (WiFi & Cellular)",
+                    "configure_vehicle": "Current profile: {vehicle_summary}. Enable to update the vehicle manufacturer, model, and year range via guided sub-steps."
+                }
+            },
+            "vehicle_make": {
+                "title": "Freematics ONE+ – Vehicle Manufacturer",
+                "description": "Select your vehicle manufacturer to enable vehicle-specific OBD2 PIDs.\n\nLeave empty to clear the current vehicle profile.",
+                "data": {
+                    "vehicle_make": "Vehicle manufacturer"
+                },
+                "data_description": {
+                    "vehicle_make": "Select the vehicle manufacturer (e.g. BMW, Mercedes, Volkswagen). → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "vehicle_model": {
+                "title": "Freematics ONE+ – Vehicle Model",
+                "description": "Select the model for your chosen manufacturer.",
+                "data": {
+                    "vehicle_model": "Vehicle model"
+                },
+                "data_description": {
+                    "vehicle_model": "Only models for the selected manufacturer are shown. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
+                }
+            },
+            "vehicle_year": {
+                "title": "Freematics ONE+ – Vehicle Year Range",
+                "description": "Select the production year range for your vehicle.",
+                "data": {
+                    "vehicle_year_range": "Year range"
+                },
+                "data_description": {
+                    "vehicle_year_range": "The firmware will poll additional manufacturer-specific PIDs for this model year. → **Applied via:** Serial flash · OTA (WiFi & Cellular)"
                 }
             }
         }

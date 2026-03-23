@@ -125,14 +125,16 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Freematics ONE+.
 
     Step order:
-      1. user        – choose connection type
-      2. wifi        – WiFi credentials (if wifi/both)
-      3. cellular    – APN / SIM PIN (if cellular/both)
-      4. webhook     – review auto-generated webhook URL / firmware settings
-      5. device      – select device model (A / B / H)
-      6. vehicle     – select vehicle make / model / year for vehicle-specific PIDs
-      7. advanced    – operating mode (Telelogger vs Datalogger), BLE, intervals
-      8. flash       – choose flash method and device address
+      1. user           – choose connection type
+      2. wifi           – WiFi credentials (if wifi/both)
+      3. cellular       – APN / SIM PIN (if cellular/both)
+      4. webhook        – review auto-generated webhook URL / firmware settings
+      5. device         – select device model (A / B / H)
+      6. vehicle_make   – select vehicle manufacturer
+      7. vehicle_model  – select vehicle model (filtered by manufacturer)
+      8. vehicle_year   – select vehicle year range (filtered by model)
+      9. advanced       – operating mode (Telelogger vs Datalogger), BLE, intervals
+     10. flash          – choose flash method and device address
     """
 
     VERSION = 2
@@ -281,7 +283,7 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Select the Freematics ONE+ hardware model."""
         if user_input is not None:
             self._data.update(user_input)
-            return await self.async_step_vehicle()
+            return await self.async_step_vehicle_make()
 
         return self.async_show_form(
             step_id="device",
@@ -299,45 +301,95 @@ class FreematicsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------------
-    # Step 5b – Vehicle selection
+    # Step 6a – Vehicle manufacturer selection
     # ------------------------------------------------------------------
-    async def async_step_vehicle(self, user_input=None):
-        """Select vehicle manufacturer, model and year range for vehicle-specific PIDs."""
-        from .vehicle_profiles import get_makes, get_models, get_year_ranges, get_vehicle_pids  # noqa: PLC0415
+    async def async_step_vehicle_make(self, user_input=None):
+        """Select vehicle manufacturer."""
+        from .vehicle_profiles import get_makes  # noqa: PLC0415
 
         if user_input is not None:
             self._data.update(user_input)
-            make  = user_input.get(CONF_VEHICLE_MAKE, "")
-            model = user_input.get(CONF_VEHICLE_MODEL, "")
-            year  = user_input.get(CONF_VEHICLE_YEAR_RANGE, "")
-            if make and model and year:
-                # Populate vehicle-specific PIDs string so it gets written to NVS
-                pids = get_vehicle_pids(make, model, year)
-                self._data["vehicle_pids"] = pids
+            make = user_input.get(CONF_VEHICLE_MAKE, "")
+            if make:
+                return await self.async_step_vehicle_model()
+            # No make selected – clear dependent fields and skip to advanced
+            self._data[CONF_VEHICLE_MODEL] = ""
+            self._data[CONF_VEHICLE_YEAR_RANGE] = ""
             return await self.async_step_advanced()
 
         makes = get_makes()
         current_make = self._data.get(CONF_VEHICLE_MAKE, "")
-        models = get_models(current_make) if current_make else []
-        current_model = self._data.get(CONF_VEHICLE_MODEL, "")
-        year_ranges = get_year_ranges(current_make, current_model) if current_make and current_model else []
-
         make_options: dict[str, str] = {"": "— Not specified —"}
         make_options.update({m: m for m in makes})
 
+        return self.async_show_form(
+            step_id="vehicle_make",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_VEHICLE_MAKE, default=current_make): vol.In(make_options),
+                }
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Step 6b – Vehicle model selection (filtered by manufacturer)
+    # ------------------------------------------------------------------
+    async def async_step_vehicle_model(self, user_input=None):
+        """Select vehicle model for the previously chosen manufacturer."""
+        from .vehicle_profiles import get_models  # noqa: PLC0415
+
+        current_make = self._data.get(CONF_VEHICLE_MAKE, "")
+
+        if user_input is not None:
+            self._data.update(user_input)
+            model = user_input.get(CONF_VEHICLE_MODEL, "")
+            if model:
+                return await self.async_step_vehicle_year()
+            # No model selected – clear year range and skip to advanced
+            self._data[CONF_VEHICLE_YEAR_RANGE] = ""
+            return await self.async_step_advanced()
+
+        models = get_models(current_make)
+        current_model = self._data.get(CONF_VEHICLE_MODEL, "")
         model_options: dict[str, str] = {"": "— Not specified —"}
         model_options.update({m: m for m in models})
 
+        return self.async_show_form(
+            step_id="vehicle_model",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_VEHICLE_MODEL, default=current_model): vol.In(model_options),
+                }
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Step 6c – Vehicle year-range selection (filtered by make + model)
+    # ------------------------------------------------------------------
+    async def async_step_vehicle_year(self, user_input=None):
+        """Select vehicle year range for the previously chosen make and model."""
+        from .vehicle_profiles import get_year_ranges, get_vehicle_pids  # noqa: PLC0415
+
+        current_make  = self._data.get(CONF_VEHICLE_MAKE, "")
+        current_model = self._data.get(CONF_VEHICLE_MODEL, "")
+
+        if user_input is not None:
+            self._data.update(user_input)
+            year = user_input.get(CONF_VEHICLE_YEAR_RANGE, "")
+            if year:
+                pids = get_vehicle_pids(current_make, current_model, year)
+                self._data["vehicle_pids"] = pids
+            return await self.async_step_advanced()
+
+        year_ranges = get_year_ranges(current_make, current_model)
         year_options: dict[str, str] = {"": "— Not specified —"}
         year_options.update({y: y for y in year_ranges})
 
         return self.async_show_form(
-            step_id="vehicle",
+            step_id="vehicle_year",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(CONF_VEHICLE_MAKE,       default=current_make):  vol.In(make_options),
-                    vol.Optional(CONF_VEHICLE_MODEL,      default=current_model): vol.In(model_options),
-                    vol.Optional(CONF_VEHICLE_YEAR_RANGE, default=""):            vol.In(year_options),
+                    vol.Optional(CONF_VEHICLE_YEAR_RANGE, default=""): vol.In(year_options),
                 }
             ),
         )
@@ -474,6 +526,9 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Store entry for later use."""
         self._config_entry = config_entry
+        # Holds accumulated options data while vehicle profile sub-steps are active.
+        # Populated only when the user ticks "Configure vehicle profile" in async_step_init.
+        self._options_data: dict = {}
 
     async def async_step_init(self, user_input=None):
         """Manage options."""
@@ -488,6 +543,9 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_CAN_EN] = "can_requires_obd"
 
             if not errors:
+                # Extract flow-control flag before persisting data.
+                configure_vehicle = user_input.pop("configure_vehicle", False)
+
                 # Auto-generate an OTA token when the user enables OTA for the
                 # first time (switches away from disabled without a stored token).
                 ota_mode = user_input.get(CONF_OTA_MODE, OTA_MODE_DISABLED)
@@ -506,11 +564,20 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                     else:
                         user_input[CONF_OTA_TOKEN] = secrets.token_hex(32)
 
-                # Recalculate vehicle-specific PIDs when vehicle selection changes
+                if configure_vehicle:
+                    # Store a copy of partial data and continue through vehicle sub-steps.
+                    self._options_data = dict(user_input)
+                    return await self.async_step_vehicle_make()
+
+                # No vehicle change – carry over existing vehicle selections and
+                # recalculate PIDs in case a prior make/model/year is stored.
+                user_input[CONF_VEHICLE_MAKE]       = current.get(CONF_VEHICLE_MAKE, "")
+                user_input[CONF_VEHICLE_MODEL]      = current.get(CONF_VEHICLE_MODEL, "")
+                user_input[CONF_VEHICLE_YEAR_RANGE] = current.get(CONF_VEHICLE_YEAR_RANGE, "")
                 from .vehicle_profiles import get_vehicle_pids  # noqa: PLC0415
-                v_make  = user_input.get(CONF_VEHICLE_MAKE, "")
-                v_model = user_input.get(CONF_VEHICLE_MODEL, "")
-                v_year  = user_input.get(CONF_VEHICLE_YEAR_RANGE, "")
+                v_make  = user_input[CONF_VEHICLE_MAKE]
+                v_model = user_input[CONF_VEHICLE_MODEL]
+                v_year  = user_input[CONF_VEHICLE_YEAR_RANGE]
                 if v_make and v_model and v_year:
                     user_input["vehicle_pids"] = get_vehicle_pids(v_make, v_model, v_year)
 
@@ -541,9 +608,24 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                 else OPERATING_MODE_TELELOGGER
             )
 
+        # Build a human-readable summary of the currently stored vehicle profile
+        # so users know what is configured without opening sub-steps.
+        v_make  = current.get(CONF_VEHICLE_MAKE, "")
+        v_model = current.get(CONF_VEHICLE_MODEL, "")
+        v_year  = current.get(CONF_VEHICLE_YEAR_RANGE, "")
+        if v_make and v_model and v_year:
+            vehicle_summary = f"{v_make} · {v_model} · {v_year}"
+        elif v_make and v_model:
+            vehicle_summary = f"{v_make} · {v_model}"
+        elif v_make:
+            vehicle_summary = v_make
+        else:
+            vehicle_summary = "— not configured —"
+
         return self.async_show_form(
             step_id="init",
             errors=errors,
+            description_placeholders={"vehicle_summary": vehicle_summary},
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_WIFI_SSID, default=current.get(CONF_WIFI_SSID, "")): str,
@@ -560,18 +642,7 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                             DEVICE_MODEL_H: "Model H – WiFi only",
                         }
                     ),
-                    vol.Optional(
-                        CONF_VEHICLE_MAKE,
-                        default=current.get(CONF_VEHICLE_MAKE, ""),
-                    ): str,
-                    vol.Optional(
-                        CONF_VEHICLE_MODEL,
-                        default=current.get(CONF_VEHICLE_MODEL, ""),
-                    ): str,
-                    vol.Optional(
-                        CONF_VEHICLE_YEAR_RANGE,
-                        default=current.get(CONF_VEHICLE_YEAR_RANGE, ""),
-                    ): str,
+                    vol.Optional("configure_vehicle", default=False): bool,
                     vol.Required(
                         CONF_OPERATING_MODE,
                         default=stored_mode,
@@ -644,3 +715,112 @@ class FreematicsOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Options – vehicle sub-steps (only entered when configure_vehicle=True)
+    # ------------------------------------------------------------------
+
+    async def async_step_vehicle_make(self, user_input=None):
+        """Select vehicle manufacturer (options flow)."""
+        from .vehicle_profiles import get_makes  # noqa: PLC0415
+
+        if user_input is not None:
+            self._options_data.update(user_input)
+            make = user_input.get(CONF_VEHICLE_MAKE, "")
+            if make:
+                return await self.async_step_vehicle_model()
+            # No make – clear dependent fields and save
+            self._options_data[CONF_VEHICLE_MODEL]      = ""
+            self._options_data[CONF_VEHICLE_YEAR_RANGE] = ""
+            return await self._finalize_options()
+
+        makes = get_makes()
+        current_make = self._options_data.get(CONF_VEHICLE_MAKE, "")
+        make_options: dict[str, str] = {"": "— Not specified —"}
+        make_options.update({m: m for m in makes})
+
+        return self.async_show_form(
+            step_id="vehicle_make",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_VEHICLE_MAKE, default=current_make): vol.In(make_options),
+                }
+            ),
+        )
+
+    async def async_step_vehicle_model(self, user_input=None):
+        """Select vehicle model (options flow, filtered by manufacturer)."""
+        from .vehicle_profiles import get_models  # noqa: PLC0415
+
+        current_make = self._options_data.get(CONF_VEHICLE_MAKE, "")
+
+        if user_input is not None:
+            self._options_data.update(user_input)
+            model = user_input.get(CONF_VEHICLE_MODEL, "")
+            if model:
+                return await self.async_step_vehicle_year()
+            # No model – clear year range and save
+            self._options_data[CONF_VEHICLE_YEAR_RANGE] = ""
+            return await self._finalize_options()
+
+        models = get_models(current_make)
+        current_model = self._options_data.get(CONF_VEHICLE_MODEL, "")
+        model_options: dict[str, str] = {"": "— Not specified —"}
+        model_options.update({m: m for m in models})
+
+        return self.async_show_form(
+            step_id="vehicle_model",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_VEHICLE_MODEL, default=current_model): vol.In(model_options),
+                }
+            ),
+        )
+
+    async def async_step_vehicle_year(self, user_input=None):
+        """Select vehicle year range (options flow, filtered by make + model)."""
+        from .vehicle_profiles import get_year_ranges  # noqa: PLC0415
+
+        current_make  = self._options_data.get(CONF_VEHICLE_MAKE, "")
+        current_model = self._options_data.get(CONF_VEHICLE_MODEL, "")
+
+        if user_input is not None:
+            self._options_data.update(user_input)
+            return await self._finalize_options()
+
+        year_ranges = get_year_ranges(current_make, current_model)
+        year_options: dict[str, str] = {"": "— Not specified —"}
+        year_options.update({y: y for y in year_ranges})
+
+        return self.async_show_form(
+            step_id="vehicle_year",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_VEHICLE_YEAR_RANGE, default=""): vol.In(year_options),
+                }
+            ),
+        )
+
+    async def _finalize_options(self):
+        """Calculate vehicle PIDs, bump settings version, and save options."""
+        current = {**self._config_entry.data, **self._config_entry.options}
+        data = self._options_data
+
+        # Compute vehicle-specific PID string from the chosen profile.
+        from .vehicle_profiles import get_vehicle_pids  # noqa: PLC0415
+        v_make  = data.get(CONF_VEHICLE_MAKE, "")
+        v_model = data.get(CONF_VEHICLE_MODEL, "")
+        v_year  = data.get(CONF_VEHICLE_YEAR_RANGE, "")
+        if v_make and v_model and v_year:
+            data["vehicle_pids"] = get_vehicle_pids(v_make, v_model, v_year)
+
+        # Bump settings version when NVS-relevant settings changed.
+        if _nvs_settings_hash(data) != _nvs_settings_hash(current):
+            data[CONF_SETTINGS_VERSION] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S+00:00"
+            )
+        else:
+            data[CONF_SETTINGS_VERSION] = current.get(CONF_SETTINGS_VERSION, "")
+
+        return self.async_create_entry(title="", data=data)
+
