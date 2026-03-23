@@ -88,6 +88,9 @@ from .const import (
     CONF_SIM_PIN,
     CONF_STANDBY_TIME_S,
     CONF_SYNC_INTERVAL_S,
+    CONF_VEHICLE_MAKE,
+    CONF_VEHICLE_MODEL,
+    CONF_VEHICLE_YEAR_RANGE,
     CONF_WEBHOOK_ID,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
@@ -868,6 +871,10 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         standby_time_s = 5
     deep_standby = bool(cfg.get(CONF_DEEP_STANDBY, DEFAULT_DEEP_STANDBY))
     data_interval_ms = int(cfg.get(CONF_DATA_INTERVAL_MS, 0))
+    vehicle_make = cfg.get(CONF_VEHICLE_MAKE, "")
+    vehicle_model = cfg.get(CONF_VEHICLE_MODEL, "")
+    vehicle_year_range = cfg.get(CONF_VEHICLE_YEAR_RANGE, "")
+    vehicle_pids = cfg.get("vehicle_pids", "")
     sync_interval_s = int(cfg.get(CONF_SYNC_INTERVAL_S, 0))
     # NVS settings version: "<firmware_version>.<settings_timestamp>" so the
     # firmware can log it at boot and the user can verify the correct NVS was
@@ -1197,6 +1204,10 @@ async def _build_nvs_kwargs(hass, entry) -> dict:
         "ota_port": ota_port,
         "ota_check_interval_s": ota_check_interval_s,
         "nvs_version": nvs_version,
+        "vehicle_make": vehicle_make,
+        "vehicle_model": vehicle_model,
+        "vehicle_year_range": vehicle_year_range,
+        "vehicle_pids": vehicle_pids,
     }
 
 
@@ -1270,6 +1281,10 @@ class FreematicsConfigNvsView(HomeAssistantView):
             kwargs.get("can_en", False),
             kwargs.get("standby_time_s", 0),
             kwargs.get("deep_standby", False),
+            kwargs.get("vehicle_make", ""),
+            kwargs.get("vehicle_model", ""),
+            kwargs.get("vehicle_year_range", ""),
+            kwargs.get("vehicle_pids", ""),
         )
 
         if nvs_data is None:
@@ -1376,6 +1391,10 @@ class FreematicsFlashImageView(HomeAssistantView):
             kwargs.get("can_en", False),
             kwargs.get("standby_time_s", 0),
             kwargs.get("deep_standby", False),
+            kwargs.get("vehicle_make", ""),
+            kwargs.get("vehicle_model", ""),
+            kwargs.get("vehicle_year_range", ""),
+            kwargs.get("vehicle_pids", ""),
         )
 
         if nvs_data is None:
@@ -1871,6 +1890,10 @@ class FreematicsOtaPullView(HomeAssistantView):
                     kwargs.get("can_en", False),
                     kwargs.get("standby_time_s", 0),
                     kwargs.get("deep_standby", False),
+                    kwargs.get("vehicle_make", ""),
+                    kwargs.get("vehicle_model", ""),
+                    kwargs.get("vehicle_year_range", ""),
+                    kwargs.get("vehicle_pids", ""),
                 )
             except ImportError:
                 nvs_data = None

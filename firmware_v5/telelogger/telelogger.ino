@@ -55,16 +55,44 @@ typedef struct {
 } PID_POLLING_INFO;
 
 PID_POLLING_INFO obdData[]= {
+  // Tier 1: polled every cycle (fast-changing: speed, RPM, throttle, load)
   {PID_SPEED, 1},
   {PID_RPM, 1},
   {PID_THROTTLE, 1},
   {PID_ENGINE_LOAD, 1},
+  // Tier 2: polled once per two cycles (medium rate)
   {PID_FUEL_PRESSURE, 2},
   {PID_TIMING_ADVANCE, 2},
+  {PID_INTAKE_MAP, 2},
+  {PID_MAF_FLOW, 2},
+  // Tier 3: polled once per many cycles (slow-changing)
   {PID_COOLANT_TEMP, 3},
   {PID_INTAKE_TEMP, 3},
   {PID_SHORT_TERM_FUEL_TRIM_1, 3},
   {PID_LONG_TERM_FUEL_TRIM_1, 3},
+  {PID_SHORT_TERM_FUEL_TRIM_2, 3},
+  {PID_LONG_TERM_FUEL_TRIM_2, 3},
+  {PID_RUNTIME, 3},
+  {PID_FUEL_LEVEL, 3},
+  {PID_BAROMETRIC, 3},
+  {PID_CONTROL_MODULE_VOLTAGE, 3},
+  {PID_ABSOLUTE_ENGINE_LOAD, 3},
+  {PID_RELATIVE_THROTTLE_POS, 3},
+  {PID_AMBIENT_TEMP, 3},
+  {PID_ACC_PEDAL_POS_D, 3},
+  {PID_ACC_PEDAL_POS_E, 3},
+  {PID_ENGINE_OIL_TEMP, 3},
+  {PID_ETHANOL_FUEL, 3},
+  {PID_HYBRID_BATTERY_PERCENTAGE, 3},
+  {PID_ENGINE_FUEL_RATE, 3},
+  {PID_REL_ACCEL_PEDAL, 3},
+  {PID_ODOMETER, 3},
+  // Catalyst temperatures (only supported on petrol engines)
+  {PID_CATALYST_TEMP_B1S1, 3},
+  {PID_CATALYST_TEMP_B2S1, 3},
+  {PID_ENGINE_TORQUE_DEMANDED, 3},
+  {PID_ENGINE_TORQUE_PERCENTAGE, 3},
+  {PID_ENGINE_REF_TORQUE, 3},
 };
 
 CBufferManager bufman;
@@ -190,6 +218,20 @@ bool enableCan = false;  // CAN bus sniffing (future use; NVS key CAN_EN)
 // standby instead of the normal active-wait loop.  Loaded from NVS key
 // DEEP_STANDBY (u8, 0=off 1=on).  Defaults to false.
 bool enableDeepStandby = false;
+
+// Vehicle identification loaded from NVS (VEHICLE_MAKE, VEHICLE_MODEL, VEHICLE_YEAR).
+// Stored for informational purposes and future vehicle-specific PID selection.
+char vehicleMake[32] = "";
+char vehicleModel[32] = "";
+char vehicleYear[8] = "";
+// Vehicle-specific extra PIDs (VEHICLE_PIDS NVS key).
+// Comma-separated list of mode-1 PID hex values, e.g. "22,23,5A".
+// The firmware parses this at startup and appends those PIDs to the dynamic poll list.
+char vehiclePidsStr[128] = "";
+// Runtime dynamic vehicle PID poll list (parsed from vehiclePidsStr).
+#define MAX_VEHICLE_PIDS 16
+PID_POLLING_INFO vehicleObdData[MAX_VEHICLE_PIDS];
+int vehicleObdDataCount = 0;
 
 // Standby-time override loaded from NVS key STANDBY_TIME (u16, seconds).
 // 0 means "use the compile-time STATIONARY_TIME_TABLE default" (currently 180 s).
@@ -474,6 +516,22 @@ void processOBD(CBuffer* buffer)
     }
     if (tier > 1) break;
   }
+  // Poll vehicle-specific extra PIDs (from VEHICLE_PIDS NVS key).
+  // Use a static index to cycle through all vehicle PIDs one per call (tier-3 pacing).
+  if (vehicleObdDataCount > 0) {
+    static int vehiclePidIdx = 0;
+    if (vehiclePidIdx >= vehicleObdDataCount) vehiclePidIdx = 0;
+    byte vpid = vehicleObdData[vehiclePidIdx].pid;
+    if (obd.isValidPID(vpid)) {
+      int vval;
+      if (obd.readPID(vpid, vval)) {
+        vehicleObdData[vehiclePidIdx].ts    = millis();
+        vehicleObdData[vehiclePidIdx].value = vval;
+        buffer->add((uint16_t)vpid | 0x100, ELEMENT_INT32, &vval, sizeof(vval));
+      }
+    }
+    vehiclePidIdx++;
+  }
   int kph = obdData[0].value;
   if (kph >= 2) lastMotionTime = millis();
 }
@@ -748,6 +806,16 @@ void initialize()
     if (obd.init()) {
       Serial.println("OBD:OK");
       state.set(STATE_OBD_READY);
+      // Send initial wake-up PID sequence to activate the ECU's diagnostic bus.
+      // Many vehicles (especially VAG: VW/Skoda/Audi/Seat) keep the diagnostic
+      // CAN port silent until a valid OBD2 request is received.  Sending RPM and
+      // coolant-temp here guarantees the ECU is awake before normal polling starts.
+      {
+        int dummy;
+        obd.readPID(PID_RPM, dummy);         // 01 0C – wake request 1
+        obd.readPID(PID_COOLANT_TEMP, dummy); // 01 05 – wake request 2
+        Serial.println("OBD:wake-up sent");
+      }
 #if ENABLE_OLED
       oled.println("OBD OK");
 #endif
@@ -765,6 +833,16 @@ void initialize()
     obd.sniff(enableCan);
     s_canSniffActive = enableCan;
     Serial.println(enableCan ? "CAN:sniff on" : "CAN:sniff off");
+    if (enableCan) {
+      // Send initial CAN wake-up frame on the OBD2 functional broadcast address
+      // (0x7DF) to activate the diagnostic bus before passive sniffing begins.
+      // Payload 02 01 00 = ISO 15765-4 "PIDs supported [01-20]" request.
+      byte wakeFrame[] = {0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+      char rxbuf[32];
+      obd.setCANID(0x7DF);
+      obd.sendCANMessage(wakeFrame, 8, rxbuf, sizeof(rxbuf));
+      Serial.println("CAN:wake-up sent");
+    }
   }
 #endif
 
@@ -2197,6 +2275,46 @@ void loadConfig()
   len = sizeof(nvsVersion);
   nvsVersion[0] = 0;
   nvs_get_str(nvs, "NVS_VER", nvsVersion, &len);
+
+  // Vehicle identification (NVS keys VEHICLE_MAKE, VEHICLE_MODEL, VEHICLE_YEAR).
+  // Optional – absent on devices not provisioned with vehicle info.
+  size_t vlen = sizeof(vehicleMake);
+  nvs_get_str(nvs, "VEHICLE_MAKE", vehicleMake, &vlen);
+  vlen = sizeof(vehicleModel);
+  nvs_get_str(nvs, "VEHICLE_MODEL", vehicleModel, &vlen);
+  vlen = sizeof(vehicleYear);
+  nvs_get_str(nvs, "VEHICLE_YEAR", vehicleYear, &vlen);
+
+  // Vehicle-specific extra PIDs (NVS key VEHICLE_PIDS).
+  // Comma-separated hex values, e.g. "22,23,5A".
+  // Parse into vehicleObdData[] so processOBD() can poll them at tier 3.
+  vlen = sizeof(vehiclePidsStr);
+  vehiclePidsStr[0] = 0;
+  nvs_get_str(nvs, "VEHICLE_PIDS", vehiclePidsStr, &vlen);
+  vehicleObdDataCount = 0;
+  if (vehiclePidsStr[0]) {
+    char tmp[sizeof(vehiclePidsStr)];
+    strncpy(tmp, vehiclePidsStr, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = 0;
+    char *tok = strtok(tmp, ",");
+    while (tok && vehicleObdDataCount < MAX_VEHICLE_PIDS) {
+      byte pid = (byte)strtol(tok, nullptr, 16);
+      // Skip PID 0x00 (the "PIDs supported [01-20]" support bitmap) – it is
+      // handled internally by isValidPID() and not a pollable value PID.
+      if (pid > 0) {
+        vehicleObdData[vehicleObdDataCount].pid   = pid;
+        vehicleObdData[vehicleObdDataCount].tier  = 3;
+        vehicleObdData[vehicleObdDataCount].value = 0;
+        vehicleObdData[vehicleObdDataCount].ts    = 0;
+        vehicleObdDataCount++;
+      }
+      tok = strtok(nullptr, ",");
+    }
+    if (vehicleObdDataCount > 0) {
+      Serial.printf("VEHICLE:%s %s %s pids=%d\n",
+                    vehicleMake, vehicleModel, vehicleYear, vehicleObdDataCount);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

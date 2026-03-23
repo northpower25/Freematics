@@ -51,6 +51,13 @@
 #define PID_ENGINE_TORQUE_PERCENTAGE 0x62
 #define PID_ENGINE_REF_TORQUE 0x63
 #define PID_ODOMETER 0xA6
+// Additional standard OBD-II Mode 1 PIDs (ISO 15031-5 / SAE J1979)
+#define PID_FUEL_RAIL_PRESSURE_VAC   0x22  // Fuel rail pressure relative to manifold vacuum (kPa × 0.079)
+#define PID_FUEL_RAIL_PRESSURE_GAUGE 0x23  // Fuel rail gauge pressure – diesel/GDI (kPa × 10)
+#define PID_FUEL_TYPE                0x51  // Fuel type (encoded byte)
+#define PID_ABS_EVAP_PRESSURE        0x53  // Absolute evap system vapour pressure (kPa × 0.005)
+#define PID_EVAP_VAPOR_PRESSURE      0x54  // Evap system vapour pressure (Pa, signed)
+#define PID_REL_ACCEL_PEDAL          0x5A  // Relative accelerator pedal position (%)
 
 typedef enum {
     PROTO_AUTO = 0x0,
