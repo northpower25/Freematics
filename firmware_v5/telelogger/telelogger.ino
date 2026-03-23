@@ -1363,6 +1363,41 @@ void process()
       break;
     }
   }
+  // OBD alive check: fires once per stationary period, as soon as the device
+  // first enters the standby countdown (motionless >= stationaryTime[0], i.e.
+  // 10 s by default).  Goal: detect "ignition off" early so the Freematics
+  // stops polling the OBD2 port immediately.  Some vehicles with factory alarms
+  // monitor the OBD2 bus; continued requests after the ignition is cut can
+  // trigger a false alarm.
+  // The check is skipped when OBD is disabled or the ECU was never connected
+  // (STATE_OBD_READY not set), in which case the normal countdown applies.
+#if ENABLE_OBD
+  {
+    static bool s_obdAliveChecked = false; // reset each time motion resumes
+    const bool inStationaryPhase = (motionless >= stationaryTime[0]);
+    if (!inStationaryPhase) {
+      // Vehicle is moving – clear the flag so we probe again next time it stops.
+      s_obdAliveChecked = false;
+    } else if (enableObd && state.check(STATE_OBD_READY) && !s_obdAliveChecked) {
+      s_obdAliveChecked = true;
+      // Probe with "01 00" (Mode 1 PID 0 – supported PIDs [01-20]).  This is a
+      // read-only request with no side effects; 1 s timeout keeps the check
+      // non-blocking.  The ELM327 link is accessed directly to control the
+      // timeout, bypassing obd.readPID() which uses OBD_TIMEOUT_LONG (10 s).
+      char abuf[32] = {};
+      const int ret = obd.link ? obd.link->sendCommand("0100\r", abuf, sizeof(abuf), 1000) : 0;
+      if (ret <= 0) {
+        // No response: ECU is offline (ignition cut).  Enter standby now
+        // without waiting for the full countdown to expire.
+        Serial.println("OBD:ECU offline at standby-timer start - entering standby immediately");
+        state.clear(STATE_WORKING);
+        return;
+      }
+      Serial.println("OBD:ECU alive - standby countdown running");
+    }
+  }
+#endif
+
   if (stationary) {
     // stationery timeout
     Serial.print("Stationary for ");
