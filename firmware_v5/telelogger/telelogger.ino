@@ -517,16 +517,20 @@ void processOBD(CBuffer* buffer)
     if (tier > 1) break;
   }
   // Poll vehicle-specific extra PIDs (from VEHICLE_PIDS NVS key).
-  for (int vi = 0; vi < vehicleObdDataCount; vi++) {
-    byte vpid = vehicleObdData[vi].pid;
-    if (!obd.isValidPID(vpid)) continue;
-    int vval;
-    if (obd.readPID(vpid, vval)) {
-      vehicleObdData[vi].ts    = millis();
-      vehicleObdData[vi].value = vval;
-      buffer->add((uint16_t)vpid | 0x100, ELEMENT_INT32, &vval, sizeof(vval));
+  // Use a static index to cycle through all vehicle PIDs one per call (tier-3 pacing).
+  if (vehicleObdDataCount > 0) {
+    static int vehiclePidIdx = 0;
+    if (vehiclePidIdx >= vehicleObdDataCount) vehiclePidIdx = 0;
+    byte vpid = vehicleObdData[vehiclePidIdx].pid;
+    if (obd.isValidPID(vpid)) {
+      int vval;
+      if (obd.readPID(vpid, vval)) {
+        vehicleObdData[vehiclePidIdx].ts    = millis();
+        vehicleObdData[vehiclePidIdx].value = vval;
+        buffer->add((uint16_t)vpid | 0x100, ELEMENT_INT32, &vval, sizeof(vval));
+      }
     }
-    break; // poll at most one vehicle PID per processOBD() call (tier-3 pacing)
+    vehiclePidIdx++;
   }
   int kph = obdData[0].value;
   if (kph >= 2) lastMotionTime = millis();
