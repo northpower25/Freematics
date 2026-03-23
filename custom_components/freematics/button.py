@@ -25,6 +25,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    BUTTON_METADATA,
     CONF_BEEP_EN,
     CONF_CELL_APN,
     CONF_DEVICE_IP,
@@ -114,6 +115,17 @@ class FlashSerialButton(_FreematicsButton):
     def __init__(self, entry: ConfigEntry, webhook_id: str) -> None:
         super().__init__(entry, webhook_id)
         self._attr_unique_id = f"freematics_{webhook_id}_flash_serial"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return metadata about this button entity."""
+        meta = BUTTON_METADATA["flash_serial"]
+        return {
+            "purpose": meta["purpose"],
+            "data_source": meta["data_source"],
+            "dependencies": meta["dependencies"],
+            "documentation_url": meta["documentation_url"],
+        }
 
     async def async_press(self) -> None:
         """Execute serial flash on the HA server.
@@ -273,6 +285,17 @@ class SendConfigButton(_FreematicsButton):
         super().__init__(entry, webhook_id)
         self._attr_unique_id = f"freematics_{webhook_id}_send_config"
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return metadata about this button entity."""
+        meta = BUTTON_METADATA["send_config"]
+        return {
+            "purpose": meta["purpose"],
+            "data_source": meta["data_source"],
+            "dependencies": meta["dependencies"],
+            "documentation_url": meta["documentation_url"],
+        }
+
     async def async_press(self) -> None:
         """Push stored config to device via /api/control."""
         device_ip = self._cfg(CONF_DEVICE_IP, "")
@@ -347,6 +370,17 @@ class RestartDeviceButton(_FreematicsButton):
         super().__init__(entry, webhook_id)
         self._attr_unique_id = f"freematics_{webhook_id}_restart"
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return metadata about this button entity."""
+        meta = BUTTON_METADATA["restart"]
+        return {
+            "purpose": meta["purpose"],
+            "data_source": meta["data_source"],
+            "dependencies": meta["dependencies"],
+            "documentation_url": meta["documentation_url"],
+        }
+
     async def async_press(self) -> None:
         """Send RESET command to device via /api/control."""
         device_ip = self._cfg(CONF_DEVICE_IP, "")
@@ -392,6 +426,17 @@ class PublishCloudOtaButton(_FreematicsButton):
     def __init__(self, entry: ConfigEntry, webhook_id: str) -> None:
         super().__init__(entry, webhook_id)
         self._attr_unique_id = f"freematics_{webhook_id}_publish_cloud_ota"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return metadata about this button entity."""
+        meta = BUTTON_METADATA["publish_cloud_ota"]
+        return {
+            "purpose": meta["purpose"],
+            "data_source": meta["data_source"],
+            "dependencies": meta["dependencies"],
+            "documentation_url": meta["documentation_url"],
+        }
 
     async def async_press(self) -> None:
         """Copy firmware binary and version metadata to /config/www/FreematicsONE/{id}/."""
