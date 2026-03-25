@@ -106,9 +106,9 @@ DEFAULT_DATA_INTERVAL_MS = 0    # 0 = firmware default ≈1000 ms
 DEFAULT_SYNC_INTERVAL_S = 0     # 0 = firmware default 120 s
 
 # Number of raw webhook payloads to keep in the debug entity's history.
-# 5000 entries cover enough history for error analysis (each payload is
-# typically < 200 bytes, so the list stays well within Python memory limits).
-DEBUG_HISTORY_SIZE = 5000
+# Limited to 10 to prevent the sensor's state attributes from exceeding
+# Home Assistant's 16 384-byte limit (recorder DB performance warning).
+DEBUG_HISTORY_SIZE = 10
 
 # JSON payload keys sent by the firmware → (friendly name, unit, device class, state class)
 SENSOR_DEFINITIONS = {
